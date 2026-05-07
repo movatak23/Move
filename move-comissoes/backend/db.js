@@ -72,23 +72,7 @@ if (!adminExiste) {
     .run('Administrador', 'admin@move.com', hash, 'admin');
 }
 
-// Funções wrapper para compatibilidade com bora.js
-function query(sql, params = []) {
-    try {
-          const stmt = db.prepare(sql);
-          if (sql.trim().toUpperCase().startsWith('SELECT')) {
-                  if (params.length > 0) {
-                            return stmt.all(...params);
-                  }
-                  return stmt.all();
-          } else {
-                  return stmt.run(...params);
-          }
-    } catch (erro) {
-          console.error('[DB Error]', erro);
-          return null;
-    }
-}
 
-module.exports = { db, query };
+
+module.exports = { db };
 
