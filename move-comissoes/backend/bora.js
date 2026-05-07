@@ -28,3 +28,22 @@ async function autenticarBora(usuario, senha) {
     throw erro;
   }
 }
+
+// Função principal de sync
+async function executarSync() {
+    try {
+          console.log('[Bora] Iniciando sincronização...');
+
+          // TODO: Implementar lógica completa de fetch das vendas
+          // 1. Autenticar na API Bora
+          // 2. Buscar vendas do período
+          // 3. Atualizar banco de dados
+          // 4. Recalcular comissões
+
+          console.log('[Bora] Sincronização concluída');
+    } catch (erro) {
+          console.error('[Bora] Erro ao sincronizar:', erro);
+    }
+}
+
+module.exports = { executarSync, autenticarBora, gerarBasicAuth };
