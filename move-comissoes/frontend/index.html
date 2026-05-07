@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Move Comissões — Login</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-box">
+      <div class="login-logo">
+        <h1 style="color: var(--accent)">MOVE</h1>
+        <span>Plataforma de Comissões</span>
+      </div>
+
+      <div id="alert-area"></div>
+
+      <div class="field" style="margin-bottom:12px">
+        <label>E-mail</label>
+        <input type="email" id="email" placeholder="seu@email.com" autocomplete="username">
+      </div>
+      <div class="field" style="margin-bottom:20px">
+        <label>Senha</label>
+        <input type="password" id="senha" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <button class="btn btn-primary" style="width:100%;justify-content:center" id="btn-login">
+        Entrar
+      </button>
+    </div>
+  </div>
+  <script src="/assets/api.js"></script>
+  <script>
+    // Já logado? Redirecionar
+    if (API.getToken()) {
+      const u = API.getUser();
+      if (u) window.location.href = u.perfil === 'vendedor' ? '/vendedor.html' : '/admin.html';
+    }
+
+    async function login() {
+      const email = document.getElementById('email').value.trim();
+      const senha = document.getElementById('senha').value;
+      if (!email || !senha) { showAlert('Preencha email e senha'); return; }
+
+      const btn = document.getElementById('btn-login');
+      btn.textContent = 'Entrando...'; btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, senha })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+
+        localStorage.setItem('token', data.token);
+        localStorage.setItem('user', JSON.stringify({ id: data.id, nome: data.nome, perfil: data.perfil }));
+
+        window.location.href = data.perfil === 'vendedor' ? '/vendedor.html' : '/admin.html';
+      } catch (e) {
+        showAlert(e.message || 'Erro ao fazer login');
+        btn.textContent = 'Entrar'; btn.disabled = false;
+      }
+    }
+
+    document.getElementById('btn-login').addEventListener('click', login);
+    document.getElementById('senha').addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
+  </script>
+</body>
+</html>

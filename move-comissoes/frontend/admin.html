@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Move Comissões — Painel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <h2>MOVE</h2>
+      <span>Comissões</span>
+    </div>
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-page="dashboard" onclick="goTo('dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </button>
+      <button class="nav-item" data-page="relatorio" onclick="goTo('relatorio')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Relatórios
+      </button>
+      <button class="nav-item" data-page="vendedores" onclick="goTo('vendedores')" id="nav-vendedores">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        Vendedores
+      </button>
+      <button class="nav-item" data-page="planos" onclick="goTo('planos')" id="nav-planos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Planos & Comissões
+      </button>
+      <button class="nav-item" data-page="sync" onclick="goTo('sync')" id="nav-sync">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Sincronização
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <strong id="user-nome">—</strong>
+        <span id="user-perfil">—</span>
+      </div>
+      <button class="btn-logout" onclick="API.logout()">Sair</button>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <div id="alert-area" style="padding: 16px 28px 0; padding-bottom:0"></div>
+
+    <!-- DASHBOARD -->
+    <div id="page-dashboard" class="page">
+      <div class="topbar">
+        <div><div class="page-title">Dashboard</div><div class="page-sub">Visão geral das comissões</div></div>
+        <div style="display:flex;gap:8px;align-items:flex-end">
+          <div class="field mb-0"><label>De</label><input type="date" id="dash-inicio" style="width:140px"></div>
+          <div class="field mb-0"><label>Até</label><input type="date" id="dash-fim" style="width:140px"></div>
+          <button class="btn btn-ghost btn-sm" onclick="loadDashboard()">Filtrar</button>
+        </div>
+      </div>
+      <div class="content">
+        <div class="cards cards-4" id="dash-cards">
+          <div class="card"><div class="card-label">Ativações</div><div class="card-value accent" id="d-ativacoes">—</div></div>
+          <div class="card"><div class="card-label">Recargas</div><div class="card-value" id="d-recargas">—</div></div>
+          <div class="card"><div class="card-label">Volume Total</div><div class="card-value" id="d-volume">—</div></div>
+          <div class="card"><div class="card-label">Total Comissões</div><div class="card-value green" id="d-comissoes">—</div></div>
+        </div>
+        <div class="table-wrap">
+          <div class="table-header">
+            <span class="table-title">Ranking de Vendedores</span>
+          </div>
+          <table>
+            <thead><tr><th>Vendedor</th><th>Ativações</th><th>Recargas</th><th class="text-right">Comissão</th><th></th></tr></thead>
+            <tbody id="dash-ranking"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- RELATÓRIOS -->
+    <div id="page-relatorio" class="page" style="display:none">
+      <div class="topbar">
+        <div><div class="page-title">Relatórios</div><div class="page-sub">Transações por período</div></div>
+      </div>
+      <div class="content">
+        <div class="filtros">
+          <div class="field mb-0"><label>De</label><input type="date" id="rel-inicio" style="width:140px"></div>
+          <div class="field mb-0"><label>Até</label><input type="date" id="rel-fim" style="width:140px"></div>
+          <div class="field mb-0" id="filtro-vendedor-wrap"><label>Vendedor</label>
+            <select id="rel-vendedor" style="width:200px"><option value="">Todos</option></select>
+          </div>
+          <div class="field mb-0"><label>Tipo</label>
+            <select id="rel-tipo" style="width:140px">
+              <option value="">Todos</option>
+              <option value="ativacao">Ativações</option>
+              <option value="recarga">Recargas</option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="loadRelatorio()">Buscar</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportarRelatorio()">Exportar CSV</button>
+        </div>
+
+        <!-- Resumo -->
+        <div class="cards cards-3" id="rel-resumo-cards" style="display:none">
+          <div class="card"><div class="card-label">Ativações</div><div class="card-value accent" id="rs-ativacoes">0</div></div>
+          <div class="card"><div class="card-label">Recargas</div><div class="card-value" id="rs-recargas">0</div></div>
+          <div class="card"><div class="card-label">Total Comissão</div><div class="card-value green" id="rs-comissao">R$ 0</div></div>
+        </div>
+
+        <div class="table-wrap">
+          <div class="table-header"><span class="table-title" id="rel-titulo">Selecione os filtros e clique em Buscar</span></div>
+          <table>
+            <thead><tr><th>Data</th><th>Cliente</th><th>Plano</th><th>Tipo</th><th>Vendedor</th><th>Valor</th><th class="text-right">Comissão</th></tr></thead>
+            <tbody id="rel-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- VENDEDORES -->
+    <div id="page-vendedores" class="page" style="display:none">
+      <div class="topbar">
+        <div><div class="page-title">Vendedores</div><div class="page-sub">Gerenciar usuários</div></div>
+        <button class="btn btn-primary" onclick="abrirModalUsuario()">+ Novo Usuário</button>
+      </div>
+      <div class="content">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nome</th><th>Email</th><th>Perfil</th><th>Status</th><th></th></tr></thead>
+            <tbody id="usuarios-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- PLANOS -->
+    <div id="page-planos" class="page" style="display:none">
+      <div class="topbar">
+        <div><div class="page-title">Planos & Comissões</div><div class="page-sub">Configure as comissões por plano</div></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost" onclick="recalcularComissoes()">Recalcular Tudo</button>
+          <button class="btn btn-primary" onclick="abrirModalPlano()">+ Novo Plano</button>
+        </div>
+      </div>
+      <div class="content">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Plano</th><th class="text-right">Comissão Ativação</th><th class="text-right">Comissão Recarga</th><th>Status</th><th></th></tr></thead>
+            <tbody id="planos-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SYNC -->
+    <div id="page-sync" class="page" style="display:none">
+      <div class="topbar">
+        <div><div class="page-title">Sincronização</div><div class="page-sub">Dados da API Bora</div></div>
+        <button class="btn btn-primary" onclick="syncManual()" id="btn-sync">Sincronizar Agora</button>
+      </div>
+      <div class="content">
+        <div class="cards cards-2" style="margin-bottom:24px">
+          <div class="card">
+            <div class="card-label">Próxima Sync Automática</div>
+            <div class="card-value" style="font-size:18px" id="next-sync">A cada hora (automático)</div>
+          </div>
+          <div class="card">
+            <div class="card-label">Importar Relatório Excel</div>
+            <div style="margin-top:8px">
+              <input type="file" id="excel-input" accept=".xlsx,.xls,.csv" style="display:none" onchange="importarExcel(this)">
+              <button class="btn btn-ghost" onclick="document.getElementById('excel-input').click()">Selecionar arquivo Excel/CSV</button>
+            </div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <div class="table-header"><span class="table-title">Histórico de Sincronizações</span></div>
+          <table>
+            <thead><tr><th>Iniciado em</th><th>Status</th><th>Novos registros</th><th>Detalhe</th></tr></thead>
+            <tbody id="sync-log-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/assets/api.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+let USER = null;
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
+  USER = API.guardAuth();
+  if (!USER) return;
+  if (USER.perfil === 'vendedor') { window.location.href = '/vendedor.html'; return; }
+
+  document.getElementById('user-nome').textContent = USER.nome;
+  document.getElementById('user-perfil').textContent = USER.perfil.charAt(0).toUpperCase() + USER.perfil.slice(1);
+
+  // Admin-only nav items
+  if (USER.perfil !== 'admin') {
+    ['nav-planos', 'nav-sync'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  }
+
+  // Datas padrão: mês atual
+  const hoje = new Date();
+  const inicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().split('T')[0];
+  const fim = hoje.toISOString().split('T')[0];
+  ['dash-inicio', 'rel-inicio'].forEach(id => { const el = document.getElementById(id); if (el) el.value = inicio; });
+  ['dash-fim', 'rel-fim'].forEach(id => { const el = document.getElementById(id); if (el) el.value = fim; });
+
+  await loadDashboard();
+  await carregarVendedoresSelect();
+});
+
+// ── Navegação ─────────────────────────────────────────────────────────────────
+function goTo(page) {
+  document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`page-${page}`).style.display = '';
+  document.querySelector(`[data-page="${page}"]`).classList.add('active');
+
+  if (page === 'vendedores') loadUsuarios();
+  if (page === 'planos') loadPlanos();
+  if (page === 'sync') loadSyncLog();
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  const inicio = document.getElementById('dash-inicio').value;
+  const fim = document.getElementById('dash-fim').value;
+  const qs = inicio && fim ? `?inicio=${inicio}&fim=${fim}` : '';
+
+  try {
+    const data = await API.get(`/admin/dashboard${qs}`);
+    const t = data.totais;
+    document.getElementById('d-ativacoes').textContent = t.ativacoes || 0;
+    document.getElementById('d-recargas').textContent = t.recargas || 0;
+    document.getElementById('d-volume').textContent = fmtBRL(t.volume_total);
+    document.getElementById('d-comissoes').textContent = fmtBRL(t.total_comissoes);
+
+    const ranking = document.getElementById('dash-ranking');
+    if (!data.porVendedor.length) {
+      ranking.innerHTML = `<tr><td colspan="5" class="empty-state">Nenhum dado encontrado</td></tr>`;
+    } else {
+      ranking.innerHTML = data.porVendedor.map(v => `
+        <tr>
+          <td class="fw-700">${v.nome}</td>
+          <td>${v.ativacoes}</td>
+          <td>${v.recargas}</td>
+          <td class="text-right text-green fw-700">${fmtBRL(v.total_comissao)}</td>
+          <td><button class="btn btn-ghost btn-sm" onclick="verVendedor(${v.id})">Ver</button></td>
+        </tr>
+      `).join('');
+    }
+  } catch (e) { showAlert(e.message); }
+}
+
+// ── Relatório ─────────────────────────────────────────────────────────────────
+async function carregarVendedoresSelect() {
+  try {
+    const vendedores = await API.get('/admin/usuarios');
+    const sel = document.getElementById('rel-vendedor');
+    vendedores.filter(v => v.ativo).forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.id; opt.textContent = v.nome;
+      sel.appendChild(opt);
+    });
+  } catch {}
+}
+
+let relatorioData = [];
+
+async function loadRelatorio() {
+  const inicio = document.getElementById('rel-inicio').value;
+  const fim = document.getElementById('rel-fim').value;
+  const vendedor_id = document.getElementById('rel-vendedor').value;
+  const tipo = document.getElementById('rel-tipo').value;
+
+  const qs = new URLSearchParams();
+  if (inicio) qs.set('inicio', inicio);
+  if (fim) qs.set('fim', fim);
+  if (vendedor_id) qs.set('vendedor_id', vendedor_id);
+  if (tipo) qs.set('tipo', tipo);
+
+  try {
+    relatorioData = await API.get(`/relatorio/transacoes?${qs}`);
+    const body = document.getElementById('rel-body');
+    document.getElementById('rel-titulo').textContent = `${relatorioData.length} transações encontradas`;
+
+    // Resumo
+    const ativacoes = relatorioData.filter(t => t.tipo.includes('ATIVAÇÃO')).length;
+    const recargas = relatorioData.filter(t => t.tipo === 'RECARGA').length;
+    const totalComissao = relatorioData.reduce((s, t) => s + t.comissao, 0);
+    document.getElementById('rs-ativacoes').textContent = ativacoes;
+    document.getElementById('rs-recargas').textContent = recargas;
+    document.getElementById('rs-comissao').textContent = fmtBRL(totalComissao);
+    document.getElementById('rel-resumo-cards').style.display = '';
+
+    if (!relatorioData.length) {
+      body.innerHTML = `<tr><td colspan="7" class="empty-state">Nenhuma transação encontrada</td></tr>`;
+    } else {
+      body.innerHTML = relatorioData.map(t => `
+        <tr>
+          <td>${fmtData(t.data_transacao)}</td>
+          <td>${t.nome_cliente || '-'}<br><span class="text-muted" style="font-size:11px">${t.msisdn}</span></td>
+          <td>${t.plano || '-'}</td>
+          <td>${tipoBadge(t.tipo)}</td>
+          <td>${t.vendedor_nome || t.vendedor_bora || '-'}</td>
+          <td>${fmtBRL(t.valor)}</td>
+          <td class="text-right text-green fw-700">${fmtBRL(t.comissao)}</td>
+        </tr>
+      `).join('');
+    }
+  } catch (e) { showAlert(e.message); }
+}
+
+function exportarRelatorio() {
+  if (!relatorioData.length) { showAlert('Faça uma busca primeiro', 'error'); return; }
+  const rows = relatorioData.map(t => ({
+    Data: t.data_transacao, MSISDN: t.msisdn, Cliente: t.nome_cliente,
+    Plano: t.plano, Tipo: t.tipo, Vendedor: t.vendedor_nome || t.vendedor_bora,
+    Valor: t.valor, Comissão: t.comissao
+  }));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Relatório');
+  XLSX.writeFile(wb, `comissoes_${Date.now()}.xlsx`);
+}
+
+// ── Vendedores ────────────────────────────────────────────────────────────────
+async function loadUsuarios() {
+  try {
+    const users = await API.get('/admin/usuarios');
+    const body = document.getElementById('usuarios-body');
+    if (!users.length) {
+      body.innerHTML = `<tr><td colspan="5" class="empty-state">Nenhum usuário cadastrado</td></tr>`;
+    } else {
+      body.innerHTML = users.map(u => `
+        <tr>
+          <td class="fw-700">${u.nome}</td>
+          <td class="text-muted">${u.email}</td>
+          <td><span class="badge ${u.perfil === 'admin' ? 'badge-yellow' : u.perfil === 'gerente' ? 'badge-accent' : 'badge-green'}">${u.perfil}</span></td>
+          <td><span class="badge ${u.ativo ? 'badge-green' : 'badge-red'}">${u.ativo ? 'Ativo' : 'Inativo'}</span></td>
+          <td style="display:flex;gap:6px">
+            ${USER.perfil === 'admin' ? `
+              <button class="btn btn-ghost btn-sm" onclick='editarUsuario(${JSON.stringify(u)})'>Editar</button>
+              <button class="btn btn-danger btn-sm" onclick="desativarUsuario(${u.id},'${u.nome}')">Desativar</button>
+            ` : ''}
+            <button class="btn btn-ghost btn-sm" onclick="verVendedor(${u.id})">Ver</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+  } catch (e) { showAlert(e.message); }
+}
+
+function verVendedor(id) {
+  goTo('relatorio');
+  document.getElementById('rel-vendedor').value = id;
+  const hoje = new Date();
+  document.getElementById('rel-inicio').value = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().split('T')[0];
+  document.getElementById('rel-fim').value = hoje.toISOString().split('T')[0];
+  loadRelatorio();
+}
+
+function abrirModalUsuario(u) {
+  const isEdit = !!u;
+  const overlay = showModal(`
+    <div class="modal">
+      <div class="modal-title">${isEdit ? 'Editar Usuário' : 'Novo Usuário'}</div>
+      <div class="form-row form-row-2">
+        <div class="field"><label>Nome *</label><input id="m-nome" value="${u?.nome || ''}"></div>
+        <div class="field"><label>Email *</label><input id="m-email" type="email" value="${u?.email || ''}"></div>
+      </div>
+      <div class="form-row form-row-2">
+        <div class="field"><label>${isEdit ? 'Nova Senha (opcional)' : 'Senha *'}</label><input id="m-senha" type="password" placeholder="${isEdit ? 'Deixe em branco para manter' : ''}"></div>
+        <div class="field"><label>Perfil *</label>
+          <select id="m-perfil">
+            <option value="vendedor" ${u?.perfil === 'vendedor' ? 'selected' : ''}>Vendedor</option>
+            <option value="gerente" ${u?.perfil === 'gerente' ? 'selected' : ''}>Gerente</option>
+            <option value="admin" ${u?.perfil === 'admin' ? 'selected' : ''}>Admin</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="salvarUsuario(${u?.id || 'null'})">Salvar</button>
+      </div>
+    </div>
+  `);
+}
+
+function editarUsuario(u) { abrirModalUsuario(u); }
+
+async function salvarUsuario(id) {
+  const nome = document.getElementById('m-nome').value.trim();
+  const email = document.getElementById('m-email').value.trim();
+  const senha = document.getElementById('m-senha').value;
+  const perfil = document.getElementById('m-perfil').value;
+
+  try {
+    if (id) {
+      await API.put(`/admin/usuarios/${id}`, { nome, email, perfil, ...(senha ? { senha } : {}) });
+    } else {
+      if (!nome || !email || !senha) { showAlert('Preencha todos os campos obrigatórios'); return; }
+      await API.post('/admin/usuarios', { nome, email, senha, perfil });
+    }
+    document.querySelector('.modal-overlay').remove();
+    showAlert('Salvo com sucesso!', 'success');
+    loadUsuarios();
+    carregarVendedoresSelect();
+  } catch (e) { showAlert(e.message); }
+}
+
+async function desativarUsuario(id, nome) {
+  if (!confirm(`Desativar ${nome}?`)) return;
+  try { await API.del(`/admin/usuarios/${id}`); loadUsuarios(); } catch (e) { showAlert(e.message); }
+}
+
+// ── Planos ────────────────────────────────────────────────────────────────────
+async function loadPlanos() {
+  try {
+    const planos = await API.get('/admin/planos');
+    const body = document.getElementById('planos-body');
+    if (!planos.length) {
+      body.innerHTML = `<tr><td colspan="5" class="empty-state">Nenhum plano cadastrado</td></tr>`;
+    } else {
+      body.innerHTML = planos.map(p => `
+        <tr>
+          <td class="fw-700">${p.nome_plano}</td>
+          <td class="text-right text-green">${fmtBRL(p.comissao_ativacao)}</td>
+          <td class="text-right text-accent">${fmtBRL(p.comissao_recarga)}</td>
+          <td><span class="badge ${p.ativo ? 'badge-green' : 'badge-red'}">${p.ativo ? 'Ativo' : 'Inativo'}</span></td>
+          <td style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-sm" onclick='editarPlano(${JSON.stringify(p)})'>Editar</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+  } catch (e) { showAlert(e.message); }
+}
+
+function abrirModalPlano(p) {
+  showModal(`
+    <div class="modal">
+      <div class="modal-title">${p ? 'Editar Plano' : 'Novo Plano'}</div>
+      <div class="field" style="margin-bottom:12px">
+        <label>Nome do Plano * (igual ao relatório Bora)</label>
+        <input id="p-nome" value="${p?.nome_plano || ''}" placeholder="Ex: CELULAR 10GB">
+      </div>
+      <div class="form-row form-row-2">
+        <div class="field">
+          <label>Comissão Ativação (R$)</label>
+          <input id="p-ativ" type="number" step="0.01" value="${p?.comissao_ativacao || 0}">
+        </div>
+        <div class="field">
+          <label>Comissão Recarga (R$)</label>
+          <input id="p-rec" type="number" step="0.01" value="${p?.comissao_recarga || 0}">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
+        <button class="btn btn-primary" onclick="salvarPlano(${p?.id || 'null'})">Salvar</button>
+      </div>
+    </div>
+  `);
+}
+
+function editarPlano(p) { abrirModalPlano(p); }
+
+async function salvarPlano(id) {
+  const nome_plano = document.getElementById('p-nome').value.trim().toUpperCase();
+  const comissao_ativacao = parseFloat(document.getElementById('p-ativ').value) || 0;
+  const comissao_recarga = parseFloat(document.getElementById('p-rec').value) || 0;
+  if (!nome_plano) { showAlert('Nome do plano obrigatório'); return; }
+
+  try {
+    if (id) {
+      await API.put(`/admin/planos/${id}`, { nome_plano, comissao_ativacao, comissao_recarga });
+    } else {
+      await API.post('/admin/planos', { nome_plano, comissao_ativacao, comissao_recarga });
+    }
+    document.querySelector('.modal-overlay').remove();
+    showAlert('Plano salvo!', 'success');
+    loadPlanos();
+  } catch (e) { showAlert(e.message); }
+}
+
+async function recalcularComissoes() {
+  if (!confirm('Recalcular TODAS as comissões com os planos atuais?')) return;
+  try {
+    const r = await API.post('/relatorio/recalcular');
+    showAlert(`${r.atualizadas} transações recalculadas`, 'success');
+  } catch (e) { showAlert(e.message); }
+}
+
+// ── Sync ──────────────────────────────────────────────────────────────────────
+async function loadSyncLog() {
+  try {
+    const logs = await API.get('/admin/sync/log');
+    const body = document.getElementById('sync-log-body');
+    if (!logs.length) {
+      body.innerHTML = `<tr><td colspan="4" class="empty-state">Nenhuma sincronização registrada</td></tr>`;
+    } else {
+      body.innerHTML = logs.map(l => `
+        <tr>
+          <td>${fmtData(l.iniciado_em)} ${l.iniciado_em?.split('T')[1]?.substr(0,5) || ''}</td>
+          <td><span class="badge ${l.status === 'ok' ? 'badge-green' : l.status === 'executando' ? 'badge-yellow' : 'badge-red'}">${l.status}</span></td>
+          <td>${l.registros_novos}</td>
+          <td class="text-muted">${l.erro || '—'}</td>
+        </tr>
+      `).join('');
+    }
+  } catch {}
+}
+
+async function syncManual() {
+  const btn = document.getElementById('btn-sync');
+  btn.textContent = 'Sincronizando...'; btn.disabled = true;
+  try {
+    const r = await API.post('/admin/sync');
+    showAlert(r.ok ? `Sync OK — ${r.novos} registros novos` : `Erro: ${r.erro}`, r.ok ? 'success' : 'error');
+    loadSyncLog();
+  } catch (e) { showAlert(e.message); } finally {
+    btn.textContent = 'Sincronizar Agora'; btn.disabled = false;
+  }
+}
+
+async function importarExcel(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'binary' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { raw: false });
+
+      // Mapear colunas do relatório Bora
+      const registros = rows.map(r => ({
+        msisdn: r['MSISDN'] || r['msisdn'] || '',
+        iccid: r['ICCID'] || r['iccid'] || '',
+        data: r['DATA'] || r['data'] || '',
+        cpfCnpj: r['CPF/CNPJ'] || r['cpf_cnpj'] || '',
+        nomeCliente: r['NOME DO CLIENTE'] || r['nome_cliente'] || '',
+        plano: r['PLANO'] || r['plano'] || '',
+        tipo: r['TIPO'] || r['tipo'] || '',
+        valor: parseFloat((r['VALOR'] || r['valor'] || '0').toString().replace(',', '.')) || 0,
+        meioPagamento: r['MEIO DE PAGAMENTO'] || r['meio_pagamento'] || '',
+        canal: r['CANAL'] || r['canal'] || '',
+        vendedor: r['VENDEDOR'] || r['vendedor'] || '',
+        supervisor: r['SUPERVISOR'] || r['supervisor'] || '',
+        loja: r['LOJA'] || r['loja'] || ''
+      })).filter(r => r.msisdn);
+
+      showAlert(`Importando ${registros.length} registros...`, 'success');
+      const res = await API.post('/admin/importar', { registros });
+      showAlert(`Importação OK — ${res.novos} registros novos de ${res.total}`, 'success');
+      loadSyncLog();
+    } catch (e) { showAlert('Erro na importação: ' + e.message); }
+    input.value = '';
+  };
+  reader.readAsBinaryString(file);
+}
+</script>
+</body>
+</html>

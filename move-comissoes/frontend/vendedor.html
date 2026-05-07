@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Move Comissões — Minhas Vendas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <h2>MOVE</h2>
+      <span>Minhas Comissões</span>
+    </div>
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-page="minhas" onclick="goTo('minhas')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Minhas Vendas
+      </button>
+      <button class="nav-item" data-page="historico" onclick="goTo('historico')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Histórico
+      </button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="sidebar-user">
+        <strong id="user-nome">—</strong>
+        <span>Vendedor</span>
+      </div>
+      <button class="btn-logout" onclick="API.logout()">Sair</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div id="alert-area" style="padding:16px 28px 0"></div>
+
+    <!-- MINHAS VENDAS -->
+    <div id="page-minhas" class="page">
+      <div class="topbar">
+        <div><div class="page-title">Minhas Vendas</div><div class="page-sub">Resumo do período</div></div>
+        <div style="display:flex;gap:8px;align-items:flex-end">
+          <div class="field mb-0"><label>De</label><input type="date" id="m-inicio" style="width:140px"></div>
+          <div class="field mb-0"><label>Até</label><input type="date" id="m-fim" style="width:140px"></div>
+          <button class="btn btn-primary btn-sm" onclick="loadMinha()">Filtrar</button>
+        </div>
+      </div>
+      <div class="content">
+        <div class="cards cards-3" style="margin-bottom:24px">
+          <div class="card">
+            <div class="card-label">Ativações</div>
+            <div class="card-value accent" id="mv-ativacoes">—</div>
+            <div class="mt-8" style="font-size:12px;color:var(--text2)">Comissão: <span class="text-green" id="mv-com-ativ">—</span></div>
+          </div>
+          <div class="card">
+            <div class="card-label">Recargas</div>
+            <div class="card-value" id="mv-recargas">—</div>
+            <div class="mt-8" style="font-size:12px;color:var(--text2)">Comissão: <span class="text-accent" id="mv-com-rec">—</span></div>
+          </div>
+          <div class="card" style="border-color: var(--green); background: var(--green-dim)">
+            <div class="card-label" style="color:var(--green)">Total a Receber</div>
+            <div class="card-value green" id="mv-total">—</div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <div class="table-header"><span class="table-title" id="mv-titulo">Carregando...</span></div>
+          <table>
+            <thead><tr><th>Data</th><th>Cliente</th><th>Plano</th><th>Tipo</th><th>Valor</th><th class="text-right">Comissão</th></tr></thead>
+            <tbody id="mv-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- HISTÓRICO -->
+    <div id="page-historico" class="page" style="display:none">
+      <div class="topbar">
+        <div><div class="page-title">Histórico</div><div class="page-sub">Todas as transações</div></div>
+        <div style="display:flex;gap:8px;align-items:flex-end">
+          <div class="field mb-0"><label>De</label><input type="date" id="h-inicio" style="width:140px"></div>
+          <div class="field mb-0"><label>Até</label><input type="date" id="h-fim" style="width:140px"></div>
+          <div class="field mb-0"><label>Tipo</label>
+            <select id="h-tipo" style="width:130px">
+              <option value="">Todos</option>
+              <option value="ativacao">Ativações</option>
+              <option value="recarga">Recargas</option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="loadHistorico()">Buscar</button>
+        </div>
+      </div>
+      <div class="content">
+        <div class="table-wrap">
+          <div class="table-header"><span class="table-title" id="h-titulo">Selecione o período</span></div>
+          <table>
+            <thead><tr><th>Data</th><th>Cliente</th><th>MSISDN</th><th>Plano</th><th>Tipo</th><th>Valor</th><th class="text-right">Comissão</th></tr></thead>
+            <tbody id="h-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="/assets/api.js"></script>
+<script>
+let USER = null;
+
+window.addEventListener('DOMContentLoaded', async () => {
+  USER = API.guardAuth();
+  if (!USER) return;
+  if (USER.perfil !== 'vendedor') { window.location.href = '/admin.html'; return; }
+  document.getElementById('user-nome').textContent = USER.nome;
+
+  const hoje = new Date();
+  const inicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().split('T')[0];
+  const fim = hoje.toISOString().split('T')[0];
+  ['m-inicio', 'h-inicio'].forEach(id => { document.getElementById(id).value = inicio; });
+  ['m-fim', 'h-fim'].forEach(id => { document.getElementById(id).value = fim; });
+
+  await loadMinha();
+});
+
+function goTo(page) {
+  document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`page-${page}`).style.display = '';
+  document.querySelector(`[data-page="${page}"]`).classList.add('active');
+  if (page === 'historico') loadHistorico();
+}
+
+async function loadMinha() {
+  const inicio = document.getElementById('m-inicio').value;
+  const fim = document.getElementById('m-fim').value;
+  const qs = new URLSearchParams({ ...(inicio && { inicio }), ...(fim && { fim }) });
+
+  try {
+    const data = await API.get(`/relatorio/vendedor/${USER.id}?${qs}`);
+    const r = data.resumo;
+
+    document.getElementById('mv-ativacoes').textContent = r.ativacoes;
+    document.getElementById('mv-recargas').textContent = r.recargas;
+    document.getElementById('mv-com-ativ').textContent = fmtBRL(r.comissao_ativacoes);
+    document.getElementById('mv-com-rec').textContent = fmtBRL(r.comissao_recargas);
+    document.getElementById('mv-total').textContent = fmtBRL(r.total_comissao);
+    document.getElementById('mv-titulo').textContent = `${data.transacoes.length} transações`;
+
+    const body = document.getElementById('mv-body');
+    if (!data.transacoes.length) {
+      body.innerHTML = `<tr><td colspan="6" class="empty-state">Nenhuma transação no período</td></tr>`;
+    } else {
+      body.innerHTML = data.transacoes.map(t => `
+        <tr>
+          <td>${fmtData(t.data_transacao)}</td>
+          <td>${t.nome_cliente || '-'}</td>
+          <td>${t.plano || '-'}</td>
+          <td>${tipoBadge(t.tipo)}</td>
+          <td>${fmtBRL(t.valor)}</td>
+          <td class="text-right text-green fw-700">${fmtBRL(t.comissao)}</td>
+        </tr>
+      `).join('');
+    }
+  } catch (e) { showAlert(e.message); }
+}
+
+async function loadHistorico() {
+  const inicio = document.getElementById('h-inicio').value;
+  const fim = document.getElementById('h-fim').value;
+  const tipo = document.getElementById('h-tipo').value;
+  const qs = new URLSearchParams({ ...(inicio && { inicio }), ...(fim && { fim }), ...(tipo && { tipo }) });
+
+  try {
+    const rows = await API.get(`/relatorio/transacoes?${qs}`);
+    document.getElementById('h-titulo').textContent = `${rows.length} transações`;
+    const body = document.getElementById('h-body');
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="7" class="empty-state">Nenhuma transação encontrada</td></tr>`;
+    } else {
+      body.innerHTML = rows.map(t => `
+        <tr>
+          <td>${fmtData(t.data_transacao)}</td>
+          <td>${t.nome_cliente || '-'}</td>
+          <td class="text-muted">${t.msisdn}</td>
+          <td>${t.plano || '-'}</td>
+          <td>${tipoBadge(t.tipo)}</td>
+          <td>${fmtBRL(t.valor)}</td>
+          <td class="text-right text-green fw-700">${fmtBRL(t.comissao)}</td>
+        </tr>
+      `).join('');
+    }
+  } catch (e) { showAlert(e.message); }
+}
+</script>
+</body>
+</html>
