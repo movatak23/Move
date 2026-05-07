@@ -36,6 +36,16 @@ cron.schedule('0 * * * *', () => {
   executarSync();
 });
 
+// Rota para sincronização manual
+app.post('/api/sync/vendas', (req, res) => {
+    try {
+          executarSync();
+          res.json({ status: 'Sincronização iniciada com sucesso' });
+    } catch (erro) {
+          res.status(500).json({ erro: erro.message });
+    }
+});
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
