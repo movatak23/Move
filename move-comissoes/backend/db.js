@@ -92,4 +92,3 @@ function query(sql, params = []) {
 
 module.exports = { db, query };
 
-module.exports = db;
