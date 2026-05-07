@@ -1,10 +1,12 @@
 require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
 const path = require('path');
 
 const app = express();
+
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
@@ -28,14 +30,16 @@ app.get('*', (req, res) => {
 
 // Sync automático a cada hora
 const { executarSync } = require('./bora');
+
 cron.schedule('0 * * * *', () => {
   console.log('[Cron] Iniciando sync horário...');
   executarSync();
 });
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
   console.log(`Move Comissões rodando na porta ${PORT}`);
   // Sync inicial ao subir
-  setTimeout(executarSync, 5000);
+  setTimeout(() => executarSync(), 5000);
 });
