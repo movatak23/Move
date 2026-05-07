@@ -1,4 +1,4 @@
-const { db, query } = require('./db');
+const { db, query } = require('./db'); // v2
 
 // Função principal de sincronização
 async function executarSync() {
