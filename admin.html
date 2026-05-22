@@ -1028,8 +1028,10 @@ async function loadPlanosComissao() {
 }
 
 async function abrirModalPlano() {
+  // Limpa campos
+  ['mp-plano-id','mp-plano-nome','mp-plano-valor','mp-com-ativ','mp-com-rec'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('mp-sel-plano').value = '';
   document.getElementById('modal-plano').classList.add('open');
-  // Carrega planos da Bora
   try {
     if (!planosBoraCache.length) {
       const data = await api('GET', '/api/bora/planos/ativacao');
@@ -1037,16 +1039,22 @@ async function abrirModalPlano() {
     }
     const sel = document.getElementById('mp-sel-plano');
     sel.innerHTML = '<option value="">Selecione um plano...</option>' +
-      planosBoraCache.map(p => `<option value="${p.id||p.planId}">${p.name||p.nome||p.description||p.id} — R$ ${parseFloat(p.value||p.price||p.valor||0).toFixed(2)}</option>`).join('');
+      planosBoraCache.map(p => {
+        const pid = p.id || p.planId || '';
+        const pnome = p.name || p.nome || p.description || pid;
+        const pval = parseFloat(p.value || p.price || p.valor || 0).toFixed(2);
+        return `<option value="${pid}" data-nome="${pnome}" data-valor="${pval}">${pnome} — R$ ${pval}</option>`;
+      }).join('');
   } catch(e) { toast('Erro ao carregar planos Bora: '+e.message,'error'); }
 }
 
 function selecionarPlanoBora(id) {
-  const plano = planosBoraCache.find(p => (p.id||p.planId) == id);
-  if (!plano) return;
+  const sel = document.getElementById('mp-sel-plano');
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || !id) return;
   document.getElementById('mp-plano-id').value = id;
-  document.getElementById('mp-plano-nome').value = plano.name||plano.nome||plano.description||'';
-  document.getElementById('mp-plano-valor').value = parseFloat(plano.value||plano.price||plano.valor||0).toFixed(2);
+  document.getElementById('mp-plano-nome').value = opt.dataset.nome || '';
+  document.getElementById('mp-plano-valor').value = opt.dataset.valor || '';
 }
 
 function editarPlano(id, nome, valor, comAtiv, comRec) {
