@@ -1614,10 +1614,15 @@ async function calcularComissao(modo) {
       return;
     }
 
+    // Separa linhas com erro para exibir no fim
+    const linhasOk = calcResultado.filter(l => !l.erro);
+    const linhasErro = calcResultado.filter(l => l.erro);
+    const linhasOrdenadas = [...linhasOk, ...linhasErro];
+
     let rows = '';
-    for (const linha of calcResultado) {
+    for (const linha of linhasOrdenadas) {
       if (linha.erro) {
-        rows += '<tr><td class="mono" colspan="6" style="color:var(--red)">' + linha.msisdn + ' — ' + linha.erro + '</td></tr>';
+        rows += '<tr style="background:var(--red-dim)"><td class="mono" colspan="6" style="color:var(--red);padding:12px 20px">⚠ ' + linha.msisdn + ' — ' + linha.erro + '</td></tr>';
         continue;
       }
       // Cabeçalho da linha
