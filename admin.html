@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bora Vendas — Gestão de Vendedores</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
 :root {
   --bg: #0a0c10;
@@ -830,7 +832,10 @@ select option { background: var(--bg3); }
         <div class="table-card">
           <div class="table-header">
             <div class="table-title">Histórico de Recargas Detectadas</div>
-            <button class="btn btn-secondary btn-sm" onclick="salvarComissoesCalculadas()">↓ Registrar no Sistema</button>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-secondary btn-sm" onclick="exportarRelatorioPDF()">📄 Exportar PDF</button>
+              <button class="btn btn-secondary btn-sm" onclick="salvarComissoesCalculadas()">↓ Registrar no Sistema</button>
+            </div>
           </div>
           <table>
             <thead><tr><th>Data</th><th>Tipo</th><th>Plano</th><th>Comissão</th><th colspan="2">Status</th></tr></thead>
@@ -1671,6 +1676,146 @@ async function salvarComissoesCalculadas() {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+
+// ── EXPORTAR PDF ──────────────────────────────────────────────────────────────
+async function exportarRelatorioPDF() {
+  if (!calcResultado.length) { toast('Calcule primeiro','error'); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+  const hoje = new Date().toLocaleDateString('pt-BR');
+  const horaAgora = new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+  const vendedorNome = document.getElementById('atribuir-vendedor')?.options[document.getElementById('atribuir-vendedor')?.selectedIndex]?.text ||
+                       document.getElementById('calc-vendedor')?.options[document.getElementById('calc-vendedor')?.selectedIndex]?.text || '—';
+
+  const totalGeral = calcResultado.reduce((a, l) => a + (l.total_comissao || 0), 0);
+  const totalRecargas = calcResultado.reduce((a, l) => a + (l.resultado||[]).filter(r => r.tipo === 'recarga').length, 0);
+  const totalAtivacoes = calcResultado.reduce((a, l) => a + (l.resultado||[]).filter(r => r.tipo === 'ativacao').length, 0);
+
+  // ── Cabeçalho ──────────────────────────────────────────────────────────────
+  doc.setFillColor(10, 12, 16);
+  doc.rect(0, 0, 210, 40, 'F');
+
+  doc.setTextColor(0, 229, 160);
+  doc.setFontSize(20);
+  doc.setFont('helvetica', 'bold');
+  doc.text('BORA VENDAS', 14, 18);
+
+  doc.setFontSize(9);
+  doc.setTextColor(120, 133, 160);
+  doc.setFont('helvetica', 'normal');
+  doc.text('Relatório de Comissões', 14, 25);
+  doc.text('Gerado em ' + hoje + ' às ' + horaAgora, 14, 31);
+
+  // Vendedor e totais no cabeçalho
+  doc.setTextColor(232, 236, 245);
+  doc.setFontSize(9);
+  doc.text('Vendedor: ' + vendedorNome, 130, 18);
+  doc.text('Ativações: ' + totalAtivacoes, 130, 25);
+  doc.text('Recargas: ' + totalRecargas, 130, 31);
+
+  doc.setFontSize(11);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(0, 229, 160);
+  doc.text('Total: R$ ' + totalGeral.toFixed(2), 130, 38);
+
+  let y = 48;
+
+  // ── Por linha ──────────────────────────────────────────────────────────────
+  for (const linha of calcResultado) {
+    if (linha.erro) continue;
+
+    // Cabeçalho da linha
+    doc.setFillColor(24, 28, 36);
+    doc.rect(0, y - 4, 210, 14, 'F');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10);
+    doc.setTextColor(232, 236, 245);
+    doc.text(linha.msisdn, 14, y + 3);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(120, 133, 160);
+    doc.text('Plano: ' + (linha.plano_atual_nome || '—'), 60, y + 3);
+    doc.text('Ativação: ' + (linha.data_ativacao ? new Date(linha.data_ativacao).toLocaleDateString('pt-BR') : '—'), 115, y + 3);
+    doc.text('Status: ' + (linha.status || '—'), 155, y + 3);
+
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 229, 160);
+    doc.setFontSize(9);
+    doc.text('R$ ' + (linha.total_comissao || 0).toFixed(2), 185, y + 3, { align: 'right' });
+
+    y += 12;
+
+    // Tabela de transações
+    const rows = (linha.resultado || []).map(r => [
+      r.data ? new Date(r.data).toLocaleDateString('pt-BR') : r.mes,
+      r.tipo.toUpperCase(),
+      r.plano_nome || '—',
+      r.sem_config ? 'Sem config' : 'R$ ' + r.comissao.toFixed(2)
+    ]);
+
+    if (rows.length) {
+      doc.autoTable({
+        startY: y,
+        head: [['Data', 'Tipo', 'Plano', 'Comissão']],
+        body: rows,
+        margin: { left: 14, right: 14 },
+        styles: {
+          fontSize: 8,
+          cellPadding: 3,
+          textColor: [200, 205, 215],
+          fillColor: [22, 22, 27],
+          lineColor: [37, 43, 58],
+          lineWidth: 0.3
+        },
+        headStyles: {
+          fillColor: [30, 35, 48],
+          textColor: [120, 133, 160],
+          fontStyle: 'bold',
+          fontSize: 7
+        },
+        alternateRowStyles: { fillColor: [17, 19, 24] },
+        columnStyles: {
+          0: { cellWidth: 28 },
+          1: { cellWidth: 22 },
+          2: { cellWidth: 100 },
+          3: { cellWidth: 28, halign: 'right' }
+        },
+        didParseCell: (data) => {
+          if (data.section === 'body' && data.column.index === 1) {
+            const val = data.cell.raw;
+            if (val === 'ATIVACAO') data.cell.styles.textColor = [0, 208, 132];
+            else data.cell.styles.textColor = [77, 124, 254];
+          }
+          if (data.section === 'body' && data.column.index === 3) {
+            if (data.cell.raw === 'Sem config') data.cell.styles.textColor = [224, 90, 90];
+            else data.cell.styles.textColor = [0, 229, 160];
+          }
+        }
+      });
+      y = doc.lastAutoTable.finalY + 8;
+    }
+
+    // Nova página se necessário
+    if (y > 260) { doc.addPage(); y = 14; }
+  }
+
+  // ── Rodapé ─────────────────────────────────────────────────────────────────
+  const pageCount = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(7);
+    doc.setTextColor(69, 79, 104);
+    doc.text('Bora Vendas — Relatório gerado em ' + hoje, 14, 292);
+    doc.text('Página ' + i + ' de ' + pageCount, 196, 292, { align: 'right' });
+  }
+
+  doc.save('comissoes-' + hoje.replace(/\//g,'-') + '.pdf');
+  toast('PDF exportado com sucesso!');
+}
 
 // ── ATRIBUIR LINHA ────────────────────────────────────────────────────────────
 let _linhaParaAtribuir = null;
