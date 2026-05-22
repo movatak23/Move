@@ -666,8 +666,10 @@ select option { background: var(--bg3); }
             <div class="field"><label>Telefone</label><input type="text" id="cli-tel"></div>
             <div class="field"><label>Data de Nascimento</label><input type="date" id="cli-nasc"></div>
           </div>
-          <div class="form-row single">
-            <div class="field"><label>Endereço</label><input type="text" id="cli-end" placeholder="Rua, número, bairro"></div>
+          <div class="form-row triple">
+            <div class="field"><label>Rua</label><input type="text" id="cli-rua" placeholder="Nome da rua"></div>
+            <div class="field"><label>Número</label><input type="text" id="cli-numero" placeholder="123"></div>
+            <div class="field"><label>Bairro</label><input type="text" id="cli-bairro" placeholder="Centro"></div>
           </div>
           <div class="form-row triple">
             <div class="field"><label>CEP</label><input type="text" id="cli-cep" placeholder="00000-000"></div>
@@ -1212,10 +1214,13 @@ async function buscarCliente() {
     document.getElementById('cli-email').value = data.email || '';
     document.getElementById('cli-tel').value = data.phone || data.telefone || '';
     document.getElementById('cli-nasc').value = data.birthDate ? data.birthDate.split('T')[0] : '';
-    document.getElementById('cli-end').value = data.address || data.endereco || '';
-    document.getElementById('cli-cep').value = data.zipCode || data.cep || '';
-    document.getElementById('cli-cidade').value = data.city || data.cidade || '';
-    document.getElementById('cli-uf').value = data.state || data.uf || '';
+    document.getElementById('cli-rua').value = data.street || '';
+    document.getElementById('cli-numero').value = data.number || '';
+    document.getElementById('cli-bairro').value = data.neighborhood || '';
+    document.getElementById('cli-cep').value = data.zipcode || data.zipCode || '';
+    document.getElementById('cli-cidade').value = data.city || '';
+    document.getElementById('cli-uf').value = data.uf || data.state || '';
+    state.ativacao.clienteId = data.idSubscriberExternal || data.id || null;
     res.innerHTML = `<div class="info-card" style="border-color:var(--accent);margin-bottom:12px">
       <div class="info-row"><span class="k">Cliente encontrado</span><span class="v">${data.name||data.nome||doc}</span></div>
     </div>`;
@@ -1235,11 +1240,12 @@ async function confirmarCliente() {
     email: document.getElementById('cli-email').value,
     phone: document.getElementById('cli-tel').value,
     birthDate: document.getElementById('cli-nasc').value,
-    address: document.getElementById('cli-end').value,
-    zipCode: document.getElementById('cli-cep').value,
+    street: document.getElementById('cli-rua').value,
+    number: document.getElementById('cli-numero').value,
+    neighborhood: document.getElementById('cli-bairro').value,
+    zipcode: document.getElementById('cli-cep').value.replace(/\D/g,''),
     city: document.getElementById('cli-cidade').value,
-    state: document.getElementById('cli-uf').value,
-    iccid: state.ativacao.iccid
+    uf: document.getElementById('cli-uf').value
   };
   await carregarPlanos();
   document.getElementById('step-3').style.display = 'block';

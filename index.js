@@ -318,11 +318,20 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
   try {
     const { subscriber, cartPayload, paymentType, vendedor_id, plano_id, plano_nome, plano_valor } = req.body;
 
-    // 1. Cadastra/atualiza subscriber na Bora
-    await boraPost('/api/Subscriber', subscriber);
+    // 1. Cadastra/atualiza subscriber na Bora e pega clientId
+    const subResp = await boraPost('/api/Subscriber', subscriber);
+    const clientId = subResp?.idSubscriberExternal || subResp?.id || cartPayload.clientId;
+    if (!clientId) throw new Error('clientId não retornado pela Bora após cadastro do subscriber');
 
-    // 2. Cria carrinho
-    const cart = await boraPost('/api/Cart/subscription', cartPayload);
+    // 2. Cria carrinho com clientId correto
+    const cartBody = {
+      iccid: cartPayload.iccid,
+      ddd: cartPayload.ddd,
+      planId: cartPayload.planId,
+      planType: cartPayload.planType || 'Controle',
+      clientId
+    };
+    const cart = await boraPost('/api/Cart/subscription', cartBody);
     const cartId = cart.cartId || cart.id;
     if (!cartId) throw new Error('cartId não retornado pela Bora');
 
