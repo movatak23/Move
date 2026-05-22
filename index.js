@@ -467,11 +467,8 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
              null;
     }
 
-    // Processa cada número
-    const linhas = [];
-    let totalGeralComissao = 0;
-
-    for (const msisdnNorm of numeros) {
+    // Processa todos os números em paralelo (evita timeout)
+    async function processarNumero(msisdnNorm) {
       try {
         const details = await boraGet(`/api/Subscription/${msisdnNorm}/details`);
         const dataAtivacao = details?.activationDate || null;
@@ -489,9 +486,9 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
             return true;
           });
         }
+
         const planoRecente = planArray.length ? planArray[planArray.length - 1] : null;
         const planoAtualNome = planoRecente?.name || 'Sem plano';
-
         const resultado = [];
 
         if (dataAtivacao) {
@@ -521,25 +518,22 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
         }
 
         const totalLinha = resultado.reduce((a, r) => a + r.comissao, 0);
-        totalGeralComissao += totalLinha;
-
-        linhas.push({
-          msisdn: msisdnNorm,
-          plano_atual_nome: planoAtualNome,
-          data_ativacao: dataAtivacao,
-          status: statusLinha,
-          total_comissao: totalLinha,
-          resultado
-        });
+        return { msisdn: msisdnNorm, plano_atual_nome: planoAtualNome, data_ativacao: dataAtivacao, status: statusLinha, total_comissao: totalLinha, resultado };
       } catch (err) {
-        linhas.push({
-          msisdn: msisdnNorm,
-          erro: err.response?.data?.detail || err.message,
-          resultado: []
-        });
+        return { msisdn: msisdnNorm, erro: err.response?.data?.detail || err.message, resultado: [] };
       }
     }
 
+    // Processa em lotes de 5 para não sobrecarregar a API Bora
+    const linhas = [];
+    const LOTE = 5;
+    for (let i = 0; i < numeros.length; i += LOTE) {
+      const lote = numeros.slice(i, i + LOTE);
+      const resultados = await Promise.all(lote.map(processarNumero));
+      linhas.push(...resultados);
+    }
+
+    const totalGeralComissao = linhas.reduce((a, l) => a + (l.total_comissao || 0), 0);
     res.json({ linhas, total_geral: totalGeralComissao });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
