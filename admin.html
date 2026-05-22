@@ -1411,11 +1411,30 @@ async function confirmarAtivacao() {
       plano_nome: a.plano.nome,
       plano_valor: a.plano.valor
     });
-    res.innerHTML = `<div class="info-card" style="border-color:var(--accent)">
-      <div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">✓ Linha Ativada</span></span></div>
-      <div class="info-row"><span class="k">Cart ID</span><span class="v mono">${data.cartId}</span></div>
-      <div class="info-row"><span class="k">Comissão Registrada</span><span class="v currency">R$ ${parseFloat(data.comissao||0).toFixed(2)}</span></div>
-    </div>`;
+    let html = '<div class="info-card" style="border-color:var(--accent)">' +
+      '<div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">✓ Linha Ativada</span></span></div>' +
+      (data.msisdn ? '<div class="info-row"><span class="k">Número</span><span class="v mono">' + data.msisdn + '</span></div>' : '') +
+      '<div class="info-row"><span class="k">Comissão Registrada</span><span class="v currency">R$ ' + parseFloat(data.comissao||0).toFixed(2) + '</span></div>' +
+    '</div>';
+
+    if (data.pix && data.pix.code) {
+      html += '<div class="info-card" style="margin-top:16px;border-color:var(--blue)">' +
+        '<div class="section-title" style="color:var(--blue);margin-bottom:12px">⚡ Pagamento PIX</div>' +
+        (data.pix.qrCodeUrl ? '<div style="text-align:center;margin-bottom:12px"><img src="' + data.pix.qrCodeUrl + '" style="width:180px;height:180px;border-radius:8px" onerror="this.style.display='none'"></div>' : '') +
+        '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--text2);margin-bottom:10px">' + data.pix.code + '</div>' +
+        '<button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('' + data.pix.code.replace(/'/g,"\'") + '').then(()=>toast('Código copiado!'))">📋 Copiar Código PIX</button>' +
+      '</div>';
+    }
+
+    if (data.billet && data.billet.url) {
+      html += '<div class="info-card" style="margin-top:16px;border-color:var(--yellow)">' +
+        '<div class="section-title" style="color:var(--yellow);margin-bottom:12px">📄 Boleto Gerado</div>' +
+        (data.billet.barcode ? '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--text2);margin-bottom:10px">' + data.billet.barcode + '</div>' : '') +
+        '<a href="' + data.billet.url + '" target="_blank" class="btn btn-secondary btn-sm">🔗 Abrir Boleto</a>' +
+      '</div>';
+    }
+
+    res.innerHTML = html;
     toast('Chip ativado com sucesso!');
   } catch(e) {
     res.innerHTML = `<div class="info-card" style="border-color:var(--red)"><div class="info-row"><span class="k">Erro</span><span class="v" style="color:var(--red)">${e.message}</span></div></div>`;

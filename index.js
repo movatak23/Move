@@ -393,7 +393,25 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
       [linhaId, vendedor_id, plano_id, plano_nome, plano_valor, comissao]
     );
 
-    res.json({ ok: true, cartId, pagamento, comissao });
+    // Extrai dados do PIX se houver
+    const pixData = pagamento?.pix || null;
+
+    res.json({
+      ok: true,
+      cartId,
+      comissao,
+      msisdn: pagamento?.msisdn || pagamento?.pmsisdn || null,
+      isPortability: pagamento?.isPortability || false,
+      pix: pixData ? {
+        code: pixData.code || null,
+        qrCodeUrl: pixData.qrCodeUrl || null,
+        protocol: pixData.protocol || null
+      } : null,
+      billet: pagamento?.billet ? {
+        url: pagamento.billet.url || pagamento.billet.digitableLine || null,
+        barcode: pagamento.billet.barCode || pagamento.billet.digitableLine || null
+      } : null
+    });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
