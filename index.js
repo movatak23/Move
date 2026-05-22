@@ -200,19 +200,24 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
     const params = [vendedorId];
     let filtro = '';
     if (data_inicio && data_fim) {
-      filtro = ' AND t.data_transacao BETWEEN $2 AND $3';
-      params.push(data_inicio, data_fim + ' 23:59:59');
+      // Usa periodo_referencia para transações retroativas, data_transacao para demais
+      filtro = ` AND (
+        CASE WHEN t.fonte IN ('retroativo','bora_details','bora_polling')
+          THEN t.periodo_referencia BETWEEN $2 AND $3
+          ELSE t.data_transacao::date::text BETWEEN $2 AND $3
+        END
+      )`;
+      params.push(data_inicio, data_fim);
     }
     const { rows: transacoes } = await pool.query(
       `SELECT t.*, l.msisdn, l.nome_cliente, l.iccid
        FROM transacoes t
        LEFT JOIN linhas l ON l.id = t.linha_id
        WHERE t.vendedor_id = $1${filtro}
-       ORDER BY t.data_transacao DESC`,
+       ORDER BY COALESCE(t.periodo_referencia, t.data_transacao::date::text) DESC`,
       params
     );
-    // Filtro sem alias 't' para a query de resumo
-    const filtroResumo = filtro.replace(/t\.data_transacao/g, 'data_transacao');
+    const filtroResumo = filtro.replace(/t\./g, '');
     const { rows: resumo } = await pool.query(
       `SELECT tipo, COUNT(*) as quantidade, COALESCE(SUM(comissao),0) as total_comissao
        FROM transacoes WHERE vendedor_id=$1${filtroResumo}
