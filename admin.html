@@ -1150,7 +1150,7 @@ async function salvarPlanoComissao() {
 
 // ── ATIVAÇÃO FLOW ─────────────────────────────────────────────────────────────
 function resetAtivacao() {
-  state.ativacao = { iccid: null, iccidData: null, cliente: null, plano: null, ddd: null, pagamento: null, step: 1 };
+  state.ativacao = { iccid: null, iccidData: null, cliente: null, plano: null, ddd: null, pagamento: null, step: 1, tipoAtivacao: 'nova', msisdnPortabilidade: null };
   irParaStep(1);
   document.getElementById('iccid-input').value = '';
   document.getElementById('iccid-result').innerHTML = '';
@@ -1189,13 +1189,48 @@ async function verificarIccid() {
       <div class="info-row"><span class="k">ICCID</span><span class="v mono">${iccid}</span></div>
       <div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">Disponível para ativação</span></span></div>
     </div>
-    <button class="btn btn-primary" onclick="irParaCliente()" style="margin-top:8px">Continuar →</button>`;
+    <div style="margin-top:16px">
+      <div class="section-title" style="font-size:13px;margin-bottom:12px">Tipo de Ativação</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+        <div class="plano-card selected" id="tipo-nova" onclick="selecionarTipoAtivacao('nova')">
+          <div style="font-size:20px;margin-bottom:6px">📱</div>
+          <div class="pnome">Linha Nova</div>
+          <div class="pcomissao">Número gerado pela operadora</div>
+        </div>
+        <div class="plano-card" id="tipo-portabilidade" onclick="selecionarTipoAtivacao('portabilidade')">
+          <div style="font-size:20px;margin-bottom:6px">🔄</div>
+          <div class="pnome">Portabilidade</div>
+          <div class="pcomissao">Manter número atual</div>
+        </div>
+      </div>
+      <div id="port-numero-wrap" style="display:none;margin-bottom:16px">
+        <div class="field">
+          <label>Número a Portar (com DDD)</label>
+          <input type="text" id="port-numero" placeholder="Ex: 5581999990000" maxlength="13">
+        </div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="irParaCliente()" style="margin-top:8px">Continuar →</button>\`;
   } catch(e) {
     res.innerHTML = `<div class="info-card" style="border-color:var(--red)"><div class="info-row"><span class="k">Erro</span><span class="v" style="color:var(--red)">${e.message}</span></div></div>`;
   }
 }
 
+function selecionarTipoAtivacao(tipo) {
+  state.ativacao.tipoAtivacao = tipo;
+  document.getElementById('tipo-nova').classList.toggle('selected', tipo === 'nova');
+  document.getElementById('tipo-portabilidade').classList.toggle('selected', tipo === 'portabilidade');
+  document.getElementById('port-numero-wrap').style.display = tipo === 'portabilidade' ? 'block' : 'none';
+}
+
 function irParaCliente() {
+  if (state.ativacao.tipoAtivacao === 'portabilidade') {
+    const num = document.getElementById('port-numero').value.trim().replace(/\D/g,'');
+    if (!num || num.length < 10) { toast('Informe o número a portar com DDD','error'); return; }
+    state.ativacao.msisdnPortabilidade = num;
+  } else {
+    state.ativacao.msisdnPortabilidade = null;
+  }
   document.getElementById('step-2').style.display = 'block';
   irParaStep(2);
   setTimeout(() => document.getElementById('step-2').scrollIntoView({ behavior:'smooth' }), 100);
@@ -1313,6 +1348,8 @@ function irParaConfirmacao() {
     <div class="info-row"><span class="k">ICCID</span><span class="v mono">${a.iccid}</span></div>
     <div class="info-row"><span class="k">Cliente</span><span class="v">${a.cliente.name}</span></div>
     <div class="info-row"><span class="k">CPF/CNPJ</span><span class="v mono">${a.cliente.document}</span></div>
+    <div class="info-row"><span class="k">Tipo</span><span class="v">${a.tipoAtivacao === 'portabilidade' ? '🔄 Portabilidade' : '📱 Linha Nova'}</span></div>
+    ${a.msisdnPortabilidade ? `<div class="info-row"><span class="k">Número a Portar</span><span class="v mono">${a.msisdnPortabilidade}</span></div>` : ''}
     <div class="info-row"><span class="k">DDD</span><span class="v">${a.ddd}</span></div>
     <div class="info-row"><span class="k">Plano</span><span class="v">${a.plano.nome}</span></div>
     <div class="info-row"><span class="k">Valor</span><span class="v currency">R$ ${parseFloat(a.plano.valor).toFixed(2)}</span></div>
@@ -1336,7 +1373,8 @@ async function confirmarAtivacao() {
         document: a.cliente.document,
         ddd: a.ddd,
         planId: a.plano.id,
-        planType: 'Controle'
+        planType: 'Controle',
+        msisdnPortabilidade: a.msisdnPortabilidade || null
       },
       paymentType: a.pagamento,
       vendedor_id: vendedorId || state.user.id,
