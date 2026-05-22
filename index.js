@@ -193,7 +193,7 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
   try {
     const vendedorId = req.params.id;
     // Vendedor só vê o próprio
-    if (req.user.role !== 'admin' && req.user.id !== parseInt(vendedorId)) {
+    if (req.user.role !== 'admin' && parseInt(req.user.id) !== parseInt(vendedorId)) {
       return res.status(403).json({ erro: 'Acesso negado' });
     }
     const { data_inicio, data_fim } = req.query;
