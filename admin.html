@@ -1596,7 +1596,7 @@ async function calcularComissao(modo) {
         '<td><span class="badge ' + (r.tipo === 'ativacao' ? 'badge-green' : 'badge-blue') + '">' + r.tipo + '</span></td>' +
         '<td>' + (r.plano_nome || '—') + '</td>' +
         '<td class="currency">R$ ' + r.comissao.toFixed(2) + '</td>' +
-        '<td><span class="badge ' + (r.comissao > 0 ? 'badge-green' : 'badge-red') + '">' + (r.comissao > 0 ? 'Com comissão' : 'Sem config') + '</span></td>' +
+        '<td><span class="badge ' + (r.sem_config ? 'badge-red' : 'badge-green') + '">' + (r.sem_config ? 'Plano Sem Comissão' : 'R$ ' + r.comissao.toFixed(2)) + '</span></td>' +
       '</tr>';
     }).join('');
 

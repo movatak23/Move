@@ -462,41 +462,51 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
     const planoRecente = planArray.length ? planArray[planArray.length - 1] : null;
     const planoAtualNome = planoRecente?.name || 'Sem plano';
 
-    // Busca comissões configuradas por planId
+    // Busca comissões configuradas — indexa por ID e por nome (uppercase) para fallback
     const { rows: planosComissao } = await pool.query('SELECT * FROM planos_comissao');
-    const mapaComissao = {};
-    planosComissao.forEach(p => mapaComissao[String(p.plano_id)] = p);
+    const mapaComissaoId = {};
+    const mapaComissaoNome = {};
+    planosComissao.forEach(p => {
+      mapaComissaoId[String(p.plano_id)] = p;
+      mapaComissaoNome[String(p.plano_nome).toUpperCase().trim()] = p;
+    });
+
+    function buscarComissao(planId, planNome) {
+      // Tenta por ID primeiro, depois por nome
+      return mapaComissaoId[String(planId || '')] ||
+             mapaComissaoNome[String(planNome || '').toUpperCase().trim()] ||
+             null;
+    }
 
     // Monta resultado usando o histórico real do array plan
     const resultado = [];
-    const mesAtiv = dataAtivacao.substring(0, 7); // AAAA-MM
+    const mesAtiv = dataAtivacao.substring(0, 7);
 
     // Primeiro registro = ativação
     const primeiroPlano = planArray.length ? planArray[0] : null;
-    const primeiroId = String(primeiroPlano?.planId || plano_id || '');
-    const comAtiv = parseFloat(mapaComissao[primeiroId]?.comissao_ativacao || 0);
+    const comissaoAtiv = buscarComissao(primeiroPlano?.planId, primeiroPlano?.name);
     resultado.push({
       mes: mesAtiv,
       tipo: 'ativacao',
-      plano_id: primeiroId,
+      plano_id: primeiroPlano?.planId || null,
       plano_nome: primeiroPlano?.name || 'Plano ativação',
       data: dataAtivacao,
-      comissao: comAtiv
+      comissao: parseFloat(comissaoAtiv?.comissao_ativacao || 0),
+      sem_config: !comissaoAtiv
     });
 
-    // Demais registros = recargas (a partir do índice 1)
+    // Demais registros = recargas
     for (let i = 1; i < planArray.length; i++) {
       const p = planArray[i];
-      const pid = String(p.planId || '');
-      const mes = (p.createdAt || p.expiration || '').substring(0, 7);
-      const comRec = parseFloat(mapaComissao[pid]?.comissao_recarga || 0);
+      const comissaoRec = buscarComissao(p.planId, p.name);
       resultado.push({
-        mes,
+        mes: (p.createdAt || '').substring(0, 7),
         tipo: 'recarga',
-        plano_id: pid,
+        plano_id: p.planId || null,
         plano_nome: p.name || '—',
         data: p.createdAt || null,
-        comissao: comRec
+        comissao: parseFloat(comissaoRec?.comissao_recarga || 0),
+        sem_config: !comissaoRec
       });
     }
 
