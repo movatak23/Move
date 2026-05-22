@@ -700,6 +700,134 @@ app.get('/api/esim/historico', authMiddleware, adminOnly, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+
+// ─── CLIENTE APP ──────────────────────────────────────────────────────────────
+const bcryptCliente = require('bcryptjs');
+const jwtCliente = require('jsonwebtoken');
+
+// Tabela clientes (criar no banco):
+// CREATE TABLE IF NOT EXISTS clientes (
+//   id SERIAL PRIMARY KEY,
+//   cpf VARCHAR(11) UNIQUE NOT NULL,
+//   nome VARCHAR(200) NOT NULL,
+//   senha_hash VARCHAR(255) NOT NULL,
+//   criado_em TIMESTAMP DEFAULT NOW()
+// );
+
+app.post('/api/cliente/cadastro', async (req, res) => {
+  try {
+    const { cpf, nome, senha } = req.body;
+    if (!cpf || !nome || !senha) throw new Error('Campos obrigatórios: cpf, nome, senha');
+
+    // Verifica se CPF existe na Bora
+    try {
+      await boraGet(`/api/Subscriber/${cpf}/document`);
+    } catch {
+      return res.status(400).json({ erro: 'CPF não encontrado na base Move. Entre em contato com o suporte.' });
+    }
+
+    const hash = await bcryptCliente.hash(senha, 10);
+    const { rows } = await pool.query(
+      `INSERT INTO clientes (cpf, nome, senha_hash) VALUES ($1,$2,$3)
+       ON CONFLICT (cpf) DO UPDATE SET nome=$2, senha_hash=$3
+       RETURNING id, cpf, nome`,
+      [cpf, nome, hash]
+    );
+    const cliente = rows[0];
+    const token = jwtCliente.sign({ id: cliente.id, cpf: cliente.cpf, nome: cliente.nome }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, cliente });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/cliente/login', async (req, res) => {
+  try {
+    const { cpf, senha } = req.body;
+    const { rows } = await pool.query('SELECT * FROM clientes WHERE cpf=$1', [cpf]);
+    if (!rows.length) return res.status(401).json({ erro: 'CPF ou senha incorretos' });
+    const ok = await bcryptCliente.compare(senha, rows[0].senha_hash);
+    if (!ok) return res.status(401).json({ erro: 'CPF ou senha incorretos' });
+    const cliente = rows[0];
+    const token = jwtCliente.sign({ id: cliente.id, cpf: cliente.cpf, nome: cliente.nome }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, cliente: { id: cliente.id, cpf: cliente.cpf, nome: cliente.nome } });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+function authCliente(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ erro: 'Token não fornecido' });
+  try {
+    req.cliente = jwtCliente.verify(header.replace('Bearer ', ''), JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ erro: 'Token inválido' });
+  }
+}
+
+app.get('/api/cliente/linha/:cpf', authCliente, async (req, res) => {
+  try {
+    const details = await boraGet(`/api/Subscription/${req.params.cpf}/details`);
+    res.json({ linha: details });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.get('/api/cliente/consumo/:msisdn', authCliente, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscription/${req.params.msisdn}/consumption`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.get('/api/cliente/planos-recarga/:msisdn', authCliente, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Plan/Recharge', { msisdn: req.params.msisdn });
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
+  try {
+    const { msisdn, plano_id, plano_nome, pagamento } = req.body;
+
+    // Busca subscriber para pegar clientId
+    const subDetails = await boraGet(`/api/Subscription/${msisdn}/details`);
+    const clientId = subDetails?.boraIntegration?.customerId || subDetails?.boraData?.customerId || null;
+
+    // Cria carrinho de recarga
+    const cart = await boraPost('/api/Cart/recharge', { msisdn, planId: plano_id, clientId });
+    const cartId = cart.cartId || cart.id;
+    if (!cartId) throw new Error('cartId não retornado pela Bora');
+
+    let pagamentoResp;
+    if (pagamento === 'pix') {
+      pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/pix`, {});
+    } else if (pagamento === 'billet') {
+      pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/billet`, {});
+    } else {
+      throw new Error('Forma de pagamento inválida');
+    }
+
+    const pixData = pagamentoResp?.pix || null;
+    res.json({
+      ok: true,
+      cartId,
+      pix: pixData ? { code: pixData.code, qrCodeUrl: pixData.qrCodeUrl } : null,
+      billet: pagamentoResp?.billet ? { url: pagamentoResp.billet.url, barcode: pagamentoResp.billet.digitableLine || pagamentoResp.billet.barCode } : null
+    });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
 // ─── CRON — Polling de recargas via /details ─────────────────────────────────
 async function checarRecargas() {
   console.log(`[CRON] Iniciando polling — ${new Date().toISOString()}`);
