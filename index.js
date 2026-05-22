@@ -380,6 +380,69 @@ app.get('/api/bora/linha/:identificador', authMiddleware, async (req, res) => {
   }
 });
 
+
+// ─── Histórico de consumo (calculadora) ──────────────────────────────────────
+app.get('/api/bora/historic/:msisdn', authMiddleware, async (req, res) => {
+  try {
+    const { inicio, fim } = req.query;
+    const data = await boraGet(`/api/Subscription/${req.params.msisdn}/historic`, {
+      Data: true, Sms: false, Voice: false,
+      DateInitials: inicio,
+      DateFinals: fim
+    });
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+// ─── Registrar comissões retroativas ─────────────────────────────────────────
+app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) => {
+  try {
+    const { msisdn, vendedor_id, plano_id, plano_nome, recargas } = req.body;
+
+    // Busca ou cria linha
+    let { rows: linhaRows } = await pool.query(
+      'SELECT id FROM linhas WHERE msisdn=$1', [msisdn]
+    );
+
+    let linhaId;
+    if (!linhaRows.length) {
+      const ins = await pool.query(
+        `INSERT INTO linhas (iccid, msisdn, vendedor_id, plano_id, plano_nome, status)
+         VALUES ($1,$2,$3,$4,$5,'ativa') RETURNING id`,
+        [`retroativo-${msisdn}`, msisdn, vendedor_id, plano_id, plano_nome]
+      );
+      linhaId = ins.rows[0].id;
+    } else {
+      linhaId = linhaRows[0].id;
+      await pool.query(
+        'UPDATE linhas SET vendedor_id=$1, plano_id=$2, plano_nome=$3 WHERE id=$4',
+        [vendedor_id, plano_id, plano_nome, linhaId]
+      );
+    }
+
+    let inseridas = 0;
+    for (const r of recargas) {
+      const { rows: existe } = await pool.query(
+        'SELECT id FROM transacoes WHERE linha_id=$1 AND tipo=$2 AND periodo_referencia=$3',
+        [linhaId, 'recarga', r.periodo]
+      );
+      if (existe.length) continue;
+      await pool.query(
+        `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
+         VALUES ($1,$2,'recarga',$3,$4,$5,$6,'retroativo')`,
+        [linhaId, vendedor_id, plano_id, plano_nome, r.comissao, r.periodo]
+      );
+      inseridas++;
+    }
+
+    res.json({ ok: true, inseridas });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 // ─── CRON — Polling de recargas ───────────────────────────────────────────────
 async function checarRecargas() {
   console.log(`[CRON] Iniciando polling de recargas — ${new Date().toISOString()}`);

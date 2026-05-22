@@ -762,6 +762,67 @@ select option { background: var(--bg3); }
       </div>
     </div>
 
+
+    <!-- ── CALCULADORA DE COMISSÃO ──────────────── -->
+    <div class="page" id="page-calculadora">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Calculadora de Comissão</div>
+          <div class="page-sub">Calcula comissão retroativa por número</div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-title">Consultar Número</div>
+        <div class="form-row triple">
+          <div class="field">
+            <label>MSISDN (Número)</label>
+            <input type="text" id="calc-msisdn" placeholder="Ex: 5581999990000">
+          </div>
+          <div class="field">
+            <label>Data Início</label>
+            <input type="date" id="calc-inicio">
+          </div>
+          <div class="field">
+            <label>Data Fim</label>
+            <input type="date" id="calc-fim">
+          </div>
+        </div>
+        <div class="form-row" style="margin-bottom:16px">
+          <div class="field">
+            <label>Vendedor (opcional)</label>
+            <select id="calc-vendedor">
+              <option value="">Selecione o vendedor...</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Plano (para cálculo de comissão)</label>
+            <select id="calc-plano">
+              <option value="">Selecione o plano...</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:12px">
+          <button class="btn btn-primary" onclick="calcularComissao('periodo')">Calcular Período</button>
+          <button class="btn btn-secondary" onclick="calcularComissao('tudo')">Desde o Início (6 meses)</button>
+        </div>
+      </div>
+
+      <div id="calc-resultado" style="display:none">
+        <div class="stats-grid" id="calc-stats"></div>
+        <div class="table-card">
+          <div class="table-header">
+            <div class="table-title">Histórico de Recargas Detectadas</div>
+            <button class="btn btn-secondary btn-sm" onclick="salvarComissoesCalculadas()">↓ Registrar no Sistema</button>
+          </div>
+          <table>
+            <thead><tr><th>Período</th><th>Dados Usados</th><th>Tipo</th><th>Comissão</th></tr></thead>
+            <tbody id="calc-tabela"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /main-content -->
 </div><!-- /app-screen -->
 
@@ -831,7 +892,7 @@ async function api(method, endpoint, body) {
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(endpoint, opts);
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.erro || `Erro ${r.status}`);
+  if (!r.ok) { const msg = typeof data.erro === 'string' ? data.erro : (data.erro?.detail || data.erro?.title || JSON.stringify(data.erro) || `Erro ${r.status}`); throw new Error(msg); }
   return data;
 }
 
@@ -905,10 +966,12 @@ function construirNav() {
     { page: 'planos', icon: '◇', label: 'Planos & Comissões' },
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
+    { page: 'calculadora', icon: '◎', label: 'Calculadora' },
   ] : [
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
+    { page: 'calculadora', icon: '◎', label: 'Calculadora' },
   ];
   nav.innerHTML = items.map(i => i.section
     ? `<div class="nav-section">${i.section}</div>`
@@ -922,6 +985,7 @@ function navegarPara(page) {
   document.getElementById(`page-${page}`)?.classList.add('active');
   document.getElementById(`nav-${page}`)?.classList.add('active');
   if (page === 'ativar') resetAtivacao();
+  if (page === 'calculadora') initCalculadora();
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -1336,6 +1400,132 @@ async function forcaPolling() {
     toast('Polling de recargas iniciado em background','info');
   } catch(e) { toast(e.message,'error'); }
 }
+
+
+// ── CALCULADORA DE COMISSÃO ───────────────────────────────────────────────────
+let calcRecargas = [];
+let calcPlanoSelecionado = null;
+let calcVendedorSelecionado = null;
+
+async function initCalculadora() {
+  // Carrega vendedores no select
+  const selV = document.getElementById('calc-vendedor');
+  const selP = document.getElementById('calc-plano');
+  try {
+    if (state.user.role === 'admin') {
+      const vendedores = await api('GET', '/api/vendedores');
+      selV.innerHTML = '<option value="">Selecione o vendedor...</option>' +
+        vendedores.map(v => `<option value="${v.id}">${v.nome}</option>`).join('');
+    } else {
+      selV.innerHTML = `<option value="${state.user.id}">${state.user.nome}</option>`;
+    }
+    const planos = await api('GET', '/api/planos-comissao');
+    selP.innerHTML = '<option value="">Selecione o plano...</option>' +
+      planos.map(p => `<option value="${p.plano_id}" data-ativ="${p.comissao_ativacao}" data-rec="${p.comissao_recarga}">${p.plano_nome} — R$ ${parseFloat(p.plano_valor).toFixed(2)}</option>`).join('');
+  } catch(e) { toast('Erro ao carregar dados: '+e.message,'error'); }
+}
+
+async function calcularComissao(modo) {
+  const msisdn = document.getElementById('calc-msisdn').value.trim();
+  if (!msisdn) { toast('Informe o número','error'); return; }
+
+  const selP = document.getElementById('calc-plano');
+  const planoOpt = selP.options[selP.selectedIndex];
+  if (!planoOpt || !selP.value) { toast('Selecione o plano','error'); return; }
+
+  const comissaoRec = parseFloat(planoOpt.dataset.rec || 0);
+  const comissaoAtiv = parseFloat(planoOpt.dataset.ativ || 0);
+  calcPlanoSelecionado = { id: selP.value, nome: planoOpt.text, comissaoRec, comissaoAtiv };
+  calcVendedorSelecionado = document.getElementById('calc-vendedor').value;
+
+  let dataInicio, dataFim;
+  if (modo === 'tudo') {
+    const hoje = new Date();
+    dataFim = hoje.toISOString().split('T')[0];
+    const seisAtras = new Date(hoje);
+    seisAtras.setMonth(seisAtras.getMonth() - 6);
+    dataInicio = seisAtras.toISOString().split('T')[0];
+  } else {
+    dataInicio = document.getElementById('calc-inicio').value;
+    dataFim = document.getElementById('calc-fim').value;
+    if (!dataInicio || !dataFim) { toast('Informe o período','error'); return; }
+  }
+
+  document.getElementById('calc-resultado').style.display = 'none';
+  document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="4" class="loading">Consultando Bora...</td></tr>';
+  document.getElementById('calc-resultado').style.display = 'block';
+
+  try {
+    const data = await api('GET',
+      `/api/bora/linha/${msisdn}`
+    );
+    const planoAtual = data?.planData?.name || data?.plan?.name || '—';
+
+    const historic = await api('GET',
+      `/api/bora/historic/${msisdn}?inicio=${dataInicio}&fim=${dataFim}`
+    );
+
+    const detalhes = historic?.data?.details || [];
+    calcRecargas = [];
+
+    detalhes.forEach(d => {
+      if (!d.from) return;
+      const periodo = d.from.split('T')[0];
+      const usado = d.used || 0;
+      if (usado > 0) {
+        calcRecargas.push({ periodo, usado, comissao: comissaoRec });
+      }
+    });
+
+    // Stats
+    const totalRecargas = calcRecargas.length;
+    const totalComissaoRec = totalRecargas * comissaoRec;
+    const totalComissao = comissaoAtiv + totalComissaoRec;
+
+    document.getElementById('calc-stats').innerHTML = `
+      <div class="stat-card"><div class="stat-label">Número</div><div class="stat-value" style="font-size:18px">${msisdn}</div></div>
+      <div class="stat-card blue"><div class="stat-label">Recargas Detectadas</div><div class="stat-value">${totalRecargas}</div></div>
+      <div class="stat-card yellow"><div class="stat-label">Comissão Ativação</div><div class="stat-value" style="font-size:20px">R$${comissaoAtiv.toFixed(2)}</div></div>
+      <div class="stat-card"><div class="stat-label">Comissão Recargas</div><div class="stat-value" style="font-size:20px">R$${totalComissaoRec.toFixed(2)}</div></div>
+      <div class="stat-card" style="border-color:var(--accent)"><div class="stat-label">Total Comissão</div><div class="stat-value">R$${totalComissao.toFixed(2)}</div></div>
+    `;
+
+    if (!calcRecargas.length) {
+      document.getElementById('calc-tabela').innerHTML =
+        '<tr><td colspan="4" class="empty-state"><div class="ico">📋</div><p>Nenhuma recarga detectada no período</p></td></tr>';
+      return;
+    }
+
+    document.getElementById('calc-tabela').innerHTML = calcRecargas.map(r => `<tr>
+      <td class="mono">${r.periodo}</td>
+      <td>${(r.usado/1024).toFixed(1)} MB</td>
+      <td><span class="badge badge-blue">recarga</span></td>
+      <td class="currency">R$ ${r.comissao.toFixed(2)}</td>
+    </tr>`).join('');
+
+  } catch(e) {
+    document.getElementById('calc-tabela').innerHTML =
+      `<tr><td colspan="4" style="color:var(--red);padding:20px">${e.message}</td></tr>`;
+  }
+}
+
+async function salvarComissoesCalculadas() {
+  if (!calcRecargas.length) { toast('Nada para registrar','error'); return; }
+  if (!calcVendedorSelecionado) { toast('Selecione o vendedor','error'); return; }
+  const msisdn = document.getElementById('calc-msisdn').value.trim();
+
+  try {
+    await api('POST', '/api/comissao/registrar-retroativo', {
+      msisdn,
+      vendedor_id: calcVendedorSelecionado,
+      plano_id: calcPlanoSelecionado.id,
+      plano_nome: calcPlanoSelecionado.nome,
+      recargas: calcRecargas
+    });
+    toast(`${calcRecargas.length} recargas registradas com sucesso`);
+  } catch(e) { toast(e.message,'error'); }
+}
+
 
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 function fecharModal(id) { document.getElementById(id).classList.remove('open'); }
