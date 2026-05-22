@@ -1626,16 +1626,15 @@ async function calcularComissao(modo) {
         continue;
       }
       // Cabeçalho da linha
-      const msisdnEsc = linha.msisdn.replace(/'/g, "\'");
-      const nomeEsc = (linha.plano_atual_nome||'').replace(/'/g, "\'");
+      const idx = linhasOrdenadas.indexOf(linha);
       rows += '<tr style="background:var(--bg3)">' +
         '<td colspan="5"><strong class="mono">' + linha.msisdn + '</strong> &nbsp;|&nbsp; ' +
         linha.plano_atual_nome + ' &nbsp;|&nbsp; ' +
-        (linha.data_ativacao ? new Date(linha.data_ativacao).toLocaleDateString("pt-BR") : "—") + ' &nbsp;|&nbsp; ' +
-        '<span class="badge badge-green">' + (linha.status || "—") + '</span>' +
+        (linha.data_ativacao ? new Date(linha.data_ativacao).toLocaleDateString('pt-BR') : '—') + ' &nbsp;|&nbsp; ' +
+        '<span class="badge badge-green">' + (linha.status || '—') + '</span>' +
         ' &nbsp;|&nbsp; <strong class="currency">Total: R$ ' + linha.total_comissao.toFixed(2) + '</strong>' +
         '</td>' +
-        '<td><button class="btn btn-primary btn-sm" onclick="abrirModalAtribuir(' + JSON.stringify(linha) + ')">+ Atribuir</button></td>' +
+        '<td><button class="btn btn-primary btn-sm" onclick="abrirModalAtribuirIdx(' + idx + ')">+ Atribuir</button></td>' +
         '</tr>';
       // Registros da linha
       for (const r of linha.resultado) {
@@ -1824,6 +1823,11 @@ async function exportarRelatorioPDF() {
 
 // ── ATRIBUIR LINHA ────────────────────────────────────────────────────────────
 let _linhaParaAtribuir = null;
+
+function abrirModalAtribuirIdx(idx) {
+  const linhasOrdenadas = [...calcResultado.filter(l => !l.erro), ...calcResultado.filter(l => l.erro)];
+  abrirModalAtribuir(linhasOrdenadas[idx]);
+}
 
 async function abrirModalAtribuir(linha) {
   _linhaParaAtribuir = linha;
