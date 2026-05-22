@@ -442,48 +442,54 @@ app.get('/api/bora/historic/:msisdn', authMiddleware, async (req, res) => {
 // ─── Calculadora: simula recargas por período com /details ────────────────────
 app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
   try {
-    const { msisdn, plano_id, meses } = req.body;
-    // meses = array de 'AAAA-MM' a verificar
+    const { msisdn, plano_id } = req.body;
 
-    // Busca planos de comissão
+    // Normaliza MSISDN — adiciona DDI 55 se necessário
+    const msisdnNorm = msisdn.startsWith('55') ? msisdn : '55' + msisdn;
+
+    // Busca detalhes reais da linha na Bora
+    const details = await boraGet(`/api/Subscription/${msisdnNorm}/details`);
+
+    // Extrai campos reais do /details
+    const planoAtualId   = plano_id || details?.plan?.id || null;
+    const planoAtualNome = details?.plan?.name || details?.plan?.description || 'Plano atual';
+    const dataAtivacao   = details?.activationDate || null;
+    const statusLinha    = details?.status || '—';
+    const recorrencia    = details?.recurrence?.paymentType || details?.lastPaymentType || '—';
+
+    if (!dataAtivacao) throw new Error('Data de ativação não encontrada na Bora');
+
+    // Busca comissões configuradas
     const { rows: planosComissao } = await pool.query('SELECT * FROM planos_comissao');
     const mapaComissao = {};
     planosComissao.forEach(p => mapaComissao[p.plano_id] = p);
+    const comissaoPlano = mapaComissao[planoAtualId];
 
-    // Busca detalhes atuais para saber o plano vigente
-    const details = await boraGet(`/api/Subscription/${msisdn}/details`);
-    const planoAtualId = plano_id || details?.planData?.id || details?.plan?.id || null;
-    const planoAtualNome = details?.planData?.name || details?.plan?.name || 'Plano atual';
-    const dataAtivacao = details?.activationDate || details?.createdAt || null;
-
-    // Monta resultado por mês
+    // Gera meses desde ativação até hoje
+    const hoje = new Date();
+    const inicio = new Date(dataAtivacao);
     const resultado = [];
-    for (const mes of meses) {
-      const [ano, m] = mes.split('-').map(Number);
-      const dataAtiv = dataAtivacao ? new Date(dataAtivacao) : null;
-      const mesAtiv = dataAtiv ? `${dataAtiv.getFullYear()}-${String(dataAtiv.getMonth()+1).padStart(2,'0')}` : null;
+    const cur = new Date(Date.UTC(inicio.getFullYear(), inicio.getMonth(), 1));
 
-      // Mês de ativação = ativação, demais = recarga
-      const tipo = mesAtiv === mes ? 'ativacao' : 'recarga';
-      const comissaoPlano = mapaComissao[planoAtualId];
+    while (cur <= hoje) {
+      const mes = `${cur.getUTCFullYear()}-${String(cur.getUTCMonth()+1).padStart(2,'0')}`;
+      const mesAtiv = `${inicio.getFullYear()}-${String(inicio.getMonth()+1).padStart(2,'0')}`;
+      const tipo = mes === mesAtiv ? 'ativacao' : 'recarga';
       const comissao = tipo === 'ativacao'
         ? parseFloat(comissaoPlano?.comissao_ativacao || 0)
         : parseFloat(comissaoPlano?.comissao_recarga || 0);
 
-      resultado.push({
-        mes,
-        tipo,
-        plano_id: planoAtualId,
-        plano_nome: planoAtualNome,
-        comissao
-      });
+      resultado.push({ mes, tipo, plano_id: planoAtualId, plano_nome: planoAtualNome, comissao });
+      cur.setUTCMonth(cur.getUTCMonth() + 1);
     }
 
     res.json({
-      msisdn,
+      msisdn: msisdnNorm,
       plano_atual_id: planoAtualId,
       plano_atual_nome: planoAtualNome,
       data_ativacao: dataAtivacao,
+      status: statusLinha,
+      recorrencia,
       resultado
     });
   } catch (e) {

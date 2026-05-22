@@ -1564,10 +1564,10 @@ async function calcularComissao(modo) {
   document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="5" class="loading">Consultando linha na Bora...</td></tr>';
 
   try {
+    const msisdnNorm = msisdn.startsWith('55') ? msisdn : '55' + msisdn;
     const data = await api('POST', '/api/calculadora/simular', {
-      msisdn,
-      plano_id: planoOverride,
-      meses
+      msisdn: msisdnNorm,
+      plano_id: planoOverride
     });
 
     calcResultado = data.resultado || [];
@@ -1575,11 +1575,13 @@ async function calcularComissao(modo) {
     const totalRecargas = calcResultado.filter(r => r.tipo === 'recarga').length;
     const comissaoAtiv = calcResultado.find(r => r.tipo === 'ativacao')?.comissao || 0;
 
+    const dataAtivFmt = data.data_ativacao ? new Date(data.data_ativacao).toLocaleDateString('pt-BR') : '—';
     document.getElementById('calc-stats').innerHTML =
-      '<div class="stat-card"><div class="stat-label">Número</div><div class="stat-value" style="font-size:16px">' + msisdn + '</div></div>' +
-      '<div class="stat-card blue"><div class="stat-label">Plano Atual</div><div class="stat-value" style="font-size:14px">' + (data.plano_atual_nome || '—') + '</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Número</div><div class="stat-value" style="font-size:16px">' + data.msisdn + '</div></div>' +
+      '<div class="stat-card blue"><div class="stat-label">Plano Atual</div><div class="stat-value" style="font-size:13px">' + (data.plano_atual_nome || '—') + '</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Ativação</div><div class="stat-value" style="font-size:16px">' + dataAtivFmt + '</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Status</div><div class="stat-value" style="font-size:14px">' + (data.status || '—') + '</div></div>' +
       '<div class="stat-card yellow"><div class="stat-label">Recargas</div><div class="stat-value">' + totalRecargas + '</div></div>' +
-      '<div class="stat-card"><div class="stat-label">Comissão Ativação</div><div class="stat-value" style="font-size:20px">R$' + comissaoAtiv.toFixed(2) + '</div></div>' +
       '<div class="stat-card" style="border-color:var(--accent)"><div class="stat-label">Total Comissão</div><div class="stat-value">R$' + totalComissao.toFixed(2) + '</div></div>';
 
     if (!calcResultado.length) {
