@@ -223,6 +223,7 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
     );
     res.json({ transacoes, resumo, linhas });
   } catch (e) {
+    console.error('[RELATORIO VENDEDOR]', e.message, e.stack);
     res.status(500).json({ erro: e.message });
   }
 });
