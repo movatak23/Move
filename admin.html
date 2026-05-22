@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Move — Gestão de Vendedores</title>
+<title>Move Vendas — Gestão de Vendedores</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
@@ -508,7 +508,7 @@ select option { background: var(--bg3); }
 <div id="login-screen">
   <div class="login-box">
     <div class="login-logo">
-      <div class="brand">BORA VENDAS</div>
+      <div class="brand">MOVE VENDAS</div>
       <div class="sub">Gestão de Vendedores</div>
     </div>
     <div class="field" style="margin-bottom:14px">
@@ -1779,7 +1779,7 @@ async function exportarRelatorioPDF() {
   doc.setTextColor(0, 229, 160);
   doc.setFontSize(20);
   doc.setFont('helvetica', 'bold');
-  doc.text('BORA VENDAS', 14, 18);
+  doc.text('MOVE VENDAS', 14, 18);
 
   doc.setFontSize(9);
   doc.setTextColor(120, 133, 160);
@@ -1888,7 +1888,7 @@ async function exportarRelatorioPDF() {
     doc.setPage(i);
     doc.setFontSize(7);
     doc.setTextColor(69, 79, 104);
-    doc.text('Bora Vendas — Relatório gerado em ' + hoje, 14, 292);
+    doc.text('Move Vendas — Relatório gerado em ' + hoje, 14, 292);
     doc.text('Página ' + i + ' de ' + pageCount, 196, 292, { align: 'right' });
   }
 
@@ -2040,6 +2040,13 @@ async function verificarAlertaEsim() {
   if (t && u) {
     state.token = t;
     state.user = JSON.parse(u);
+    // Garante que id está presente — extrai do JWT se necessário
+    if (!state.user.id && t) {
+      try {
+        const payload = JSON.parse(atob(t.split('.')[1]));
+        state.user.id = payload.id;
+      } catch {}
+    }
     iniciarApp();
   }
 })();
