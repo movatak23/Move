@@ -106,7 +106,7 @@ app.post('/api/login', async (req, res) => {
     const ok = await bcrypt.compare(senha, v.senha_hash);
     if (!ok) return res.status(401).json({ erro: 'Credenciais inválidas' });
     const token = jwt.sign({ id: v.id, nome: v.nome, email: v.email, role: v.role }, JWT_SECRET, { expiresIn: '8h' });
-    res.json({ token, nome: v.nome, role: v.role });
+    res.json({ token, id: v.id, nome: v.nome, role: v.role });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

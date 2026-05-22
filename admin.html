@@ -3,27 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Bora Vendas — Gestão de Vendedores</title>
+<title>Move — Gestão de Vendedores</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
 :root {
-  --bg: #0a0c10;
-  --bg2: #111318;
-  --bg3: #181c24;
-  --bg4: #1e2330;
-  --border: #252b3a;
-  --border2: #2e3650;
-  --text: #e8ecf5;
-  --text2: #7a85a0;
-  --text3: #454f68;
-  --accent: #00e5a0;
-  --accent2: #00b87d;
-  --accent-dim: rgba(0,229,160,0.08);
-  --accent-dim2: rgba(0,229,160,0.15);
-  --blue: #4d7cfe;
-  --blue-dim: rgba(77,124,254,0.1);
+  --bg: #000000;
+  --bg2: #0a0a0a;
+  --bg3: #111111;
+  --bg4: #181818;
+  --border: #1e1e1e;
+  --border2: #2a2a2a;
+  --text: #f0f0f0;
+  --text2: #888888;
+  --text3: #444444;
+  --accent: #00bfff;
+  --accent2: #0099cc;
+  --accent-dim: rgba(0,191,255,0.08);
+  --accent-dim2: rgba(0,191,255,0.15);
+  --blue: #00bfff;
+  --blue-dim: rgba(0,191,255,0.1);
   --red: #e05a5a;
   --red-dim: rgba(224,90,90,0.1);
   --yellow: #f5b041;
@@ -531,8 +531,10 @@ select option { background: var(--bg3); }
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="sidebar-logo">
-      <div class="brand">BORA VENDAS</div>
-      <div class="version">v1.0</div>
+      <svg viewBox="0 0 200 55" xmlns="http://www.w3.org/2000/svg" style="width:100px;display:block">
+        <text x="4" y="46" font-family="Arial Black, sans-serif" font-size="50" font-weight="900" fill="#00bfff" letter-spacing="-2">move</text>
+      </svg>
+      <div class="version" style="margin-top:2px">Gestão de Vendedores</div>
     </div>
     <div class="sidebar-user">
       <div class="nome" id="sb-nome">Carregando...</div>
@@ -1006,7 +1008,7 @@ async function doLogin() {
   try {
     const data = await api('POST', '/api/login', { email, senha });
     state.token = data.token;
-    state.user = { nome: data.nome, role: data.role };
+    state.user = { id: data.id, nome: data.nome, role: data.role };
     localStorage.setItem('bv_token', data.token);
     localStorage.setItem('bv_user', JSON.stringify(state.user));
     iniciarApp();
