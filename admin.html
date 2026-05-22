@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bora Vendas — Gestão de Vendedores</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0c10;
+  --bg2: #111318;
+  --bg3: #181c24;
+  --bg4: #1e2330;
+  --border: #252b3a;
+  --border2: #2e3650;
+  --text: #e8ecf5;
+  --text2: #7a85a0;
+  --text3: #454f68;
+  --accent: #00e5a0;
+  --accent2: #00b87d;
+  --accent-dim: rgba(0,229,160,0.08);
+  --accent-dim2: rgba(0,229,160,0.15);
+  --blue: #4d7cfe;
+  --blue-dim: rgba(77,124,254,0.1);
+  --red: #e05a5a;
+  --red-dim: rgba(224,90,90,0.1);
+  --yellow: #f5b041;
+  --yellow-dim: rgba(245,176,65,0.1);
+  --r: 10px;
+  --mono: 'Space Mono', monospace;
+  --sans: 'DM Sans', sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+  font-size: 14px;
+}
+
+/* ── LOGIN ─────────────────────────────────────── */
+#login-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 30% 40%, rgba(0,229,160,0.06) 0%, transparent 60%),
+              radial-gradient(ellipse at 70% 80%, rgba(77,124,254,0.05) 0%, transparent 50%),
+              var(--bg);
+}
+
+.login-box {
+  width: 380px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 40px;
+  animation: fadeUp 0.4s ease;
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.login-logo {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.login-logo .brand {
+  font-family: var(--mono);
+  font-size: 22px;
+  color: var(--accent);
+  letter-spacing: 2px;
+}
+
+.login-logo .sub {
+  color: var(--text3);
+  font-size: 12px;
+  margin-top: 4px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* ── APP SHELL ─────────────────────────────────── */
+#app-screen { display: none; min-height: 100vh; }
+
+.sidebar {
+  position: fixed;
+  left: 0; top: 0; bottom: 0;
+  width: 220px;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+}
+
+.sidebar-logo {
+  padding: 24px 20px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-logo .brand {
+  font-family: var(--mono);
+  font-size: 16px;
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+
+.sidebar-logo .version {
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 2px;
+}
+
+.sidebar-user {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+}
+
+.sidebar-user .nome { font-weight: 500; font-size: 13px; }
+.sidebar-user .role {
+  font-size: 11px;
+  color: var(--accent);
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 12px 0;
+  overflow-y: auto;
+}
+
+.nav-section {
+  padding: 8px 20px 4px;
+  font-size: 10px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-family: var(--mono);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  cursor: pointer;
+  color: var(--text2);
+  font-size: 13px;
+  transition: all 0.15s;
+  border-left: 2px solid transparent;
+}
+
+.nav-item:hover { color: var(--text); background: var(--bg3); }
+.nav-item.active { color: var(--accent); background: var(--accent-dim); border-left-color: var(--accent); }
+.nav-item .icon { font-size: 16px; width: 18px; text-align: center; }
+
+.sidebar-bottom {
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+.btn-logout {
+  width: 100%;
+  padding: 9px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--sans);
+  transition: all 0.15s;
+}
+.btn-logout:hover { color: var(--red); border-color: var(--red); }
+
+.main-content {
+  margin-left: 220px;
+  min-height: 100vh;
+  padding: 32px;
+}
+
+/* ── PAGES ─────────────────────────────────────── */
+.page { display: none; animation: fadeUp 0.3s ease; }
+.page.active { display: block; }
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 28px;
+}
+
+.page-title { font-size: 22px; font-weight: 600; }
+.page-sub { color: var(--text2); font-size: 13px; margin-top: 3px; }
+
+/* ── CARDS STATS ───────────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.stat-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0.5;
+}
+
+.stat-card.blue::before { background: var(--blue); }
+.stat-card.yellow::before { background: var(--yellow); }
+.stat-card.red::before { background: var(--red); }
+
+.stat-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; font-family: var(--mono); }
+.stat-value { font-size: 28px; font-weight: 600; font-family: var(--mono); margin-top: 8px; color: var(--accent); }
+.stat-card.blue .stat-value { color: var(--blue); }
+.stat-card.yellow .stat-value { color: var(--yellow); }
+
+/* ── TABLES ────────────────────────────────────── */
+.table-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+  margin-bottom: 24px;
+}
+
+.table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.table-title { font-size: 14px; font-weight: 500; }
+
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  padding: 12px 20px;
+  text-align: left;
+  font-size: 11px;
+  color: var(--text3);
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg3);
+}
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.1s;
+}
+tbody tr:last-child { border-bottom: none; }
+tbody tr:hover { background: var(--bg3); }
+tbody td { padding: 13px 20px; font-size: 13px; }
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+
+.badge-green { background: var(--accent-dim2); color: var(--accent); }
+.badge-blue { background: var(--blue-dim); color: var(--blue); }
+.badge-red { background: var(--red-dim); color: var(--red); }
+.badge-yellow { background: var(--yellow-dim); color: var(--yellow); }
+
+/* ── FORMS & INPUTS ────────────────────────────── */
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+.form-row.single { grid-template-columns: 1fr; }
+.form-row.triple { grid-template-columns: 1fr 1fr 1fr; }
+
+.field label {
+  display: block;
+  font-size: 11px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-family: var(--mono);
+  margin-bottom: 6px;
+}
+
+input, select, textarea {
+  width: 100%;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 10px 14px;
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  transition: border-color 0.15s;
+  outline: none;
+}
+input:focus, select:focus { border-color: var(--accent); }
+select option { background: var(--bg3); }
+
+/* ── BUTTONS ───────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border-radius: var(--r);
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--sans);
+  transition: all 0.15s;
+}
+
+.btn-primary { background: var(--accent); color: #000; }
+.btn-primary:hover { background: var(--accent2); }
+.btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { border-color: var(--border2); }
+.btn-blue { background: var(--blue); color: #fff; }
+.btn-blue:hover { background: #3a6ae8; }
+.btn-sm { padding: 6px 14px; font-size: 12px; }
+.btn-danger { background: var(--red-dim); color: var(--red); border: 1px solid var(--red); }
+
+/* ── MODAL ─────────────────────────────────────── */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+.modal-overlay.open { display: flex; }
+
+.modal {
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 16px;
+  padding: 32px;
+  width: 540px;
+  max-height: 90vh;
+  overflow-y: auto;
+  animation: fadeUp 0.25s ease;
+}
+
+.modal-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-footer {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* ── ATIVAÇÃO FLOW ─────────────────────────────── */
+.flow-steps {
+  display: flex;
+  gap: 0;
+  margin-bottom: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.flow-step {
+  flex: 1;
+  padding: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text3);
+  border-right: 1px solid var(--border);
+  background: var(--bg3);
+}
+.flow-step:last-child { border-right: none; }
+.flow-step.active { color: var(--accent); background: var(--accent-dim); }
+.flow-step.done { color: var(--text2); background: var(--bg2); }
+.flow-step .step-num { font-family: var(--mono); font-size: 10px; color: var(--text3); display: block; margin-bottom: 3px; }
+
+.info-card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.info-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+.info-row:last-child { border-bottom: none; }
+.info-row .k { color: var(--text3); font-size: 12px; }
+.info-row .v { font-size: 13px; font-weight: 500; }
+
+/* ── FILTROS ───────────────────────────────────── */
+.filters {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+/* ── NOTIFICAÇÕES ──────────────────────────────── */
+#toast {
+  position: fixed;
+  bottom: 24px; right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toast-item {
+  padding: 14px 20px;
+  border-radius: var(--r);
+  font-size: 13px;
+  font-weight: 500;
+  animation: slideIn 0.3s ease;
+  max-width: 360px;
+  border-left: 3px solid;
+}
+.toast-item.success { background: var(--bg2); border-color: var(--accent); color: var(--accent); border: 1px solid var(--border); border-left: 3px solid var(--accent); }
+.toast-item.error { background: var(--bg2); border-left: 3px solid var(--red); color: var(--red); border: 1px solid var(--border); }
+.toast-item.info { background: var(--bg2); border-left: 3px solid var(--blue); color: var(--blue); border: 1px solid var(--border); }
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.empty-state {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text3);
+}
+.empty-state .ico { font-size: 36px; margin-bottom: 12px; }
+.empty-state p { font-size: 13px; }
+
+.loading { text-align: center; padding: 32px; color: var(--text3); font-family: var(--mono); font-size: 12px; }
+
+.currency { font-family: var(--mono); color: var(--accent); }
+.text-muted { color: var(--text2); }
+.mono { font-family: var(--mono); font-size: 12px; }
+
+.plano-card {
+  background: var(--bg3);
+  border: 2px solid var(--border);
+  border-radius: var(--r);
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.plano-card:hover, .plano-card.selected { border-color: var(--accent); background: var(--accent-dim); }
+.plano-card .pnome { font-weight: 600; font-size: 14px; }
+.plano-card .pval { font-family: var(--mono); color: var(--accent); font-size: 13px; margin-top: 4px; }
+.plano-card .pcomissao { font-size: 11px; color: var(--text3); margin-top: 3px; }
+
+.planos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+
+.section-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 24px;
+  margin-bottom: 20px;
+}
+.section-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+
+<!-- ── LOGIN ─────────────────────────────────── -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo">
+      <div class="brand">BORA VENDAS</div>
+      <div class="sub">Gestão de Vendedores</div>
+    </div>
+    <div class="field" style="margin-bottom:14px">
+      <label>E-mail</label>
+      <input type="email" id="login-email" placeholder="seu@email.com">
+    </div>
+    <div class="field" style="margin-bottom:24px">
+      <label>Senha</label>
+      <input type="password" id="login-senha" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+    </div>
+    <button class="btn btn-primary" style="width:100%;justify-content:center" onclick="doLogin()">
+      Entrar
+    </button>
+    <div id="login-erro" style="color:var(--red);font-size:12px;text-align:center;margin-top:12px;display:none"></div>
+  </div>
+</div>
+
+<!-- ── APP ───────────────────────────────────── -->
+<div id="app-screen">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-logo">
+      <div class="brand">BORA VENDAS</div>
+      <div class="version">v1.0</div>
+    </div>
+    <div class="sidebar-user">
+      <div class="nome" id="sb-nome">Carregando...</div>
+      <div class="role" id="sb-role">—</div>
+    </div>
+    <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    <div class="sidebar-bottom">
+      <button class="btn-logout" onclick="doLogout()">↩ Sair</button>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main-content" id="main-content">
+
+    <!-- ── DASHBOARD ADMIN ──────────────────── -->
+    <div class="page" id="page-dashboard">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Dashboard</div>
+          <div class="page-sub">Visão geral da operação</div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <input type="date" id="dash-inicio" style="width:150px">
+          <input type="date" id="dash-fim" style="width:150px">
+          <button class="btn btn-secondary" onclick="loadDashboard()">Filtrar</button>
+          <button class="btn btn-secondary btn-sm" onclick="forcaPolling()" title="Forçar checagem de recargas agora">⟳ Polling</button>
+        </div>
+      </div>
+      <div class="stats-grid" id="dash-stats">
+        <div class="stat-card"><div class="stat-label">Total Vendedores</div><div class="stat-value" id="st-vendedores">—</div></div>
+        <div class="stat-card blue"><div class="stat-label">Ativações</div><div class="stat-value" id="st-ativacoes">—</div></div>
+        <div class="stat-card yellow"><div class="stat-label">Recargas</div><div class="stat-value" id="st-recargas">—</div></div>
+        <div class="stat-card"><div class="stat-label">Comissões Pagas</div><div class="stat-value" id="st-comissoes">—</div></div>
+      </div>
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title">Ranking de Vendedores</div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Vendedor</th><th>Ativações</th><th>Recargas</th><th>Comissão Ativ.</th><th>Comissão Rec.</th><th>Total</th>
+          </tr></thead>
+          <tbody id="dash-tabela"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── VENDEDORES ───────────────────────── -->
+    <div class="page" id="page-vendedores">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Vendedores</div>
+          <div class="page-sub">Cadastro e gestão de equipe</div>
+        </div>
+        <button class="btn btn-primary" onclick="abrirModalVendedor()">+ Novo Vendedor</button>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Nome</th><th>E-mail</th><th>Telefone</th><th>Linhas</th><th>Total Comissão</th><th>Status</th><th>Ações</th></tr></thead>
+          <tbody id="tbl-vendedores"><tr><td colspan="7" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── PLANOS / COMISSÕES ────────────────── -->
+    <div class="page" id="page-planos">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Planos & Comissões</div>
+          <div class="page-sub">Configure a comissão por plano</div>
+        </div>
+        <button class="btn btn-primary" onclick="abrirModalPlano()">+ Configurar Plano</button>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Plano</th><th>Valor</th><th>Comissão Ativação</th><th>Comissão Recarga</th><th>Status</th><th>Ações</th></tr></thead>
+          <tbody id="tbl-planos"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── ATIVAR CHIP ───────────────────────── -->
+    <div class="page" id="page-ativar">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Ativar Chip</div>
+          <div class="page-sub">Ativação de nova linha</div>
+        </div>
+      </div>
+
+      <div class="flow-steps" id="flow-steps">
+        <div class="flow-step active" id="fs-1"><span class="step-num">01</span>ICCID</div>
+        <div class="flow-step" id="fs-2"><span class="step-num">02</span>CLIENTE</div>
+        <div class="flow-step" id="fs-3"><span class="step-num">03</span>PLANO</div>
+        <div class="flow-step" id="fs-4"><span class="step-num">04</span>PAGAMENTO</div>
+        <div class="flow-step" id="fs-5"><span class="step-num">05</span>CONFIRMAR</div>
+      </div>
+
+      <!-- Step 1: ICCID -->
+      <div id="step-1" class="section-card">
+        <div class="section-title">Número do Chip (ICCID)</div>
+        <div class="form-row">
+          <div class="field">
+            <label>ICCID</label>
+            <input type="text" id="iccid-input" placeholder="Ex: 89550514000000000000" maxlength="22">
+          </div>
+          <div class="field" style="display:flex;align-items:flex-end">
+            <button class="btn btn-primary" onclick="verificarIccid()">Verificar Chip</button>
+          </div>
+        </div>
+        <div id="iccid-result"></div>
+      </div>
+
+      <!-- Step 2: CLIENTE -->
+      <div id="step-2" class="section-card" style="display:none">
+        <div class="section-title">Dados do Cliente</div>
+        <div class="form-row">
+          <div class="field">
+            <label>CPF/CNPJ</label>
+            <input type="text" id="cli-doc" placeholder="000.000.000-00">
+          </div>
+          <div class="field" style="display:flex;align-items:flex-end">
+            <button class="btn btn-secondary" onclick="buscarCliente()">Buscar</button>
+          </div>
+        </div>
+        <div id="cli-result"></div>
+        <div id="cli-form" style="display:none">
+          <div class="form-row">
+            <div class="field"><label>Nome Completo</label><input type="text" id="cli-nome"></div>
+            <div class="field"><label>E-mail</label><input type="email" id="cli-email"></div>
+          </div>
+          <div class="form-row">
+            <div class="field"><label>Telefone</label><input type="text" id="cli-tel"></div>
+            <div class="field"><label>Data de Nascimento</label><input type="date" id="cli-nasc"></div>
+          </div>
+          <div class="form-row single">
+            <div class="field"><label>Endereço</label><input type="text" id="cli-end" placeholder="Rua, número, bairro"></div>
+          </div>
+          <div class="form-row triple">
+            <div class="field"><label>CEP</label><input type="text" id="cli-cep" placeholder="00000-000"></div>
+            <div class="field"><label>Cidade</label><input type="text" id="cli-cidade"></div>
+            <div class="field"><label>Estado</label><input type="text" id="cli-uf" placeholder="PE" maxlength="2"></div>
+          </div>
+          <div style="margin-top:12px;display:flex;gap:12px">
+            <button class="btn btn-primary" onclick="confirmarCliente()">Continuar →</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: PLANO -->
+      <div id="step-3" class="section-card" style="display:none">
+        <div class="section-title">Escolha o Plano</div>
+        <div class="form-row" style="margin-bottom:16px">
+          <div class="field">
+            <label>DDD</label>
+            <select id="sel-ddd"><option value="">Carregando DDDs...</option></select>
+          </div>
+        </div>
+        <div class="planos-grid" id="planos-grid"></div>
+        <button class="btn btn-primary" id="btn-plano-continuar" onclick="confirmarPlano()" style="display:none">Continuar →</button>
+      </div>
+
+      <!-- Step 4: PAGAMENTO -->
+      <div id="step-4" class="section-card" style="display:none">
+        <div class="section-title">Forma de Pagamento</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+          <div class="plano-card" id="pay-pix" onclick="selecionarPagamento('pix')">
+            <div style="font-size:24px;margin-bottom:8px">⚡</div>
+            <div class="pnome">PIX</div>
+            <div class="pcomissao">Pagamento instantâneo</div>
+          </div>
+          <div class="plano-card" id="pay-billet" onclick="selecionarPagamento('billet')">
+            <div style="font-size:24px;margin-bottom:8px">📄</div>
+            <div class="pnome">Boleto</div>
+            <div class="pcomissao">Vencimento em 3 dias</div>
+          </div>
+          <div class="plano-card" id="pay-billetcombo" onclick="selecionarPagamento('billetcombo')">
+            <div style="font-size:24px;margin-bottom:8px">🔄</div>
+            <div class="pnome">Boleto Combo</div>
+            <div class="pcomissao">Ativação + recorrência</div>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btn-pay-continuar" onclick="irParaConfirmacao()" style="display:none">Continuar →</button>
+      </div>
+
+      <!-- Step 5: CONFIRMAÇÃO -->
+      <div id="step-5" class="section-card" style="display:none">
+        <div class="section-title">Confirmar Ativação</div>
+        <div class="info-card" id="resumo-ativacao"></div>
+        <div style="display:flex;gap:12px;margin-top:16px">
+          <button class="btn btn-primary" onclick="confirmarAtivacao()">✓ Ativar Agora</button>
+          <button class="btn btn-secondary" onclick="voltarStep(3)">← Voltar</button>
+        </div>
+        <div id="ativacao-result" style="margin-top:16px"></div>
+      </div>
+    </div>
+
+    <!-- ── MEU PAINEL (vendedor) ─────────────── -->
+    <div class="page" id="page-meu-painel">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Meu Painel</div>
+          <div class="page-sub">Suas comissões e linhas ativas</div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <input type="date" id="mp-inicio" style="width:150px">
+          <input type="date" id="mp-fim" style="width:150px">
+          <button class="btn btn-secondary" onclick="loadMeuPainel()">Filtrar</button>
+        </div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-label">Ativações</div><div class="stat-value" id="mp-ativ">—</div></div>
+        <div class="stat-card blue"><div class="stat-label">Recargas Detectadas</div><div class="stat-value" id="mp-rec">—</div></div>
+        <div class="stat-card yellow"><div class="stat-label">Total Comissão</div><div class="stat-value" id="mp-com">—</div></div>
+      </div>
+      <div class="table-card">
+        <div class="table-header"><div class="table-title">Histórico de Transações</div></div>
+        <table>
+          <thead><tr><th>Data</th><th>Tipo</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Comissão</th></tr></thead>
+          <tbody id="mp-tabela"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="table-card">
+        <div class="table-header"><div class="table-title">Minhas Linhas Ativas</div></div>
+        <table>
+          <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Ativação</th><th>Última Checagem</th></tr></thead>
+          <tbody id="mp-linhas"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /main-content -->
+</div><!-- /app-screen -->
+
+<!-- ── MODAIS ──────────────────────────────────── -->
+<!-- Modal Vendedor -->
+<div class="modal-overlay" id="modal-vendedor">
+  <div class="modal">
+    <div class="modal-title" id="modal-vendedor-title">Novo Vendedor</div>
+    <div class="form-row">
+      <div class="field"><label>Nome</label><input type="text" id="mv-nome"></div>
+      <div class="field"><label>Telefone</label><input type="text" id="mv-tel"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>E-mail</label><input type="email" id="mv-email"></div>
+      <div class="field"><label>Senha</label><input type="password" id="mv-senha" placeholder="Deixe em branco para não alterar"></div>
+    </div>
+    <div class="field">
+      <label>Status</label>
+      <select id="mv-ativo"><option value="true">Ativo</option><option value="false">Inativo</option></select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-vendedor')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarVendedor()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Plano -->
+<div class="modal-overlay" id="modal-plano">
+  <div class="modal">
+    <div class="modal-title">Configurar Comissão de Plano</div>
+    <div class="form-row single">
+      <div class="field"><label>Selecionar Plano da Bora</label>
+        <select id="mp-sel-plano" onchange="selecionarPlanoBora(this.value)"><option value="">Carregando planos...</option></select>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>ID do Plano</label><input type="text" id="mp-plano-id" readonly></div>
+      <div class="field"><label>Nome</label><input type="text" id="mp-plano-nome"></div>
+    </div>
+    <div class="form-row triple">
+      <div class="field"><label>Valor (R$)</label><input type="number" id="mp-plano-valor" step="0.01"></div>
+      <div class="field"><label>Comissão Ativação (R$)</label><input type="number" id="mp-com-ativ" step="0.01" placeholder="0.00"></div>
+      <div class="field"><label>Comissão Recarga (R$)</label><input type="number" id="mp-com-rec" step="0.01" placeholder="0.00"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-plano')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarPlanoComissao()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ── STATE ──────────────────────────────────────────────────────────────────────
+const state = {
+  token: null, user: null,
+  ativacao: { iccid: null, iccidData: null, cliente: null, plano: null, ddd: null, pagamento: null, step: 1 },
+  editVendedorId: null
+};
+
+// ── API ────────────────────────────────────────────────────────────────────────
+async function api(method, endpoint, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (state.token) opts.headers['Authorization'] = `Bearer ${state.token}`;
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(endpoint, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.erro || `Erro ${r.status}`);
+  return data;
+}
+
+// ── TOAST ──────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'success') {
+  const t = document.createElement('div');
+  t.className = `toast-item ${type}`;
+  t.textContent = msg;
+  document.getElementById('toast').appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+
+// ── LOGIN ──────────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const email = document.getElementById('login-email').value;
+  const senha = document.getElementById('login-senha').value;
+  const erro = document.getElementById('login-erro');
+  erro.style.display = 'none';
+  try {
+    const data = await api('POST', '/api/login', { email, senha });
+    state.token = data.token;
+    state.user = { nome: data.nome, role: data.role };
+    localStorage.setItem('bv_token', data.token);
+    localStorage.setItem('bv_user', JSON.stringify(state.user));
+    iniciarApp();
+  } catch (e) {
+    erro.textContent = e.message;
+    erro.style.display = 'block';
+  }
+}
+
+function doLogout() {
+  localStorage.removeItem('bv_token');
+  localStorage.removeItem('bv_user');
+  state.token = null; state.user = null;
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app-screen').style.display = 'none';
+}
+
+// ── APP INIT ───────────────────────────────────────────────────────────────────
+function iniciarApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app-screen').style.display = 'block';
+  document.getElementById('sb-nome').textContent = state.user.nome;
+  document.getElementById('sb-role').textContent = state.user.role === 'admin' ? 'Administrador' : 'Vendedor';
+  construirNav();
+  if (state.user.role === 'admin') {
+    navegarPara('dashboard');
+    loadDashboard();
+    loadVendedores();
+    loadPlanosComissao();
+  } else {
+    navegarPara('meu-painel');
+    loadMeuPainel();
+  }
+  // Datas padrão (mês atual)
+  const hoje = new Date().toISOString().split('T')[0];
+  const primDia = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+  ['dash-inicio','dash-fim','mp-inicio','mp-fim'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = id.includes('fim') ? hoje : primDia;
+  });
+}
+
+function construirNav() {
+  const nav = document.getElementById('sidebar-nav');
+  const isAdmin = state.user.role === 'admin';
+  const items = isAdmin ? [
+    { page: 'dashboard', icon: '◈', label: 'Dashboard' },
+    { page: 'vendedores', icon: '◉', label: 'Vendedores' },
+    { page: 'planos', icon: '◇', label: 'Planos & Comissões' },
+    { section: 'Operação' },
+    { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
+  ] : [
+    { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
+    { section: 'Operação' },
+    { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
+  ];
+  nav.innerHTML = items.map(i => i.section
+    ? `<div class="nav-section">${i.section}</div>`
+    : `<div class="nav-item" id="nav-${i.page}" onclick="navegarPara('${i.page}')"><span class="icon">${i.icon}</span>${i.label}</div>`
+  ).join('');
+}
+
+function navegarPara(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById(`page-${page}`)?.classList.add('active');
+  document.getElementById(`nav-${page}`)?.classList.add('active');
+  if (page === 'ativar') resetAtivacao();
+}
+
+// ── DASHBOARD ─────────────────────────────────────────────────────────────────
+async function loadDashboard() {
+  const ini = document.getElementById('dash-inicio').value;
+  const fim = document.getElementById('dash-fim').value;
+  try {
+    const dados = await api('GET', `/api/relatorio/geral?data_inicio=${ini}&data_fim=${fim}`);
+    const totAtiv = dados.reduce((a,r)=>a+(parseInt(r.ativacoes)||0),0);
+    const totRec = dados.reduce((a,r)=>a+(parseInt(r.recargas)||0),0);
+    const totCom = dados.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
+    document.getElementById('st-vendedores').textContent = dados.length;
+    document.getElementById('st-ativacoes').textContent = totAtiv;
+    document.getElementById('st-recargas').textContent = totRec;
+    document.getElementById('st-comissoes').textContent = 'R$'+totCom.toFixed(2);
+    const tbody = document.getElementById('dash-tabela');
+    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">📊</div><p>Nenhum dado no período</p></td></tr>`; return; }
+    tbody.innerHTML = dados.map(r => `<tr>
+      <td><strong>${r.nome}</strong><br><small class="text-muted">${r.email}</small></td>
+      <td>${r.ativacoes}</td>
+      <td>${r.recargas}</td>
+      <td class="currency">R$ ${parseFloat(r.comissao_ativacao||0).toFixed(2)}</td>
+      <td class="currency">R$ ${parseFloat(r.comissao_recarga||0).toFixed(2)}</td>
+      <td><strong class="currency">R$ ${parseFloat(r.total_comissao||0).toFixed(2)}</strong></td>
+    </tr>`).join('');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── VENDEDORES ────────────────────────────────────────────────────────────────
+async function loadVendedores() {
+  try {
+    const dados = await api('GET', '/api/vendedores');
+    const tbody = document.getElementById('tbl-vendedores');
+    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="ico">👤</div><p>Nenhum vendedor cadastrado</p></td></tr>`; return; }
+    tbody.innerHTML = dados.map(v => `<tr>
+      <td><strong>${v.nome}</strong></td>
+      <td class="text-muted">${v.email}</td>
+      <td class="text-muted">${v.telefone||'—'}</td>
+      <td>${v.total_linhas}</td>
+      <td class="currency">R$ ${parseFloat(v.total_comissao||0).toFixed(2)}</td>
+      <td><span class="badge ${v.ativo?'badge-green':'badge-red'}">${v.ativo?'Ativo':'Inativo'}</span></td>
+      <td><button class="btn btn-secondary btn-sm" onclick="editarVendedor(${v.id},'${v.nome}','${v.email}','${v.telefone||''}',${v.ativo})">Editar</button></td>
+    </tr>`).join('');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function abrirModalVendedor() {
+  state.editVendedorId = null;
+  document.getElementById('modal-vendedor-title').textContent = 'Novo Vendedor';
+  ['mv-nome','mv-tel','mv-email','mv-senha'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('mv-ativo').value = 'true';
+  document.getElementById('modal-vendedor').classList.add('open');
+}
+
+function editarVendedor(id, nome, email, tel, ativo) {
+  state.editVendedorId = id;
+  document.getElementById('modal-vendedor-title').textContent = 'Editar Vendedor';
+  document.getElementById('mv-nome').value = nome;
+  document.getElementById('mv-email').value = email;
+  document.getElementById('mv-tel').value = tel;
+  document.getElementById('mv-ativo').value = String(ativo);
+  document.getElementById('mv-senha').value = '';
+  document.getElementById('modal-vendedor').classList.add('open');
+}
+
+async function salvarVendedor() {
+  const body = {
+    nome: document.getElementById('mv-nome').value,
+    email: document.getElementById('mv-email').value,
+    telefone: document.getElementById('mv-tel').value,
+    senha: document.getElementById('mv-senha').value,
+    ativo: document.getElementById('mv-ativo').value === 'true'
+  };
+  try {
+    if (state.editVendedorId) {
+      await api('PUT', `/api/vendedores/${state.editVendedorId}`, body);
+    } else {
+      if (!body.senha) { toast('Informe uma senha','error'); return; }
+      await api('POST', '/api/vendedores', body);
+    }
+    toast('Vendedor salvo com sucesso');
+    fecharModal('modal-vendedor');
+    loadVendedores();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── PLANOS COMISSÃO ───────────────────────────────────────────────────────────
+let planosBoraCache = [];
+
+async function loadPlanosComissao() {
+  try {
+    const dados = await api('GET', '/api/planos-comissao');
+    const tbody = document.getElementById('tbl-planos');
+    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">📋</div><p>Nenhum plano configurado</p></td></tr>`; return; }
+    tbody.innerHTML = dados.map(p => `<tr>
+      <td><strong>${p.plano_nome}</strong><br><span class="mono">${p.plano_id}</span></td>
+      <td class="currency">R$ ${parseFloat(p.plano_valor).toFixed(2)}</td>
+      <td class="currency">R$ ${parseFloat(p.comissao_ativacao).toFixed(2)}</td>
+      <td class="currency">R$ ${parseFloat(p.comissao_recarga).toFixed(2)}</td>
+      <td><span class="badge ${p.ativo?'badge-green':'badge-red'}">${p.ativo?'Ativo':'Inativo'}</span></td>
+      <td><button class="btn btn-secondary btn-sm" onclick="editarPlano('${p.plano_id}','${p.plano_nome}',${p.plano_valor},${p.comissao_ativacao},${p.comissao_recarga})">Editar</button></td>
+    </tr>`).join('');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function abrirModalPlano() {
+  document.getElementById('modal-plano').classList.add('open');
+  // Carrega planos da Bora
+  try {
+    if (!planosBoraCache.length) {
+      const data = await api('GET', '/api/bora/planos/ativacao');
+      planosBoraCache = Array.isArray(data) ? data : (data.plans || data.items || []);
+    }
+    const sel = document.getElementById('mp-sel-plano');
+    sel.innerHTML = '<option value="">Selecione um plano...</option>' +
+      planosBoraCache.map(p => `<option value="${p.id||p.planId}">${p.name||p.nome||p.description||p.id} — R$ ${parseFloat(p.value||p.price||p.valor||0).toFixed(2)}</option>`).join('');
+  } catch(e) { toast('Erro ao carregar planos Bora: '+e.message,'error'); }
+}
+
+function selecionarPlanoBora(id) {
+  const plano = planosBoraCache.find(p => (p.id||p.planId) == id);
+  if (!plano) return;
+  document.getElementById('mp-plano-id').value = id;
+  document.getElementById('mp-plano-nome').value = plano.name||plano.nome||plano.description||'';
+  document.getElementById('mp-plano-valor').value = parseFloat(plano.value||plano.price||plano.valor||0).toFixed(2);
+}
+
+function editarPlano(id, nome, valor, comAtiv, comRec) {
+  document.getElementById('mp-plano-id').value = id;
+  document.getElementById('mp-plano-nome').value = nome;
+  document.getElementById('mp-plano-valor').value = valor;
+  document.getElementById('mp-com-ativ').value = comAtiv;
+  document.getElementById('mp-com-rec').value = comRec;
+  document.getElementById('modal-plano').classList.add('open');
+}
+
+async function salvarPlanoComissao() {
+  const body = {
+    plano_id: document.getElementById('mp-plano-id').value,
+    plano_nome: document.getElementById('mp-plano-nome').value,
+    plano_valor: parseFloat(document.getElementById('mp-plano-valor').value),
+    comissao_ativacao: parseFloat(document.getElementById('mp-com-ativ').value)||0,
+    comissao_recarga: parseFloat(document.getElementById('mp-com-rec').value)||0
+  };
+  try {
+    await api('POST', '/api/planos-comissao', body);
+    toast('Plano salvo');
+    fecharModal('modal-plano');
+    loadPlanosComissao();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── ATIVAÇÃO FLOW ─────────────────────────────────────────────────────────────
+function resetAtivacao() {
+  state.ativacao = { iccid: null, iccidData: null, cliente: null, plano: null, ddd: null, pagamento: null, step: 1 };
+  irParaStep(1);
+  document.getElementById('iccid-input').value = '';
+  document.getElementById('iccid-result').innerHTML = '';
+  document.getElementById('cli-doc').value = '';
+  document.getElementById('cli-result').innerHTML = '';
+  document.getElementById('cli-form').style.display = 'none';
+  document.getElementById('ativacao-result').innerHTML = '';
+  ['step-2','step-3','step-4','step-5'].forEach(id => document.getElementById(id).style.display = 'none');
+  document.getElementById('step-1').style.display = 'block';
+}
+
+function irParaStep(n) {
+  state.ativacao.step = n;
+  for (let i=1;i<=5;i++) {
+    const fs = document.getElementById(`fs-${i}`);
+    fs.className = 'flow-step' + (i===n?' active':i<n?' done':'');
+  }
+}
+
+function voltarStep(n) {
+  irParaStep(n);
+  for (let i=n+1;i<=5;i++) document.getElementById(`step-${i}`).style.display='none';
+  document.getElementById(`step-${n}`).style.display = 'block';
+}
+
+async function verificarIccid() {
+  const iccid = document.getElementById('iccid-input').value.trim();
+  if (!iccid) { toast('Informe o ICCID','error'); return; }
+  const res = document.getElementById('iccid-result');
+  res.innerHTML = `<div class="loading">Verificando...</div>`;
+  try {
+    const data = await api('GET', `/api/bora/subscriber/iccid/${iccid}`);
+    state.ativacao.iccid = iccid;
+    state.ativacao.iccidData = data;
+    res.innerHTML = `<div class="info-card" style="border-color:var(--accent)">
+      <div class="info-row"><span class="k">ICCID</span><span class="v mono">${iccid}</span></div>
+      <div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">Disponível para ativação</span></span></div>
+    </div>
+    <button class="btn btn-primary" onclick="irParaCliente()" style="margin-top:8px">Continuar →</button>`;
+  } catch(e) {
+    res.innerHTML = `<div class="info-card" style="border-color:var(--red)"><div class="info-row"><span class="k">Erro</span><span class="v" style="color:var(--red)">${e.message}</span></div></div>`;
+  }
+}
+
+function irParaCliente() {
+  document.getElementById('step-2').style.display = 'block';
+  irParaStep(2);
+  setTimeout(() => document.getElementById('step-2').scrollIntoView({ behavior:'smooth' }), 100);
+}
+
+async function buscarCliente() {
+  const doc = document.getElementById('cli-doc').value.replace(/\D/g,'');
+  if (!doc) { toast('Informe CPF ou CNPJ','error'); return; }
+  const res = document.getElementById('cli-result');
+  res.innerHTML = `<div class="loading">Buscando...</div>`;
+  try {
+    const data = await api('GET', `/api/bora/subscriber/documento/${doc}`);
+    state.ativacao.clienteExiste = true;
+    // Preenche campos
+    document.getElementById('cli-nome').value = data.name || data.nome || '';
+    document.getElementById('cli-email').value = data.email || '';
+    document.getElementById('cli-tel').value = data.phone || data.telefone || '';
+    document.getElementById('cli-nasc').value = data.birthDate ? data.birthDate.split('T')[0] : '';
+    document.getElementById('cli-end').value = data.address || data.endereco || '';
+    document.getElementById('cli-cep').value = data.zipCode || data.cep || '';
+    document.getElementById('cli-cidade').value = data.city || data.cidade || '';
+    document.getElementById('cli-uf').value = data.state || data.uf || '';
+    res.innerHTML = `<div class="info-card" style="border-color:var(--accent);margin-bottom:12px">
+      <div class="info-row"><span class="k">Cliente encontrado</span><span class="v">${data.name||data.nome||doc}</span></div>
+    </div>`;
+    document.getElementById('cli-form').style.display = 'block';
+  } catch {
+    state.ativacao.clienteExiste = false;
+    res.innerHTML = `<div style="color:var(--yellow);font-size:13px;margin-bottom:12px">⚠ Cliente não encontrado. Preencha os dados para cadastrar.</div>`;
+    document.getElementById('cli-form').style.display = 'block';
+  }
+}
+
+async function confirmarCliente() {
+  const doc = document.getElementById('cli-doc').value.replace(/\D/g,'');
+  state.ativacao.cliente = {
+    document: doc,
+    name: document.getElementById('cli-nome').value,
+    email: document.getElementById('cli-email').value,
+    phone: document.getElementById('cli-tel').value,
+    birthDate: document.getElementById('cli-nasc').value,
+    address: document.getElementById('cli-end').value,
+    zipCode: document.getElementById('cli-cep').value,
+    city: document.getElementById('cli-cidade').value,
+    state: document.getElementById('cli-uf').value,
+    iccid: state.ativacao.iccid
+  };
+  await carregarPlanos();
+  document.getElementById('step-3').style.display = 'block';
+  irParaStep(3);
+  setTimeout(() => document.getElementById('step-3').scrollIntoView({ behavior:'smooth' }), 100);
+}
+
+async function carregarPlanos() {
+  const grid = document.getElementById('planos-grid');
+  const selDdd = document.getElementById('sel-ddd');
+  grid.innerHTML = '<div class="loading">Carregando planos...</div>';
+  selDdd.innerHTML = '<option value="">Carregando...</option>';
+  try {
+    const [planos, ddds, comissoes] = await Promise.all([
+      api('GET', '/api/bora/planos/ativacao'),
+      api('GET', '/api/bora/ddds'),
+      api('GET', '/api/planos-comissao')
+    ]);
+    const listaPlanos = Array.isArray(planos) ? planos : (planos.plans || planos.items || []);
+    const listaDdds = Array.isArray(ddds) ? ddds : (ddds.ddds || ddds.items || []);
+    const mapaComissoes = {};
+    comissoes.forEach(c => mapaComissoes[c.plano_id] = c);
+
+    selDdd.innerHTML = listaDdds.map(d => `<option value="${d.ddd||d}">${d.ddd||d} — ${d.state||d.uf||''}</option>`).join('');
+
+    grid.innerHTML = listaPlanos.map(p => {
+      const pid = p.id||p.planId;
+      const com = mapaComissoes[pid];
+      return `<div class="plano-card" id="pc-${pid}" onclick="selecionarPlano('${pid}','${p.name||p.nome||pid}',${parseFloat(p.value||p.price||p.valor||0)})">
+        <div class="pnome">${p.name||p.nome||pid}</div>
+        <div class="pval">R$ ${parseFloat(p.value||p.price||p.valor||0).toFixed(2)}</div>
+        ${com ? `<div class="pcomissao">★ Comissão: R$ ${parseFloat(com.comissao_ativacao).toFixed(2)}</div>` : '<div class="pcomissao" style="color:var(--red)">Sem comissão configurada</div>'}
+      </div>`;
+    }).join('');
+    document.getElementById('btn-plano-continuar').style.display = 'none';
+  } catch(e) { grid.innerHTML = `<div style="color:var(--red);padding:16px">${e.message}</div>`; }
+}
+
+function selecionarPlano(id, nome, valor) {
+  document.querySelectorAll('.plano-card[id^="pc-"]').forEach(el => el.classList.remove('selected'));
+  document.getElementById(`pc-${id}`)?.classList.add('selected');
+  state.ativacao.plano = { id, nome, valor };
+  document.getElementById('btn-plano-continuar').style.display = 'inline-flex';
+}
+
+function confirmarPlano() {
+  if (!state.ativacao.plano) { toast('Selecione um plano','error'); return; }
+  state.ativacao.ddd = document.getElementById('sel-ddd').value;
+  document.getElementById('step-4').style.display = 'block';
+  irParaStep(4);
+  setTimeout(() => document.getElementById('step-4').scrollIntoView({ behavior:'smooth' }), 100);
+}
+
+function selecionarPagamento(tipo) {
+  ['pix','billet','billetcombo'].forEach(t => document.getElementById(`pay-${t}`)?.classList.remove('selected'));
+  document.getElementById(`pay-${tipo}`)?.classList.add('selected');
+  state.ativacao.pagamento = tipo;
+  document.getElementById('btn-pay-continuar').style.display = 'inline-flex';
+}
+
+function irParaConfirmacao() {
+  const a = state.ativacao;
+  const payLabels = { pix:'PIX', billet:'Boleto', billetcombo:'Boleto Combo' };
+  document.getElementById('resumo-ativacao').innerHTML = `
+    <div class="info-row"><span class="k">ICCID</span><span class="v mono">${a.iccid}</span></div>
+    <div class="info-row"><span class="k">Cliente</span><span class="v">${a.cliente.name}</span></div>
+    <div class="info-row"><span class="k">CPF/CNPJ</span><span class="v mono">${a.cliente.document}</span></div>
+    <div class="info-row"><span class="k">DDD</span><span class="v">${a.ddd}</span></div>
+    <div class="info-row"><span class="k">Plano</span><span class="v">${a.plano.nome}</span></div>
+    <div class="info-row"><span class="k">Valor</span><span class="v currency">R$ ${parseFloat(a.plano.valor).toFixed(2)}</span></div>
+    <div class="info-row"><span class="k">Pagamento</span><span class="v">${payLabels[a.pagamento]}</span></div>
+  `;
+  document.getElementById('step-5').style.display = 'block';
+  irParaStep(5);
+  setTimeout(() => document.getElementById('step-5').scrollIntoView({ behavior:'smooth' }), 100);
+}
+
+async function confirmarAtivacao() {
+  const a = state.ativacao;
+  const res = document.getElementById('ativacao-result');
+  res.innerHTML = '<div class="loading">Ativando linha na Bora...</div>';
+  try {
+    const vendedorId = state.user.role === 'admin' ? null : state.user.id;
+    const data = await api('POST', '/api/bora/ativar', {
+      subscriber: { ...a.cliente },
+      cartPayload: {
+        iccid: a.iccid,
+        document: a.cliente.document,
+        ddd: a.ddd,
+        planId: a.plano.id,
+        planType: 'Controle'
+      },
+      paymentType: a.pagamento,
+      vendedor_id: vendedorId || state.user.id,
+      plano_id: a.plano.id,
+      plano_nome: a.plano.nome,
+      plano_valor: a.plano.valor
+    });
+    res.innerHTML = `<div class="info-card" style="border-color:var(--accent)">
+      <div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">✓ Linha Ativada</span></span></div>
+      <div class="info-row"><span class="k">Cart ID</span><span class="v mono">${data.cartId}</span></div>
+      <div class="info-row"><span class="k">Comissão Registrada</span><span class="v currency">R$ ${parseFloat(data.comissao||0).toFixed(2)}</span></div>
+    </div>`;
+    toast('Chip ativado com sucesso!');
+  } catch(e) {
+    res.innerHTML = `<div class="info-card" style="border-color:var(--red)"><div class="info-row"><span class="k">Erro</span><span class="v" style="color:var(--red)">${e.message}</span></div></div>`;
+    toast(e.message,'error');
+  }
+}
+
+// ── MEU PAINEL ────────────────────────────────────────────────────────────────
+async function loadMeuPainel() {
+  const ini = document.getElementById('mp-inicio')?.value || '';
+  const fim = document.getElementById('mp-fim')?.value || '';
+  try {
+    const dados = await api('GET', `/api/relatorio/vendedor/${state.user.id}?data_inicio=${ini}&data_fim=${fim}`);
+    const ativ = dados.resumo.find(r=>r.tipo==='ativacao');
+    const rec = dados.resumo.find(r=>r.tipo==='recarga');
+    const totCom = dados.resumo.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
+    document.getElementById('mp-ativ').textContent = ativ?.quantidade||0;
+    document.getElementById('mp-rec').textContent = rec?.quantidade||0;
+    document.getElementById('mp-com').textContent = 'R$'+totCom.toFixed(2);
+
+    const tbody = document.getElementById('mp-tabela');
+    if (!dados.transacoes.length) {
+      tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">📋</div><p>Nenhuma transação no período</p></td></tr>`;
+    } else {
+      tbody.innerHTML = dados.transacoes.map(t => `<tr>
+        <td class="mono">${new Date(t.data_transacao).toLocaleDateString('pt-BR')}</td>
+        <td><span class="badge ${t.tipo==='ativacao'?'badge-green':'badge-blue'}">${t.tipo}</span></td>
+        <td class="mono">${t.msisdn||'—'}</td>
+        <td>${t.nome_cliente||'—'}</td>
+        <td>${t.plano_nome||'—'}</td>
+        <td class="currency">R$ ${parseFloat(t.comissao||0).toFixed(2)}</td>
+      </tr>`).join('');
+    }
+
+    const linhasBody = document.getElementById('mp-linhas');
+    if (!dados.linhas.length) {
+      linhasBody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha ativa</p></td></tr>`;
+    } else {
+      linhasBody.innerHTML = dados.linhas.map(l => `<tr>
+        <td class="mono">${l.iccid}</td>
+        <td class="mono">${l.msisdn||'—'}</td>
+        <td>${l.nome_cliente||'—'}</td>
+        <td>${l.plano_nome||'—'}</td>
+        <td>${new Date(l.data_ativacao).toLocaleDateString('pt-BR')}</td>
+        <td class="text-muted">${l.ultima_checagem?new Date(l.ultima_checagem).toLocaleString('pt-BR'):'Nunca'}</td>
+      </tr>`).join('');
+    }
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── POLLING MANUAL ────────────────────────────────────────────────────────────
+async function forcaPolling() {
+  try {
+    await api('POST', '/api/admin/polling/forcar');
+    toast('Polling de recargas iniciado em background','info');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── UTILS ─────────────────────────────────────────────────────────────────────
+function fecharModal(id) { document.getElementById(id).classList.remove('open'); }
+
+// Fechar modal clicando fora
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('open'); });
+});
+
+// ── AUTO LOGIN ────────────────────────────────────────────────────────────────
+(function() {
+  const t = localStorage.getItem('bv_token');
+  const u = localStorage.getItem('bv_user');
+  if (t && u) {
+    state.token = t;
+    state.user = JSON.parse(u);
+    iniciarApp();
+  }
+})();
+</script>
+</body>
+</html>
