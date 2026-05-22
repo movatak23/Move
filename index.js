@@ -450,46 +450,61 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
     // Busca detalhes reais da linha na Bora
     const details = await boraGet(`/api/Subscription/${msisdnNorm}/details`);
 
-    // Extrai campos reais do /details
-    const planoAtualId   = plano_id || details?.plan?.id || null;
-    const planoAtualNome = details?.plan?.name || details?.plan?.description || 'Plano atual';
-    const dataAtivacao   = details?.activationDate || null;
-    const statusLinha    = details?.status || '—';
-    const recorrencia    = details?.recurrence?.paymentType || details?.lastPaymentType || '—';
-
+    // Campos básicos
+    const dataAtivacao = details?.activationDate || null;
+    const statusLinha  = details?.status || '—';
     if (!dataAtivacao) throw new Error('Data de ativação não encontrada na Bora');
 
-    // Busca comissões configuradas
+    // plan é um array com histórico real de recargas
+    const planArray = Array.isArray(details?.plan) ? details.plan : [];
+
+    // Plano mais recente = último do array
+    const planoRecente = planArray.length ? planArray[planArray.length - 1] : null;
+    const planoAtualNome = planoRecente?.name || 'Sem plano';
+
+    // Busca comissões configuradas por planId
     const { rows: planosComissao } = await pool.query('SELECT * FROM planos_comissao');
     const mapaComissao = {};
-    planosComissao.forEach(p => mapaComissao[p.plano_id] = p);
-    const comissaoPlano = mapaComissao[planoAtualId];
+    planosComissao.forEach(p => mapaComissao[String(p.plano_id)] = p);
 
-    // Gera meses desde ativação até hoje
-    const hoje = new Date();
-    const inicio = new Date(dataAtivacao);
+    // Monta resultado usando o histórico real do array plan
     const resultado = [];
-    const cur = new Date(Date.UTC(inicio.getFullYear(), inicio.getMonth(), 1));
+    const mesAtiv = dataAtivacao.substring(0, 7); // AAAA-MM
 
-    while (cur <= hoje) {
-      const mes = `${cur.getUTCFullYear()}-${String(cur.getUTCMonth()+1).padStart(2,'0')}`;
-      const mesAtiv = `${inicio.getFullYear()}-${String(inicio.getMonth()+1).padStart(2,'0')}`;
-      const tipo = mes === mesAtiv ? 'ativacao' : 'recarga';
-      const comissao = tipo === 'ativacao'
-        ? parseFloat(comissaoPlano?.comissao_ativacao || 0)
-        : parseFloat(comissaoPlano?.comissao_recarga || 0);
+    // Primeiro registro = ativação
+    const primeiroPlano = planArray.length ? planArray[0] : null;
+    const primeiroId = String(primeiroPlano?.planId || plano_id || '');
+    const comAtiv = parseFloat(mapaComissao[primeiroId]?.comissao_ativacao || 0);
+    resultado.push({
+      mes: mesAtiv,
+      tipo: 'ativacao',
+      plano_id: primeiroId,
+      plano_nome: primeiroPlano?.name || 'Plano ativação',
+      data: dataAtivacao,
+      comissao: comAtiv
+    });
 
-      resultado.push({ mes, tipo, plano_id: planoAtualId, plano_nome: planoAtualNome, comissao });
-      cur.setUTCMonth(cur.getUTCMonth() + 1);
+    // Demais registros = recargas (a partir do índice 1)
+    for (let i = 1; i < planArray.length; i++) {
+      const p = planArray[i];
+      const pid = String(p.planId || '');
+      const mes = (p.createdAt || p.expiration || '').substring(0, 7);
+      const comRec = parseFloat(mapaComissao[pid]?.comissao_recarga || 0);
+      resultado.push({
+        mes,
+        tipo: 'recarga',
+        plano_id: pid,
+        plano_nome: p.name || '—',
+        data: p.createdAt || null,
+        comissao: comRec
+      });
     }
 
     res.json({
       msisdn: msisdnNorm,
-      plano_atual_id: planoAtualId,
       plano_atual_nome: planoAtualNome,
       data_ativacao: dataAtivacao,
       status: statusLinha,
-      recorrencia,
       resultado
     });
   } catch (e) {

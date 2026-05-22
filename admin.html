@@ -833,7 +833,7 @@ select option { background: var(--bg3); }
             <button class="btn btn-secondary btn-sm" onclick="salvarComissoesCalculadas()">↓ Registrar no Sistema</button>
           </div>
           <table>
-            <thead><tr><th>Mês</th><th>Tipo</th><th>Plano</th><th>Comissão</th><th>Status</th></tr></thead>
+            <thead><tr><th>Data</th><th>Tipo</th><th>Plano</th><th>Comissão</th><th>Status</th></tr></thead>
             <tbody id="calc-tabela"></tbody>
           </table>
         </div>
@@ -1589,15 +1589,16 @@ async function calcularComissao(modo) {
       return;
     }
 
-    document.getElementById('calc-tabela').innerHTML = calcResultado.map(r =>
-      '<tr>' +
-        '<td class="mono">' + r.mes + '</td>' +
+    document.getElementById('calc-tabela').innerHTML = calcResultado.map(r => {
+      const dataFmt = r.data ? new Date(r.data).toLocaleDateString('pt-BR') : r.mes;
+      return '<tr>' +
+        '<td class="mono">' + dataFmt + '</td>' +
         '<td><span class="badge ' + (r.tipo === 'ativacao' ? 'badge-green' : 'badge-blue') + '">' + r.tipo + '</span></td>' +
         '<td>' + (r.plano_nome || '—') + '</td>' +
         '<td class="currency">R$ ' + r.comissao.toFixed(2) + '</td>' +
         '<td><span class="badge ' + (r.comissao > 0 ? 'badge-green' : 'badge-red') + '">' + (r.comissao > 0 ? 'Com comissão' : 'Sem config') + '</span></td>' +
-      '</tr>'
-    ).join('');
+      '</tr>';
+    }).join('');
 
   } catch(e) {
     document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:20px">' + e.message + '</td></tr>';
