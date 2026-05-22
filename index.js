@@ -578,15 +578,19 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
 
     let inseridas = 0;
     for (const r of recargas) {
+      const periodoCheck = String(r.periodo || '').substring(0, 7);
       const { rows: existe } = await pool.query(
-        'SELECT id FROM transacoes WHERE linha_id=$1 AND tipo=$2 AND periodo_referencia=$3',
-        [linhaId, 'recarga', r.periodo]
+        "SELECT id FROM transacoes WHERE linha_id=$1 AND tipo='recarga' AND LEFT(periodo_referencia,7)=$2",
+        [linhaId, periodoCheck]
       );
       if (existe.length) continue;
+      // Normaliza periodo para AAAA-MM (evita duplicatas com datas completas)
+      const periodoNorm = String(r.periodo || '').substring(0, 7);
       await pool.query(
         `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
-         VALUES ($1,$2,'recarga',$3,$4,$5,$6,'retroativo')`,
-        [linhaId, vendedor_id, plano_id, plano_nome, r.comissao, r.periodo]
+         VALUES ($1,$2,'recarga',$3,$4,$5,$6,'retroativo')
+         ON CONFLICT DO NOTHING`,
+        [linhaId, vendedor_id, plano_id, plano_nome, r.comissao, periodoNorm]
       );
       inseridas++;
     }
