@@ -614,11 +614,21 @@ app.post('/api/esim/importar', authMiddleware, adminOnly, uploadMem.single('plan
     let ignorados = 0;
 
     for (const row of rows) {
-      const iccid = String(row[0] || row[1] || '').trim().replace(/\s/g,'');
-      if (!iccid.startsWith('89') || iccid.length < 18) continue;
-      const status = String(row[1] || row[2] || '').trim().toUpperCase();
+      // ICCID pode estar em qualquer coluna — procura o que começa com 89
+      let iccid = null;
+      let statusCol = null;
+      for (let i = 0; i < row.length; i++) {
+        const val = String(row[i] || '').trim().replace(/\s/g,'');
+        if (val.startsWith('89') && val.length >= 18) {
+          iccid = val;
+          // Status é a próxima coluna não vazia
+          statusCol = String(row[i + 1] || '').trim().toUpperCase();
+          break;
+        }
+      }
+      if (!iccid) continue;
       // Só importa os vazios (disponíveis)
-      if (status && status !== '') { ignorados++; continue; }
+      if (statusCol && statusCol !== '') { ignorados++; continue; }
 
       try {
         await pool.query(
