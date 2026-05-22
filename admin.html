@@ -712,10 +712,25 @@ select option { background: var(--bg3); }
           <div class="plano-card" id="pay-billetcombo" onclick="selecionarPagamento('billetcombo')">
             <div style="font-size:24px;margin-bottom:8px">🔄</div>
             <div class="pnome">Boleto Combo</div>
-            <div class="pcomissao">Ativação + recorrência</div>
+            <div class="pcomissao">Ativação + recorrência boleto</div>
           </div>
         </div>
-        <button class="btn btn-primary" id="btn-pay-continuar" onclick="irParaConfirmacao()" style="display:none">Continuar →</button>
+        <div id="recorrencia-wrap" style="display:none;margin-top:20px">
+          <div class="section-title" style="font-size:13px;margin-bottom:12px">Recorrência Mensal</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div class="plano-card" id="rec-billet" onclick="selecionarRecorrencia('BILLET')">
+              <div style="font-size:20px;margin-bottom:6px">📄</div>
+              <div class="pnome">Boleto Mensal</div>
+              <div class="pcomissao">Recorrência via boleto</div>
+            </div>
+            <div class="plano-card" id="rec-credit" onclick="selecionarRecorrencia('CREDIT')">
+              <div style="font-size:20px;margin-bottom:6px">💳</div>
+              <div class="pnome">Cartão de Crédito</div>
+              <div class="pcomissao">Recorrência via cartão</div>
+            </div>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btn-pay-continuar" onclick="irParaConfirmacao()" style="display:none;margin-top:16px">Continuar →</button>
       </div>
 
       <!-- Step 5: CONFIRMAÇÃO -->
@@ -1336,9 +1351,21 @@ function confirmarPlano() {
 }
 
 function selecionarPagamento(tipo) {
-  ['pix','billet','billetcombo'].forEach(t => document.getElementById(`pay-${t}`)?.classList.remove('selected'));
-  document.getElementById(`pay-${tipo}`)?.classList.add('selected');
+  ['pix','billet','billetcombo'].forEach(t => document.getElementById('pay-'+t)?.classList.remove('selected'));
+  document.getElementById('pay-'+tipo)?.classList.add('selected');
   state.ativacao.pagamento = tipo;
+  state.ativacao.recorrencia = null;
+  // BilletCombo já tem recorrência embutida — não precisa selecionar
+  const precisaRec = tipo === 'pix' || tipo === 'billet';
+  document.getElementById('recorrencia-wrap').style.display = precisaRec ? 'block' : 'none';
+  ['rec-billet','rec-credit'].forEach(id => document.getElementById(id)?.classList.remove('selected'));
+  document.getElementById('btn-pay-continuar').style.display = precisaRec ? 'none' : 'inline-flex';
+}
+
+function selecionarRecorrencia(tipo) {
+  ['rec-billet','rec-credit'].forEach(id => document.getElementById(id)?.classList.remove('selected'));
+  document.getElementById('rec-' + tipo.toLowerCase())?.classList.add('selected');
+  state.ativacao.recorrencia = tipo;
   document.getElementById('btn-pay-continuar').style.display = 'inline-flex';
 }
 
@@ -1355,6 +1382,7 @@ function irParaConfirmacao() {
     <div class="info-row"><span class="k">Plano</span><span class="v">${a.plano.nome}</span></div>
     <div class="info-row"><span class="k">Valor</span><span class="v currency">R$ ${parseFloat(a.plano.valor).toFixed(2)}</span></div>
     <div class="info-row"><span class="k">Pagamento</span><span class="v">${payLabels[a.pagamento]}</span></div>
+    ${a.recorrencia ? '<div class="info-row"><span class="k">Recorrência</span><span class="v">' + (a.recorrencia === 'BILLET' ? 'Boleto Mensal' : 'Cartão de Crédito') + '</span></div>' : ''}
   `;
   document.getElementById('step-5').style.display = 'block';
   irParaStep(5);

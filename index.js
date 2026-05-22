@@ -316,7 +316,7 @@ app.get('/api/bora/ddds', authMiddleware, async (req, res) => {
 // ─── PROXY BORA — Ativação completa ──────────────────────────────────────────
 app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
   try {
-    const { subscriber, cartPayload, paymentType, vendedor_id, plano_id, plano_nome, plano_valor } = req.body;
+    const { subscriber, cartPayload, paymentType, recorrencia, vendedor_id, plano_id, plano_nome, plano_valor } = req.body;
 
     // 1. Busca subscriber existente ou cadastra novo
     let clientId = null;
@@ -349,13 +349,20 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
     if (!cartId) throw new Error('cartId não retornado pela Bora');
 
     // 3. Finaliza pagamento
+    const recType = recorrencia || 'BILLET';
     let pagamento;
     if (paymentType === 'pix') {
-      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/pix`, cartPayload.paymentData || {});
+      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/pix`, {
+        isRecurrence: true,
+        recurrenceType: recType
+      });
     } else if (paymentType === 'billet') {
-      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/billet`, cartPayload.paymentData || {});
+      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/billet`, {
+        isRecurrence: true,
+        recurrenceType: recType
+      });
     } else if (paymentType === 'billetcombo') {
-      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/BilletCombo`, cartPayload.paymentData || {});
+      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/BilletCombo`, {});
     } else {
       throw new Error('paymentType inválido: use pix, billet ou billetcombo');
     }
