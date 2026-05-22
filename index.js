@@ -211,9 +211,11 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
        ORDER BY t.data_transacao DESC`,
       params
     );
+    // Filtro sem alias 't' para a query de resumo
+    const filtroResumo = filtro.replace(/t\.data_transacao/g, 'data_transacao');
     const { rows: resumo } = await pool.query(
       `SELECT tipo, COUNT(*) as quantidade, COALESCE(SUM(comissao),0) as total_comissao
-       FROM transacoes WHERE vendedor_id=$1${filtro}
+       FROM transacoes WHERE vendedor_id=$1${filtroResumo}
        GROUP BY tipo`,
       params
     );
