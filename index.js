@@ -396,6 +396,16 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
     // Extrai dados do PIX se houver
     const pixData = pagamento?.pix || null;
 
+    // Marca ICCID como usado no banco de E-SIMs
+    try {
+      await pool.query(
+        `UPDATE esims SET status='usado', vendedor_id=$1, msisdn=$2,
+         nome_cliente=$3, documento_cliente=$4, usado_em=NOW()
+         WHERE iccid=$5`,
+        [vendedor_id, pagamento?.msisdn || null, subscriber.name, subscriber.document, iccid]
+      );
+    } catch {}
+
     res.json({
       ok: true,
       cartId,
@@ -585,6 +595,87 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
+});
+
+
+// ─── E-SIM — Import via upload ───────────────────────────────────────────────
+const multer = require('multer');
+const XLSX = require('xlsx');
+const uploadMem = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024 } });
+
+app.post('/api/esim/importar', authMiddleware, adminOnly, uploadMem.single('planilha'), async (req, res) => {
+  try {
+    if (!req.file) throw new Error('Nenhum arquivo enviado');
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+    let inseridos = 0;
+    let ignorados = 0;
+
+    for (const row of rows) {
+      const iccid = String(row[0] || row[1] || '').trim().replace(/\s/g,'');
+      if (!iccid.startsWith('89') || iccid.length < 18) continue;
+      const status = String(row[1] || row[2] || '').trim().toUpperCase();
+      // Só importa os vazios (disponíveis)
+      if (status && status !== '') { ignorados++; continue; }
+
+      try {
+        await pool.query(
+          `INSERT INTO esims (iccid, status) VALUES ($1, 'disponivel')
+           ON CONFLICT (iccid) DO NOTHING`,
+          [iccid]
+        );
+        inseridos++;
+      } catch { ignorados++; }
+    }
+
+    res.json({ ok: true, inseridos, ignorados });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.get('/api/esim/disponiveis', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM esims WHERE status='disponivel' ORDER BY importado_em ASC"
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/esim/contagem', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT COUNT(*) as total FROM esims WHERE status='disponivel'"
+    );
+    res.json({ total: parseInt(rows[0].total) });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/esim/:iccid/usar', authMiddleware, async (req, res) => {
+  try {
+    const { vendedor_id, msisdn, nome_cliente, documento_cliente } = req.body;
+    await pool.query(
+      `UPDATE esims SET status='usado', vendedor_id=$1, msisdn=$2,
+       nome_cliente=$3, documento_cliente=$4, usado_em=NOW()
+       WHERE iccid=$5`,
+      [vendedor_id, msisdn, nome_cliente, documento_cliente, req.params.iccid]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/esim/historico', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT e.*, v.nome as vendedor_nome
+       FROM esims e LEFT JOIN vendedores v ON v.id = e.vendedor_id
+       ORDER BY e.importado_em DESC`
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // ─── CRON — Polling de recargas via /details ─────────────────────────────────

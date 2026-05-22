@@ -636,7 +636,13 @@ select option { background: var(--bg3); }
         <div class="section-title">Número do Chip (ICCID)</div>
         <div class="form-row">
           <div class="field">
-            <label>ICCID</label>
+            <label>Selecionar E-SIM Disponível</label>
+            <select id="esim-select" onchange="selecionarEsimDisponivel(this.value)">
+              <option value="">Carregando E-SIMs...</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Ou digitar ICCID manualmente</label>
             <input type="text" id="iccid-input" placeholder="Ex: 89550514000000000000" maxlength="22">
           </div>
           <div class="field" style="display:flex;align-items:flex-end">
@@ -845,6 +851,51 @@ select option { background: var(--bg3); }
       </div>
     </div>
 
+
+    <!-- ── E-SIM ─────────────────────────────────── -->
+    <div class="page" id="page-esim">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Gestão de E-SIMs</div>
+          <div class="page-sub">Chips disponíveis e histórico de uso</div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <div id="esim-alerta" style="display:none;background:var(--red-dim);border:1px solid var(--red);border-radius:var(--r);padding:8px 16px;color:var(--red);font-size:13px;font-weight:600">
+            ⚠ Menos de 10 E-SIMs disponíveis!
+          </div>
+          <label class="btn btn-primary" style="cursor:pointer">
+            ↑ Importar Planilha
+            <input type="file" id="esim-file" accept=".xlsx,.xls" style="display:none" onchange="importarESim()">
+          </label>
+        </div>
+      </div>
+
+      <div class="stats-grid" style="margin-bottom:24px">
+        <div class="stat-card"><div class="stat-label">Disponíveis</div><div class="stat-value" id="esim-count-disp">—</div></div>
+        <div class="stat-card blue"><div class="stat-label">Usados</div><div class="stat-value" id="esim-count-usado">—</div></div>
+      </div>
+
+      <div class="table-card" style="margin-bottom:20px">
+        <div class="table-header">
+          <div class="table-title">E-SIMs Disponíveis</div>
+        </div>
+        <table>
+          <thead><tr><th>ICCID</th><th>Importado em</th><th>Status</th></tr></thead>
+          <tbody id="tbl-esim-disp"><tr><td colspan="3" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title">Histórico de Uso</div>
+        </div>
+        <table>
+          <thead><tr><th>ICCID</th><th>Vendedor</th><th>Cliente</th><th>MSISDN</th><th>Usado em</th></tr></thead>
+          <tbody id="tbl-esim-hist"><tr><td colspan="5" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
   </div><!-- /main-content -->
 </div><!-- /app-screen -->
 
@@ -985,6 +1036,7 @@ function iniciarApp() {
     loadDashboard();
     loadVendedores();
     loadPlanosComissao();
+    setTimeout(verificarAlertaEsim, 2000);
   } else {
     navegarPara('meu-painel');
     loadMeuPainel();
@@ -1008,6 +1060,7 @@ function construirNav() {
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
+    { page: 'esim', icon: '◈', label: 'E-SIM' },
   ] : [
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
     { section: 'Operação' },
@@ -1025,8 +1078,9 @@ function navegarPara(page) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById(`page-${page}`)?.classList.add('active');
   document.getElementById(`nav-${page}`)?.classList.add('active');
-  if (page === 'ativar') resetAtivacao();
+  if (page === 'ativar') { resetAtivacao(); carregarEsimsDisponiveis(); }
   if (page === 'calculadora') initCalculadora();
+  if (page === 'esim') loadEsim();
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -1188,6 +1242,25 @@ async function salvarPlanoComissao() {
 }
 
 // ── ATIVAÇÃO FLOW ─────────────────────────────────────────────────────────────
+async function carregarEsimsDisponiveis() {
+  const sel = document.getElementById('esim-select');
+  if (!sel) return;
+  try {
+    const esims = await api('GET', '/api/esim/disponiveis');
+    sel.innerHTML = '<option value="">-- Selecione um E-SIM --</option>' +
+      esims.map(e => '<option value="' + e.iccid + '">' + e.iccid + '</option>').join('');
+    if (esims.length < 10) {
+      toast('⚠ Apenas ' + esims.length + ' E-SIMs disponíveis', 'info');
+    }
+  } catch(e) {
+    sel.innerHTML = '<option value="">Erro ao carregar</option>';
+  }
+}
+
+function selecionarEsimDisponivel(iccid) {
+  if (iccid) document.getElementById('iccid-input').value = iccid;
+}
+
 function resetAtivacao() {
   state.ativacao = { iccid: null, iccidData: null, cliente: null, plano: null, ddd: null, pagamento: null, step: 1, tipoAtivacao: 'nova', msisdnPortabilidade: null };
   irParaStep(1);
@@ -1892,6 +1965,71 @@ function fecharModal(id) { document.getElementById(id).classList.remove('open');
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.classList.remove('open'); });
 });
+
+// ── E-SIM ─────────────────────────────────────────────────────────────────────
+async function loadEsim() {
+  try {
+    const [disp, hist] = await Promise.all([
+      api('GET', '/api/esim/disponiveis'),
+      api('GET', '/api/esim/historico')
+    ]);
+
+    const usados = hist.filter(e => e.status === 'usado');
+    document.getElementById('esim-count-disp').textContent = disp.length;
+    document.getElementById('esim-count-usado').textContent = usados.length;
+
+    // Alerta se menos de 10
+    document.getElementById('esim-alerta').style.display = disp.length < 10 ? 'block' : 'none';
+
+    // Tabela disponíveis
+    const tbDisp = document.getElementById('tbl-esim-disp');
+    tbDisp.innerHTML = disp.length ? disp.map(e =>
+      '<tr><td class="mono">' + e.iccid + '</td>' +
+      '<td class="text-muted">' + new Date(e.importado_em).toLocaleDateString('pt-BR') + '</td>' +
+      '<td><span class="badge badge-green">Disponível</span></td></tr>'
+    ).join('') : '<tr><td colspan="3" class="empty-state"><div class="ico">📱</div><p>Nenhum E-SIM disponível</p></td></tr>';
+
+    // Tabela histórico
+    const tbHist = document.getElementById('tbl-esim-hist');
+    tbHist.innerHTML = usados.length ? usados.map(e =>
+      '<tr><td class="mono">' + e.iccid + '</td>' +
+      '<td>' + (e.vendedor_nome || '—') + '</td>' +
+      '<td>' + (e.nome_cliente || '—') + '</td>' +
+      '<td class="mono">' + (e.msisdn || '—') + '</td>' +
+      '<td class="text-muted">' + (e.usado_em ? new Date(e.usado_em).toLocaleString('pt-BR') : '—') + '</td></tr>'
+    ).join('') : '<tr><td colspan="5" class="empty-state"><div class="ico">📋</div><p>Nenhum chip usado ainda</p></td></tr>';
+
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function importarESim() {
+  const file = document.getElementById('esim-file').files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('planilha', file);
+  try {
+    const resp = await fetch('/api/esim/importar', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + state.token },
+      body: form
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.erro);
+    toast(data.inseridos + ' E-SIMs importados com sucesso');
+    loadEsim();
+  } catch(e) { toast(e.message, 'error'); }
+  document.getElementById('esim-file').value = '';
+}
+
+async function verificarAlertaEsim() {
+  if (state.user?.role !== 'admin') return;
+  try {
+    const data = await api('GET', '/api/esim/contagem');
+    if (data.total < 10) {
+      toast('⚠ Atenção: apenas ' + data.total + ' E-SIMs disponíveis!', 'error');
+    }
+  } catch {}
+}
 
 // ── AUTO LOGIN ────────────────────────────────────────────────────────────────
 (function() {

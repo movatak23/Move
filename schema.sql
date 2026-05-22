@@ -61,3 +61,15 @@ CREATE TABLE IF NOT EXISTS bora_auth (
 INSERT INTO vendedores (nome, email, senha_hash, role)
 VALUES ('Administrador', 'admin@suaempresa.com', '$2a$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'admin')
 ON CONFLICT (email) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS esims (
+  id SERIAL PRIMARY KEY,
+  iccid VARCHAR(30) UNIQUE NOT NULL,
+  status VARCHAR(20) DEFAULT 'disponivel', -- 'disponivel' ou 'usado'
+  vendedor_id INTEGER REFERENCES vendedores(id),
+  msisdn VARCHAR(20),
+  nome_cliente VARCHAR(200),
+  documento_cliente VARCHAR(20),
+  usado_em TIMESTAMP,
+  importado_em TIMESTAMP DEFAULT NOW()
+);
