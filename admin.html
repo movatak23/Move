@@ -833,7 +833,7 @@ select option { background: var(--bg3); }
             <button class="btn btn-secondary btn-sm" onclick="salvarComissoesCalculadas()">↓ Registrar no Sistema</button>
           </div>
           <table>
-            <thead><tr><th>Período</th><th>Dados Usados</th><th>Tipo</th><th>Comissão</th></tr></thead>
+            <thead><tr><th>Mês</th><th>Tipo</th><th>Plano</th><th>Comissão</th><th>Status</th></tr></thead>
             <tbody id="calc-tabela"></tbody>
           </table>
         </div>
@@ -1418,20 +1418,27 @@ async function confirmarAtivacao() {
     '</div>';
 
     if (data.pix && data.pix.code) {
-      html += '<div class="info-card" style="margin-top:16px;border-color:var(--blue)">' +
-        '<div class="section-title" style="color:var(--blue);margin-bottom:12px">⚡ Pagamento PIX</div>' +
-        (data.pix.qrCodeUrl ? '<div style="text-align:center;margin-bottom:12px"><img src="' + data.pix.qrCodeUrl + '" style="width:180px;height:180px;border-radius:8px" onerror="this.style.display='none'"></div>' : '') +
-        '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--text2);margin-bottom:10px">' + data.pix.code + '</div>' +
-        '<button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('' + data.pix.code.replace(/'/g,"\'") + '').then(()=>toast('Código copiado!'))">📋 Copiar Código PIX</button>' +
-      '</div>';
+      const pixCode = data.pix.code;
+      const pixQr = data.pix.qrCodeUrl || '';
+      let pixHtml = '<div class="info-card" style="margin-top:16px;border-color:var(--blue)">';
+      pixHtml += '<div class="section-title" style="color:var(--blue);margin-bottom:12px">&#9889; Pagamento PIX</div>';
+      if (pixQr) pixHtml += '<div style="text-align:center;margin-bottom:12px"><img src="' + pixQr + '" style="width:180px;height:180px;border-radius:8px"></div>';
+      pixHtml += '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--text2);margin-bottom:10px">' + pixCode + '</div>';
+      pixHtml += '<button class="btn btn-secondary btn-sm" onclick="copiarPix()">&#128203; Copiar Codigo PIX</button>';
+      pixHtml += '</div>';
+      html += pixHtml;
+      window._pixCode = pixCode;
     }
 
     if (data.billet && data.billet.url) {
-      html += '<div class="info-card" style="margin-top:16px;border-color:var(--yellow)">' +
-        '<div class="section-title" style="color:var(--yellow);margin-bottom:12px">📄 Boleto Gerado</div>' +
-        (data.billet.barcode ? '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--text2);margin-bottom:10px">' + data.billet.barcode + '</div>' : '') +
-        '<a href="' + data.billet.url + '" target="_blank" class="btn btn-secondary btn-sm">🔗 Abrir Boleto</a>' +
-      '</div>';
+      const billetUrl = data.billet.url;
+      const billetBar = data.billet.barcode || '';
+      let bilHtml = '<div class="info-card" style="margin-top:16px;border-color:var(--yellow)">';
+      bilHtml += '<div class="section-title" style="color:var(--yellow);margin-bottom:12px">&#128196; Boleto Gerado</div>';
+      if (billetBar) bilHtml += '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--text2);margin-bottom:10px">' + billetBar + '</div>';
+      bilHtml += '<a href="' + billetUrl + '" target="_blank" class="btn btn-secondary btn-sm">&#128279; Abrir Boleto</a>';
+      bilHtml += '</div>';
+      html += bilHtml;
     }
 
     res.innerHTML = html;
@@ -1495,129 +1502,132 @@ async function forcaPolling() {
 
 
 // ── CALCULADORA DE COMISSÃO ───────────────────────────────────────────────────
-let calcRecargas = [];
-let calcPlanoSelecionado = null;
+let calcResultado = [];
 let calcVendedorSelecionado = null;
+let calcMsisdn = null;
 
 async function initCalculadora() {
-  // Carrega vendedores no select
   const selV = document.getElementById('calc-vendedor');
-  const selP = document.getElementById('calc-plano');
   try {
     if (state.user.role === 'admin') {
       const vendedores = await api('GET', '/api/vendedores');
       selV.innerHTML = '<option value="">Selecione o vendedor...</option>' +
-        vendedores.map(v => `<option value="${v.id}">${v.nome}</option>`).join('');
+        vendedores.map(v => '<option value="' + v.id + '">' + v.nome + '</option>').join('');
     } else {
-      selV.innerHTML = `<option value="${state.user.id}">${state.user.nome}</option>`;
+      selV.innerHTML = '<option value="' + state.user.id + '">' + state.user.nome + '</option>';
     }
+    // Plano é detectado automaticamente via /details — select vira apenas override
     const planos = await api('GET', '/api/planos-comissao');
-    selP.innerHTML = '<option value="">Selecione o plano...</option>' +
-      planos.map(p => `<option value="${p.plano_id}" data-ativ="${p.comissao_ativacao}" data-rec="${p.comissao_recarga}">${p.plano_nome} — R$ ${parseFloat(p.plano_valor).toFixed(2)}</option>`).join('');
-  } catch(e) { toast('Erro ao carregar dados: '+e.message,'error'); }
+    const selP = document.getElementById('calc-plano');
+    selP.innerHTML = '<option value="">Detectar automaticamente</option>' +
+      planos.map(p => '<option value="' + p.plano_id + '">' + p.plano_nome + ' — R$ ' + parseFloat(p.plano_valor).toFixed(2) + '</option>').join('');
+  } catch(e) { toast('Erro ao carregar dados: ' + e.message, 'error'); }
+}
+
+function gerarMeses(inicio, fim) {
+  const meses = [];
+  const cur = new Date(inicio + '-01');
+  const end = new Date(fim + '-01');
+  while (cur <= end) {
+    meses.push(cur.getFullYear() + '-' + String(cur.getMonth()+1).padStart(2,'0'));
+    cur.setMonth(cur.getMonth()+1);
+  }
+  return meses;
 }
 
 async function calcularComissao(modo) {
   const msisdn = document.getElementById('calc-msisdn').value.trim();
-  if (!msisdn) { toast('Informe o número','error'); return; }
-
-  const selP = document.getElementById('calc-plano');
-  const planoOpt = selP.options[selP.selectedIndex];
-  if (!planoOpt || !selP.value) { toast('Selecione o plano','error'); return; }
-
-  const comissaoRec = parseFloat(planoOpt.dataset.rec || 0);
-  const comissaoAtiv = parseFloat(planoOpt.dataset.ativ || 0);
-  calcPlanoSelecionado = { id: selP.value, nome: planoOpt.text, comissaoRec, comissaoAtiv };
+  if (!msisdn) { toast('Informe o número', 'error'); return; }
   calcVendedorSelecionado = document.getElementById('calc-vendedor').value;
+  const planoOverride = document.getElementById('calc-plano').value || null;
+  calcMsisdn = msisdn;
 
-  let dataInicio, dataFim;
+  let mesInicio, mesFim;
+  const hoje = new Date();
+  const mesAtual = hoje.getFullYear() + '-' + String(hoje.getMonth()+1).padStart(2,'0');
+
   if (modo === 'tudo') {
-    const hoje = new Date();
-    dataFim = hoje.toISOString().split('T')[0];
     const seisAtras = new Date(hoje);
-    seisAtras.setMonth(seisAtras.getMonth() - 6);
-    dataInicio = seisAtras.toISOString().split('T')[0];
+    seisAtras.setMonth(seisAtras.getMonth() - 5);
+    mesInicio = seisAtras.getFullYear() + '-' + String(seisAtras.getMonth()+1).padStart(2,'0');
+    mesFim = mesAtual;
   } else {
-    dataInicio = document.getElementById('calc-inicio').value;
-    dataFim = document.getElementById('calc-fim').value;
-    if (!dataInicio || !dataFim) { toast('Informe o período','error'); return; }
+    const ini = document.getElementById('calc-inicio').value;
+    const fim = document.getElementById('calc-fim').value;
+    if (!ini || !fim) { toast('Informe o período', 'error'); return; }
+    mesInicio = ini.substring(0,7);
+    mesFim = fim.substring(0,7);
   }
 
-  document.getElementById('calc-resultado').style.display = 'none';
-  document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="4" class="loading">Consultando Bora...</td></tr>';
+  const meses = gerarMeses(mesInicio, mesFim);
   document.getElementById('calc-resultado').style.display = 'block';
+  document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="5" class="loading">Consultando linha na Bora...</td></tr>';
 
   try {
-    const data = await api('GET',
-      `/api/bora/linha/${msisdn}`
-    );
-    const planoAtual = data?.planData?.name || data?.plan?.name || '—';
-
-    const historic = await api('GET',
-      `/api/bora/historic/${msisdn}?inicio=${dataInicio}&fim=${dataFim}`
-    );
-
-    const detalhes = historic?.data?.details || [];
-    calcRecargas = [];
-
-    detalhes.forEach(d => {
-      if (!d.from) return;
-      const periodo = d.from.split('T')[0];
-      const usado = d.used || 0;
-      if (usado > 0) {
-        calcRecargas.push({ periodo, usado, comissao: comissaoRec });
-      }
+    const data = await api('POST', '/api/calculadora/simular', {
+      msisdn,
+      plano_id: planoOverride,
+      meses
     });
 
-    // Stats
-    const totalRecargas = calcRecargas.length;
-    const totalComissaoRec = totalRecargas * comissaoRec;
-    const totalComissao = comissaoAtiv + totalComissaoRec;
+    calcResultado = data.resultado || [];
+    const totalComissao = calcResultado.reduce((a, r) => a + r.comissao, 0);
+    const totalRecargas = calcResultado.filter(r => r.tipo === 'recarga').length;
+    const comissaoAtiv = calcResultado.find(r => r.tipo === 'ativacao')?.comissao || 0;
 
-    document.getElementById('calc-stats').innerHTML = `
-      <div class="stat-card"><div class="stat-label">Número</div><div class="stat-value" style="font-size:18px">${msisdn}</div></div>
-      <div class="stat-card blue"><div class="stat-label">Recargas Detectadas</div><div class="stat-value">${totalRecargas}</div></div>
-      <div class="stat-card yellow"><div class="stat-label">Comissão Ativação</div><div class="stat-value" style="font-size:20px">R$${comissaoAtiv.toFixed(2)}</div></div>
-      <div class="stat-card"><div class="stat-label">Comissão Recargas</div><div class="stat-value" style="font-size:20px">R$${totalComissaoRec.toFixed(2)}</div></div>
-      <div class="stat-card" style="border-color:var(--accent)"><div class="stat-label">Total Comissão</div><div class="stat-value">R$${totalComissao.toFixed(2)}</div></div>
-    `;
+    document.getElementById('calc-stats').innerHTML =
+      '<div class="stat-card"><div class="stat-label">Número</div><div class="stat-value" style="font-size:16px">' + msisdn + '</div></div>' +
+      '<div class="stat-card blue"><div class="stat-label">Plano Atual</div><div class="stat-value" style="font-size:14px">' + (data.plano_atual_nome || '—') + '</div></div>' +
+      '<div class="stat-card yellow"><div class="stat-label">Recargas</div><div class="stat-value">' + totalRecargas + '</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Comissão Ativação</div><div class="stat-value" style="font-size:20px">R$' + comissaoAtiv.toFixed(2) + '</div></div>' +
+      '<div class="stat-card" style="border-color:var(--accent)"><div class="stat-label">Total Comissão</div><div class="stat-value">R$' + totalComissao.toFixed(2) + '</div></div>';
 
-    if (!calcRecargas.length) {
-      document.getElementById('calc-tabela').innerHTML =
-        '<tr><td colspan="4" class="empty-state"><div class="ico">📋</div><p>Nenhuma recarga detectada no período</p></td></tr>';
+    if (!calcResultado.length) {
+      document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="5" class="empty-state"><div class="ico">📋</div><p>Nenhum período encontrado</p></td></tr>';
       return;
     }
 
-    document.getElementById('calc-tabela').innerHTML = calcRecargas.map(r => `<tr>
-      <td class="mono">${r.periodo}</td>
-      <td>${(r.usado/1024).toFixed(1)} MB</td>
-      <td><span class="badge badge-blue">recarga</span></td>
-      <td class="currency">R$ ${r.comissao.toFixed(2)}</td>
-    </tr>`).join('');
+    document.getElementById('calc-tabela').innerHTML = calcResultado.map(r =>
+      '<tr>' +
+        '<td class="mono">' + r.mes + '</td>' +
+        '<td><span class="badge ' + (r.tipo === 'ativacao' ? 'badge-green' : 'badge-blue') + '">' + r.tipo + '</span></td>' +
+        '<td>' + (r.plano_nome || '—') + '</td>' +
+        '<td class="currency">R$ ' + r.comissao.toFixed(2) + '</td>' +
+        '<td><span class="badge ' + (r.comissao > 0 ? 'badge-green' : 'badge-red') + '">' + (r.comissao > 0 ? 'Com comissão' : 'Sem config') + '</span></td>' +
+      '</tr>'
+    ).join('');
 
   } catch(e) {
-    document.getElementById('calc-tabela').innerHTML =
-      `<tr><td colspan="4" style="color:var(--red);padding:20px">${e.message}</td></tr>`;
+    document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:20px">' + e.message + '</td></tr>';
   }
 }
 
 async function salvarComissoesCalculadas() {
-  if (!calcRecargas.length) { toast('Nada para registrar','error'); return; }
-  if (!calcVendedorSelecionado) { toast('Selecione o vendedor','error'); return; }
-  const msisdn = document.getElementById('calc-msisdn').value.trim();
-
+  if (!calcResultado.length) { toast('Calcule primeiro', 'error'); return; }
+  if (!calcVendedorSelecionado) { toast('Selecione o vendedor', 'error'); return; }
   try {
+    const recargas = calcResultado
+      .filter(r => r.tipo === 'recarga' && r.comissao > 0)
+      .map(r => ({ periodo: r.mes + '-01', comissao: r.comissao }));
+    if (!recargas.length) { toast('Nenhuma recarga com comissão configurada', 'error'); return; }
+    const primeiro = calcResultado[0];
     await api('POST', '/api/comissao/registrar-retroativo', {
-      msisdn,
+      msisdn: calcMsisdn,
       vendedor_id: calcVendedorSelecionado,
-      plano_id: calcPlanoSelecionado.id,
-      plano_nome: calcPlanoSelecionado.nome,
-      recargas: calcRecargas
+      plano_id: primeiro.plano_id,
+      plano_nome: primeiro.plano_nome,
+      recargas
     });
-    toast(`${calcRecargas.length} recargas registradas com sucesso`);
-  } catch(e) { toast(e.message,'error'); }
+    toast(recargas.length + ' recargas registradas com sucesso');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
+
+function copiarPix() {
+  if (window._pixCode) {
+    navigator.clipboard.writeText(window._pixCode).then(() => toast('Código PIX copiado!'));
+  }
+}
 
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 function fecharModal(id) { document.getElementById(id).classList.remove('open'); }

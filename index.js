@@ -428,16 +428,64 @@ app.get('/api/bora/linha/:identificador', authMiddleware, async (req, res) => {
 });
 
 
-// ─── Histórico de consumo (calculadora) ──────────────────────────────────────
+// ─── Calculadora retroativa via /details ─────────────────────────────────────
 app.get('/api/bora/historic/:msisdn', authMiddleware, async (req, res) => {
   try {
-    const { inicio, fim } = req.query;
-    const data = await boraGet(`/api/Subscription/${req.params.msisdn}/historic`, {
-      Data: true, Sms: false, Voice: false,
-      DateInitials: inicio,
-      DateFinals: fim
+    // Busca detalhes atuais da linha
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    res.json(details);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+// ─── Calculadora: simula recargas por período com /details ────────────────────
+app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
+  try {
+    const { msisdn, plano_id, meses } = req.body;
+    // meses = array de 'AAAA-MM' a verificar
+
+    // Busca planos de comissão
+    const { rows: planosComissao } = await pool.query('SELECT * FROM planos_comissao');
+    const mapaComissao = {};
+    planosComissao.forEach(p => mapaComissao[p.plano_id] = p);
+
+    // Busca detalhes atuais para saber o plano vigente
+    const details = await boraGet(`/api/Subscription/${msisdn}/details`);
+    const planoAtualId = plano_id || details?.planData?.id || details?.plan?.id || null;
+    const planoAtualNome = details?.planData?.name || details?.plan?.name || 'Plano atual';
+    const dataAtivacao = details?.activationDate || details?.createdAt || null;
+
+    // Monta resultado por mês
+    const resultado = [];
+    for (const mes of meses) {
+      const [ano, m] = mes.split('-').map(Number);
+      const dataAtiv = dataAtivacao ? new Date(dataAtivacao) : null;
+      const mesAtiv = dataAtiv ? `${dataAtiv.getFullYear()}-${String(dataAtiv.getMonth()+1).padStart(2,'0')}` : null;
+
+      // Mês de ativação = ativação, demais = recarga
+      const tipo = mesAtiv === mes ? 'ativacao' : 'recarga';
+      const comissaoPlano = mapaComissao[planoAtualId];
+      const comissao = tipo === 'ativacao'
+        ? parseFloat(comissaoPlano?.comissao_ativacao || 0)
+        : parseFloat(comissaoPlano?.comissao_recarga || 0);
+
+      resultado.push({
+        mes,
+        tipo,
+        plano_id: planoAtualId,
+        plano_nome: planoAtualNome,
+        comissao
+      });
+    }
+
+    res.json({
+      msisdn,
+      plano_atual_id: planoAtualId,
+      plano_atual_nome: planoAtualNome,
+      data_ativacao: dataAtivacao,
+      resultado
     });
-    res.json(data);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
@@ -490,11 +538,10 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
   }
 });
 
-// ─── CRON — Polling de recargas ───────────────────────────────────────────────
+// ─── CRON — Polling de recargas via /details ─────────────────────────────────
 async function checarRecargas() {
-  console.log(`[CRON] Iniciando polling de recargas — ${new Date().toISOString()}`);
+  console.log(`[CRON] Iniciando polling — ${new Date().toISOString()}`);
   try {
-    // Busca todas as linhas ativas com vendedor associado
     const { rows: linhas } = await pool.query(
       `SELECT l.*, v.nome as vendedor_nome
        FROM linhas l
@@ -503,60 +550,100 @@ async function checarRecargas() {
     );
 
     const hoje = new Date();
-    const dataInicio = new Date(hoje.getFullYear(), hoje.getMonth(), 1)
-      .toISOString().split('T')[0];
-    const dataFim = hoje.toISOString().split('T')[0];
+    // Período de referência = mês atual (AAAA-MM)
+    const mesRef = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
 
     let detectadas = 0;
+    let atualizadas = 0;
 
     for (const linha of linhas) {
       try {
-        const historic = await boraGet(
-          `/api/Subscription/${linha.msisdn}/historic`,
-          { Data: true, Sms: false, Voice: false, DateInitials: dataInicio, DateFinals: dataFim }
-        );
+        // 1. Busca detalhes atuais da linha na Bora
+        const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
 
-        // Verifica se tem eventos de recarga (dados utilizados indica recarga ativa)
-        const detalhes = historic?.data?.details || [];
+        // 2. Extrai plano atual retornado pela Bora
+        const planoAtualId = details?.planData?.id || details?.plan?.id || details?.planId || null;
+        const planoAtualNome = details?.planData?.name || details?.plan?.name || details?.planName || linha.plano_nome;
+        const statusLinha = details?.status || details?.lineStatus || 'ativa';
 
-        for (const detalhe of detalhes) {
-          if (!detalhe.from) continue;
-          const periodoRef = detalhe.from.split('T')[0];
-
-          // Verifica se já registrou essa recarga nesse período
-          const { rows: existe } = await pool.query(
-            `SELECT id FROM transacoes
-             WHERE linha_id=$1 AND tipo='recarga' AND periodo_referencia=$2`,
-            [linha.id, periodoRef]
-          );
-          if (existe.length > 0) continue;
-
-          // Busca comissão do plano da linha
-          const { rows: planoRows } = await pool.query(
-            'SELECT comissao_recarga FROM planos_comissao WHERE plano_id=$1',
-            [linha.plano_id]
-          );
-          const comissao = planoRows[0]?.comissao_recarga || 0;
-          if (comissao === 0) continue;
-
-          // Registra recarga com comissão
+        // 3. Se plano mudou, atualiza no banco
+        if (planoAtualId && planoAtualId !== linha.plano_id) {
           await pool.query(
-            `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
-             VALUES ($1,$2,'recarga',$3,$4,$5,$6,'bora_polling')`,
-            [linha.id, linha.vendedor_id, linha.plano_id, linha.plano_nome, comissao, periodoRef]
+            'UPDATE linhas SET plano_id=$1, plano_nome=$2 WHERE id=$3',
+            [planoAtualId, planoAtualNome, linha.id]
           );
-          detectadas++;
-          console.log(`[CRON] Recarga detectada: ${linha.msisdn} (${linha.vendedor_nome}) — comissão R$${comissao}`);
+          console.log(`[CRON] Plano atualizado: ${linha.msisdn} | ${linha.plano_nome} → ${planoAtualNome}`);
+          atualizadas++;
+          linha.plano_id = planoAtualId;
+          linha.plano_nome = planoAtualNome;
         }
 
-        // Atualiza timestamp de checagem
+        // 4. Verifica se linha está suspensa/cancelada
+        const statusNorm = String(statusLinha).toLowerCase();
+        if (statusNorm.includes('suspend') || statusNorm.includes('cancel') || statusNorm.includes('inativ')) {
+          await pool.query('UPDATE linhas SET status=$1 WHERE id=$2', [statusNorm, linha.id]);
+          console.log(`[CRON] Linha ${linha.msisdn} suspensa/cancelada — ignorando recarga`);
+          continue;
+        }
+
+        // 5. Verifica se já tem recarga registrada neste mês
+        const { rows: existe } = await pool.query(
+          `SELECT id FROM transacoes
+           WHERE linha_id=$1 AND tipo='recarga' AND periodo_referencia=$2`,
+          [linha.id, mesRef]
+        );
+        if (existe.length > 0) {
+          await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
+          continue;
+        }
+
+        // 6. Só registra recarga se a linha tem atividade no mês atual
+        // Critério: data de renovação/próximo vencimento está no mês corrente ou passou
+        const proximoVenc = details?.planData?.nextRenewalDate || details?.nextRenewalDate || null;
+        let linhaAtiva = false;
+        if (proximoVenc) {
+          const venc = new Date(proximoVenc);
+          // Se o próximo vencimento é futuro, significa que já pagou este mês
+          linhaAtiva = venc >= hoje || venc.getMonth() === hoje.getMonth();
+        } else {
+          // Sem data de vencimento: usa data de ativação como critério
+          const dataAtiv = new Date(linha.data_ativacao);
+          const mesesAtiva = (hoje.getFullYear() - dataAtiv.getFullYear()) * 12 + (hoje.getMonth() - dataAtiv.getMonth());
+          linhaAtiva = mesesAtiva >= 1; // Pelo menos 1 mês ativa = houve pelo menos 1 recarga
+        }
+
+        if (!linhaAtiva) {
+          await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
+          continue;
+        }
+
+        // 7. Busca comissão do plano atual
+        const { rows: planoRows } = await pool.query(
+          'SELECT comissao_recarga, plano_nome FROM planos_comissao WHERE plano_id=$1',
+          [linha.plano_id]
+        );
+        const comissao = parseFloat(planoRows[0]?.comissao_recarga || 0);
+        if (comissao === 0) {
+          await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
+          continue;
+        }
+
+        // 8. Registra recarga com comissão do plano atual
+        await pool.query(
+          `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
+           VALUES ($1,$2,'recarga',$3,$4,$5,$6,'bora_details')`,
+          [linha.id, linha.vendedor_id, linha.plano_id, linha.plano_nome, comissao, mesRef]
+        );
+        detectadas++;
+        console.log(`[CRON] Recarga registrada: ${linha.msisdn} (${linha.vendedor_nome}) plano=${linha.plano_nome} comissão=R$${comissao}`);
+
         await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
       } catch (err) {
         console.error(`[CRON] Erro na linha ${linha.msisdn}: ${err.message}`);
       }
     }
 
-    console.log(`[CRON] Concluído. ${detectadas} recargas novas detectadas.`);
+    console.log(`[CRON] Concluído. ${detectadas} recargas | ${atualizadas} planos atualizados.`);
   } catch (err) {
     console.error(`[CRON] Erro geral: ${err.message}`);
   }
