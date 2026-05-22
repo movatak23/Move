@@ -1040,9 +1040,9 @@ async function abrirModalPlano() {
     const sel = document.getElementById('mp-sel-plano');
     sel.innerHTML = '<option value="">Selecione um plano...</option>' +
       planosBoraCache.map(p => {
-        const pid = p.id || p.planId || '';
+        const pid = p.idPlanExternal || p.id || p.planId || '';
         const pnome = p.name || p.nome || p.description || pid;
-        const pval = parseFloat(p.value || p.price || p.valor || 0).toFixed(2);
+        const rawVal = parseFloat(p.value || p.price || p.valor || 0); const pval = (rawVal > 500 ? rawVal/100 : rawVal).toFixed(2);
         return `<option value="${pid}" data-nome="${pnome}" data-valor="${pval}">${pnome} — R$ ${pval}</option>`;
       }).join('');
   } catch(e) { toast('Erro ao carregar planos Bora: '+e.message,'error'); }
@@ -1202,7 +1202,7 @@ async function carregarPlanos() {
     selDdd.innerHTML = listaDdds.map(d => `<option value="${d.ddd||d}">${d.ddd||d} — ${d.state||d.uf||''}</option>`).join('');
 
     grid.innerHTML = listaPlanos.map(p => {
-      const pid = p.id||p.planId;
+      const pid = p.idPlanExternal || p.id || p.planId;
       const com = mapaComissoes[pid];
       return `<div class="plano-card" id="pc-${pid}" onclick="selecionarPlano('${pid}','${p.name||p.nome||pid}',${parseFloat(p.value||p.price||p.valor||0)})">
         <div class="pnome">${p.name||p.nome||pid}</div>
