@@ -1180,39 +1180,40 @@ async function verificarIccid() {
   const iccid = document.getElementById('iccid-input').value.trim();
   if (!iccid) { toast('Informe o ICCID','error'); return; }
   const res = document.getElementById('iccid-result');
-  res.innerHTML = `<div class="loading">Verificando...</div>`;
+  res.innerHTML = '<div class="loading">Verificando...</div>';
   try {
-    const data = await api('GET', `/api/bora/subscriber/iccid/${iccid}`);
+    const data = await api('GET', '/api/bora/subscriber/iccid/' + iccid);
     state.ativacao.iccid = iccid;
     state.ativacao.iccidData = data;
-    res.innerHTML = `<div class="info-card" style="border-color:var(--accent)">
-      <div class="info-row"><span class="k">ICCID</span><span class="v mono">${iccid}</span></div>
-      <div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">Disponível para ativação</span></span></div>
-    </div>
-    <div style="margin-top:16px">
-      <div class="section-title" style="font-size:13px;margin-bottom:12px">Tipo de Ativação</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
-        <div class="plano-card selected" id="tipo-nova" onclick="selecionarTipoAtivacao('nova')">
-          <div style="font-size:20px;margin-bottom:6px">📱</div>
-          <div class="pnome">Linha Nova</div>
-          <div class="pcomissao">Número gerado pela operadora</div>
-        </div>
-        <div class="plano-card" id="tipo-portabilidade" onclick="selecionarTipoAtivacao('portabilidade')">
-          <div style="font-size:20px;margin-bottom:6px">🔄</div>
-          <div class="pnome">Portabilidade</div>
-          <div class="pcomissao">Manter número atual</div>
-        </div>
-      </div>
-      <div id="port-numero-wrap" style="display:none;margin-bottom:16px">
-        <div class="field">
-          <label>Número a Portar (com DDD)</label>
-          <input type="text" id="port-numero" placeholder="Ex: 5581999990000" maxlength="13">
-        </div>
-      </div>
-    </div>
-    <button class="btn btn-primary" onclick="irParaCliente()" style="margin-top:8px">Continuar →</button>\`;
+    res.innerHTML =
+      '<div class="info-card" style="border-color:var(--accent)">' +
+        '<div class="info-row"><span class="k">ICCID</span><span class="v mono">' + iccid + '</span></div>' +
+        '<div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">Disponível para ativação</span></span></div>' +
+      '</div>' +
+      '<div style="margin-top:16px">' +
+        '<div class="section-title" style="font-size:13px;margin-bottom:12px">Tipo de Ativação</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">' +
+          '<div class="plano-card selected" id="tipo-nova" onclick="selecionarTipoAtivacao(\'nova\')">' +
+            '<div style="font-size:20px;margin-bottom:6px">📱</div>' +
+            '<div class="pnome">Linha Nova</div>' +
+            '<div class="pcomissao">Número gerado pela operadora</div>' +
+          '</div>' +
+          '<div class="plano-card" id="tipo-portabilidade" onclick="selecionarTipoAtivacao(\'portabilidade\')">' +
+            '<div style="font-size:20px;margin-bottom:6px">🔄</div>' +
+            '<div class="pnome">Portabilidade</div>' +
+            '<div class="pcomissao">Manter número atual</div>' +
+          '</div>' +
+        '</div>' +
+        '<div id="port-numero-wrap" style="display:none;margin-bottom:16px">' +
+          '<div class="field">' +
+            '<label>Número a Portar (com DDD)</label>' +
+            '<input type="text" id="port-numero" placeholder="Ex: 5581999990000" maxlength="13">' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<button class="btn btn-primary" onclick="irParaCliente()" style="margin-top:8px">Continuar →</button>';
   } catch(e) {
-    res.innerHTML = `<div class="info-card" style="border-color:var(--red)"><div class="info-row"><span class="k">Erro</span><span class="v" style="color:var(--red)">${e.message}</span></div></div>`;
+    res.innerHTML = '<div class="info-card" style="border-color:var(--red)"><div class="info-row"><span class="k">Erro</span><span class="v" style="color:var(--red)">' + e.message + '</span></div></div>';
   }
 }
 
