@@ -794,7 +794,7 @@ select option { background: var(--bg3); }
         <div class="form-row triple">
           <div class="field">
             <label>MSISDN (Número)</label>
-            <input type="text" id="calc-msisdn" placeholder="Ex: 5581999990000">
+            <input type="text" id="calc-msisdn" placeholder="Ex: 81999990000, 81988880000, 81977770000">
           </div>
           <div class="field">
             <label>Data Início</label>
@@ -833,7 +833,7 @@ select option { background: var(--bg3); }
             <button class="btn btn-secondary btn-sm" onclick="salvarComissoesCalculadas()">↓ Registrar no Sistema</button>
           </div>
           <table>
-            <thead><tr><th>Data</th><th>Tipo</th><th>Plano</th><th>Comissão</th><th>Status</th></tr></thead>
+            <thead><tr><th>Data</th><th>Tipo</th><th>Plano</th><th>Comissão</th><th colspan="2">Status</th></tr></thead>
             <tbody id="calc-tabela"></tbody>
           </table>
         </div>
@@ -844,6 +844,25 @@ select option { background: var(--bg3); }
 </div><!-- /app-screen -->
 
 <!-- ── MODAIS ──────────────────────────────────── -->
+<!-- Modal Atribuir Linha -->
+<div class="modal-overlay" id="modal-atribuir">
+  <div class="modal" style="width:480px">
+    <div class="modal-title">Atribuir Linha a Vendedor</div>
+    <div class="info-card" id="modal-atribuir-info" style="margin-bottom:20px"></div>
+    <div class="field" style="margin-bottom:16px">
+      <label>Vendedor</label>
+      <select id="atribuir-vendedor"></select>
+    </div>
+    <div style="background:var(--accent-dim);border:1px solid var(--accent);border-radius:var(--r);padding:12px;font-size:12px;color:var(--accent);margin-bottom:16px">
+      ✓ Registra ativação e todas as recargas retroativas com comissão<br>
+      ✓ Vincula ao vendedor para monitoramento automático futuro
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-atribuir')">Cancelar</button>
+      <button class="btn btn-primary" onclick="confirmarAtribuicao()">Atribuir e Registrar</button>
+    </div>
+  </div>
+</div>
 <!-- Modal Vendedor -->
 <div class="modal-overlay" id="modal-vendedor">
   <div class="modal">
@@ -1564,67 +1583,147 @@ async function calcularComissao(modo) {
   document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="5" class="loading">Consultando linha na Bora...</td></tr>';
 
   try {
-    const msisdnNorm = msisdn.startsWith('55') ? msisdn : '55' + msisdn;
+    const iniVal = document.getElementById('calc-inicio').value;
+    const fimVal = document.getElementById('calc-fim').value;
     const data = await api('POST', '/api/calculadora/simular', {
-      msisdn: msisdnNorm,
-      plano_id: planoOverride
+      msisdn,
+      plano_id: planoOverride,
+      data_inicio: modo === 'periodo' && iniVal ? iniVal : null,
+      data_fim: modo === 'periodo' && fimVal ? fimVal : null
     });
 
-    calcResultado = data.resultado || [];
-    const totalComissao = calcResultado.reduce((a, r) => a + r.comissao, 0);
-    const totalRecargas = calcResultado.filter(r => r.tipo === 'recarga').length;
-    const comissaoAtiv = calcResultado.find(r => r.tipo === 'ativacao')?.comissao || 0;
+    calcResultado = data.linhas || [];
+    const totalGeral = data.total_geral || 0;
+    const totalLinhas = calcResultado.length;
+    const totalRecargas = calcResultado.reduce((a, l) => a + (l.resultado||[]).filter(r => r.tipo === 'recarga').length, 0);
+    const totalErros = calcResultado.filter(l => l.erro).length;
 
-    const dataAtivFmt = data.data_ativacao ? new Date(data.data_ativacao).toLocaleDateString('pt-BR') : '—';
     document.getElementById('calc-stats').innerHTML =
-      '<div class="stat-card"><div class="stat-label">Número</div><div class="stat-value" style="font-size:16px">' + data.msisdn + '</div></div>' +
-      '<div class="stat-card blue"><div class="stat-label">Plano Atual</div><div class="stat-value" style="font-size:13px">' + (data.plano_atual_nome || '—') + '</div></div>' +
-      '<div class="stat-card"><div class="stat-label">Ativação</div><div class="stat-value" style="font-size:16px">' + dataAtivFmt + '</div></div>' +
-      '<div class="stat-card"><div class="stat-label">Status</div><div class="stat-value" style="font-size:14px">' + (data.status || '—') + '</div></div>' +
-      '<div class="stat-card yellow"><div class="stat-label">Recargas</div><div class="stat-value">' + totalRecargas + '</div></div>' +
-      '<div class="stat-card" style="border-color:var(--accent)"><div class="stat-label">Total Comissão</div><div class="stat-value">R$' + totalComissao.toFixed(2) + '</div></div>';
+      '<div class="stat-card blue"><div class="stat-label">Números Consultados</div><div class="stat-value">' + totalLinhas + '</div></div>' +
+      '<div class="stat-card yellow"><div class="stat-label">Total Recargas</div><div class="stat-value">' + totalRecargas + '</div></div>' +
+      (totalErros ? '<div class="stat-card red"><div class="stat-label">Erros</div><div class="stat-value">' + totalErros + '</div></div>' : '') +
+      '<div class="stat-card" style="border-color:var(--accent)"><div class="stat-label">Total Geral Comissão</div><div class="stat-value">R$' + totalGeral.toFixed(2) + '</div></div>';
 
     if (!calcResultado.length) {
-      document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="5" class="empty-state"><div class="ico">📋</div><p>Nenhum período encontrado</p></td></tr>';
+      document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="6" class="empty-state"><div class="ico">📋</div><p>Nenhum resultado</p></td></tr>';
       return;
     }
 
-    document.getElementById('calc-tabela').innerHTML = calcResultado.map(r => {
-      const dataFmt = r.data ? new Date(r.data).toLocaleDateString('pt-BR') : r.mes;
-      return '<tr>' +
-        '<td class="mono">' + dataFmt + '</td>' +
-        '<td><span class="badge ' + (r.tipo === 'ativacao' ? 'badge-green' : 'badge-blue') + '">' + r.tipo + '</span></td>' +
-        '<td>' + (r.plano_nome || '—') + '</td>' +
-        '<td class="currency">R$ ' + r.comissao.toFixed(2) + '</td>' +
-        '<td><span class="badge ' + (r.sem_config ? 'badge-red' : 'badge-green') + '">' + (r.sem_config ? 'Plano Sem Comissão' : 'R$ ' + r.comissao.toFixed(2)) + '</span></td>' +
-      '</tr>';
-    }).join('');
+    let rows = '';
+    for (const linha of calcResultado) {
+      if (linha.erro) {
+        rows += '<tr><td class="mono" colspan="6" style="color:var(--red)">' + linha.msisdn + ' — ' + linha.erro + '</td></tr>';
+        continue;
+      }
+      // Cabeçalho da linha
+      const msisdnEsc = linha.msisdn.replace(/'/g, "\'");
+      const nomeEsc = (linha.plano_atual_nome||'').replace(/'/g, "\'");
+      rows += '<tr style="background:var(--bg3)">' +
+        '<td colspan="5"><strong class="mono">' + linha.msisdn + '</strong> &nbsp;|&nbsp; ' +
+        linha.plano_atual_nome + ' &nbsp;|&nbsp; ' +
+        (linha.data_ativacao ? new Date(linha.data_ativacao).toLocaleDateString("pt-BR") : "—") + ' &nbsp;|&nbsp; ' +
+        '<span class="badge badge-green">' + (linha.status || "—") + '</span>' +
+        ' &nbsp;|&nbsp; <strong class="currency">Total: R$ ' + linha.total_comissao.toFixed(2) + '</strong>' +
+        '</td>' +
+        '<td><button class="btn btn-primary btn-sm" onclick="abrirModalAtribuir(' + JSON.stringify(linha) + ')">+ Atribuir</button></td>' +
+        '</tr>';
+      // Registros da linha
+      for (const r of linha.resultado) {
+        const dataFmt = r.data ? new Date(r.data).toLocaleDateString('pt-BR') : r.mes;
+        rows += '<tr>' +
+          '<td class="mono" style="padding-left:32px">' + dataFmt + '</td>' +
+          '<td><span class="badge ' + (r.tipo === 'ativacao' ? 'badge-green' : 'badge-blue') + '">' + r.tipo + '</span></td>' +
+          '<td>' + (r.plano_nome || '—') + '</td>' +
+          '<td class="currency">R$ ' + r.comissao.toFixed(2) + '</td>' +
+          '<td colspan="2"><span class="badge ' + (r.sem_config ? 'badge-red' : 'badge-green') + '">' + (r.sem_config ? 'Plano Sem Comissão' : 'Com Comissão') + '</span></td>' +
+        '</tr>';
+      }
+    }
+    document.getElementById('calc-tabela').innerHTML = rows;
 
   } catch(e) {
-    document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="5" style="color:var(--red);padding:20px">' + e.message + '</td></tr>';
+    document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="6" style="color:var(--red);padding:20px">' + e.message + '</td></tr>';
   }
 }
 
 async function salvarComissoesCalculadas() {
   if (!calcResultado.length) { toast('Calcule primeiro', 'error'); return; }
   if (!calcVendedorSelecionado) { toast('Selecione o vendedor', 'error'); return; }
+  let totalInseridas = 0;
   try {
-    const recargas = calcResultado
-      .filter(r => r.tipo === 'recarga' && r.comissao > 0)
-      .map(r => ({ periodo: r.mes + '-01', comissao: r.comissao }));
-    if (!recargas.length) { toast('Nenhuma recarga com comissão configurada', 'error'); return; }
-    const primeiro = calcResultado[0];
-    await api('POST', '/api/comissao/registrar-retroativo', {
-      msisdn: calcMsisdn,
-      vendedor_id: calcVendedorSelecionado,
-      plano_id: primeiro.plano_id,
-      plano_nome: primeiro.plano_nome,
-      recargas
-    });
-    toast(recargas.length + ' recargas registradas com sucesso');
+    for (const linha of calcResultado) {
+      if (linha.erro || !linha.resultado?.length) continue;
+      const recargas = linha.resultado
+        .filter(r => r.tipo === 'recarga' && r.comissao > 0)
+        .map(r => ({ periodo: (r.data || r.mes + '-01').substring(0,10), comissao: r.comissao }));
+      if (!recargas.length) continue;
+      const primeiro = linha.resultado[0];
+      const resp = await api('POST', '/api/comissao/registrar-retroativo', {
+        msisdn: linha.msisdn,
+        vendedor_id: calcVendedorSelecionado,
+        plano_id: primeiro.plano_id || null,
+        plano_nome: primeiro.plano_nome || linha.plano_atual_nome,
+        recargas
+      });
+      totalInseridas += resp.inseridas || 0;
+    }
+    toast(totalInseridas + ' recargas registradas com sucesso');
   } catch(e) { toast(e.message, 'error'); }
 }
 
+
+// ── ATRIBUIR LINHA ────────────────────────────────────────────────────────────
+let _linhaParaAtribuir = null;
+
+async function abrirModalAtribuir(linha) {
+  _linhaParaAtribuir = linha;
+  const dataFmt = linha.data_ativacao ? new Date(linha.data_ativacao).toLocaleDateString('pt-BR') : '—';
+  document.getElementById('modal-atribuir-info').innerHTML =
+    '<div class="info-row"><span class="k">Número</span><span class="v mono">' + linha.msisdn + '</span></div>' +
+    '<div class="info-row"><span class="k">Plano Atual</span><span class="v">' + (linha.plano_atual_nome||'—') + '</span></div>' +
+    '<div class="info-row"><span class="k">Ativação</span><span class="v">' + dataFmt + '</span></div>' +
+    '<div class="info-row"><span class="k">Recargas</span><span class="v">' + (linha.resultado||[]).filter(r=>r.tipo==='recarga').length + '</span></div>' +
+    '<div class="info-row"><span class="k">Total Comissão</span><span class="v currency">R$ ' + (linha.total_comissao||0).toFixed(2) + '</span></div>';
+
+  // Carrega vendedores
+  const selV = document.getElementById('atribuir-vendedor');
+  try {
+    if (state.user.role === 'admin') {
+      const vendedores = await api('GET', '/api/vendedores');
+      selV.innerHTML = '<option value="">Selecione...</option>' +
+        vendedores.map(v => '<option value="' + v.id + '">' + v.nome + '</option>').join('');
+    } else {
+      selV.innerHTML = '<option value="' + state.user.id + '">' + state.user.nome + '</option>';
+    }
+  } catch(e) { toast('Erro ao carregar vendedores','error'); return; }
+
+  document.getElementById('modal-atribuir').classList.add('open');
+}
+
+async function confirmarAtribuicao() {
+  const vendedorId = document.getElementById('atribuir-vendedor').value;
+  if (!vendedorId) { toast('Selecione o vendedor','error'); return; }
+  const linha = _linhaParaAtribuir;
+  try {
+    // Registra todas as transações retroativas (ativação + recargas)
+    const todasTransacoes = (linha.resultado||[]).filter(r => r.comissao > 0);
+    const recargas = todasTransacoes.map(r => ({
+      periodo: (r.data || r.mes + '-01').substring(0,10),
+      comissao: r.comissao,
+      tipo: r.tipo,
+      plano_nome: r.plano_nome
+    }));
+    await api('POST', '/api/comissao/registrar-retroativo', {
+      msisdn: linha.msisdn,
+      vendedor_id: vendedorId,
+      plano_id: null,
+      plano_nome: linha.plano_atual_nome,
+      recargas
+    });
+    fecharModal('modal-atribuir');
+    toast('Linha ' + linha.msisdn + ' atribuída e recargas registradas!');
+  } catch(e) { toast(e.message,'error'); }
+}
 
 function copiarPix() {
   if (window._pixCode) {

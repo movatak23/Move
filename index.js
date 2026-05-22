@@ -442,27 +442,17 @@ app.get('/api/bora/historic/:msisdn', authMiddleware, async (req, res) => {
 // ─── Calculadora: simula recargas por período com /details ────────────────────
 app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
   try {
-    const { msisdn, plano_id } = req.body;
+    const { msisdn, plano_id, data_inicio, data_fim } = req.body;
 
-    // Normaliza MSISDN — adiciona DDI 55 se necessário
-    const msisdnNorm = msisdn.startsWith('55') ? msisdn : '55' + msisdn;
+    // Suporte a múltiplos números separados por vírgula
+    const numeros = msisdn.split(',')
+      .map(n => n.trim())
+      .filter(n => n.length >= 8)
+      .map(n => n.startsWith('55') ? n : '55' + n);
 
-    // Busca detalhes reais da linha na Bora
-    const details = await boraGet(`/api/Subscription/${msisdnNorm}/details`);
+    if (!numeros.length) throw new Error('Nenhum número válido informado');
 
-    // Campos básicos
-    const dataAtivacao = details?.activationDate || null;
-    const statusLinha  = details?.status || '—';
-    if (!dataAtivacao) throw new Error('Data de ativação não encontrada na Bora');
-
-    // plan é um array com histórico real de recargas
-    const planArray = Array.isArray(details?.plan) ? details.plan : [];
-
-    // Plano mais recente = último do array
-    const planoRecente = planArray.length ? planArray[planArray.length - 1] : null;
-    const planoAtualNome = planoRecente?.name || 'Sem plano';
-
-    // Busca comissões configuradas — indexa por ID e por nome (uppercase) para fallback
+    // Busca comissões uma vez só
     const { rows: planosComissao } = await pool.query('SELECT * FROM planos_comissao');
     const mapaComissaoId = {};
     const mapaComissaoNome = {};
@@ -472,51 +462,85 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
     });
 
     function buscarComissao(planId, planNome) {
-      // Tenta por ID primeiro, depois por nome
       return mapaComissaoId[String(planId || '')] ||
              mapaComissaoNome[String(planNome || '').toUpperCase().trim()] ||
              null;
     }
 
-    // Monta resultado usando o histórico real do array plan
-    const resultado = [];
-    const mesAtiv = dataAtivacao.substring(0, 7);
+    // Processa cada número
+    const linhas = [];
+    let totalGeralComissao = 0;
 
-    // Primeiro registro = ativação
-    const primeiroPlano = planArray.length ? planArray[0] : null;
-    const comissaoAtiv = buscarComissao(primeiroPlano?.planId, primeiroPlano?.name);
-    resultado.push({
-      mes: mesAtiv,
-      tipo: 'ativacao',
-      plano_id: primeiroPlano?.planId || null,
-      plano_nome: primeiroPlano?.name || 'Plano ativação',
-      data: dataAtivacao,
-      comissao: parseFloat(comissaoAtiv?.comissao_ativacao || 0),
-      sem_config: !comissaoAtiv
-    });
+    for (const msisdnNorm of numeros) {
+      try {
+        const details = await boraGet(`/api/Subscription/${msisdnNorm}/details`);
+        const dataAtivacao = details?.activationDate || null;
+        const statusLinha  = details?.status || '—';
+        let planArray = Array.isArray(details?.plan) ? details.plan : [];
 
-    // Demais registros = recargas
-    for (let i = 1; i < planArray.length; i++) {
-      const p = planArray[i];
-      const comissaoRec = buscarComissao(p.planId, p.name);
-      resultado.push({
-        mes: (p.createdAt || '').substring(0, 7),
-        tipo: 'recarga',
-        plano_id: p.planId || null,
-        plano_nome: p.name || '—',
-        data: p.createdAt || null,
-        comissao: parseFloat(comissaoRec?.comissao_recarga || 0),
-        sem_config: !comissaoRec
-      });
+        // Filtro por período se informado
+        if (data_inicio || data_fim) {
+          const ini = data_inicio ? new Date(data_inicio) : null;
+          const fim = data_fim ? new Date(data_fim + 'T23:59:59') : null;
+          planArray = planArray.filter(p => {
+            const d = new Date(p.createdAt || p.expiration || '');
+            if (ini && d < ini) return false;
+            if (fim && d > fim) return false;
+            return true;
+          });
+        }
+        const planoRecente = planArray.length ? planArray[planArray.length - 1] : null;
+        const planoAtualNome = planoRecente?.name || 'Sem plano';
+
+        const resultado = [];
+
+        if (dataAtivacao) {
+          const primeiroPlano = planArray[0] || null;
+          const comissaoAtiv = buscarComissao(primeiroPlano?.planId, primeiroPlano?.name);
+          resultado.push({
+            mes: dataAtivacao.substring(0, 7),
+            tipo: 'ativacao',
+            plano_nome: primeiroPlano?.name || '—',
+            data: dataAtivacao,
+            comissao: parseFloat(comissaoAtiv?.comissao_ativacao || 0),
+            sem_config: !comissaoAtiv
+          });
+        }
+
+        for (let i = 1; i < planArray.length; i++) {
+          const p = planArray[i];
+          const comissaoRec = buscarComissao(p.planId, p.name);
+          resultado.push({
+            mes: (p.createdAt || '').substring(0, 7),
+            tipo: 'recarga',
+            plano_nome: p.name || '—',
+            data: p.createdAt || null,
+            comissao: parseFloat(comissaoRec?.comissao_recarga || 0),
+            sem_config: !comissaoRec
+          });
+        }
+
+        const totalLinha = resultado.reduce((a, r) => a + r.comissao, 0);
+        totalGeralComissao += totalLinha;
+
+        linhas.push({
+          msisdn: msisdnNorm,
+          plano_atual_nome: planoAtualNome,
+          data_ativacao: dataAtivacao,
+          status: statusLinha,
+          total_comissao: totalLinha,
+          resultado
+        });
+      } catch (err) {
+        linhas.push({
+          msisdn: msisdnNorm,
+          erro: err.response?.data?.detail || err.message,
+          resultado: []
+        });
+      }
     }
 
-    res.json({
-      msisdn: msisdnNorm,
-      plano_atual_nome: planoAtualNome,
-      data_ativacao: dataAtivacao,
-      status: statusLinha,
-      resultado
-    });
+    res.json({ linhas, total_geral: totalGeralComissao });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
