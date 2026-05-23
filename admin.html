@@ -2074,6 +2074,84 @@ async function editarVendedor(id, nome, email, tel, ativo) {
 }
 
 // ── CONSULTA DE LINHA ─────────────────────────────────────────────────────────
+function traduzirStatus(st) {
+  const s = (st || '').toUpperCase();
+  if (s.includes('ACTIVE') || s.includes('ATIVA')) return { label: 'ATIVO', cor: 'badge-green' };
+  if (s.includes('GRACE') || s.includes('SUSPEND') || s.includes('TEMPORAR')) return { label: 'BLOQUEADO', cor: 'badge-red' };
+  if (s.includes('CANCEL') || s.includes('INATIV') || s.includes('TERMINAT')) return { label: 'CANCELADO', cor: 'badge-red' };
+  if (s.includes('PEND')) return { label: 'PENDENTE', cor: 'badge-yellow' };
+  return { label: st || '—', cor: 'badge-yellow' };
+}
+
+function renderGraficoConsumo(cons, msisdn) {
+  if (!cons) return '<div style="color:var(--text3);font-size:13px;padding:8px">Consumo não disponível</div>';
+  
+  const dados = cons.data || {};
+  const voz = cons.voice || {};
+  const sms = cons.sms || {};
+
+  function pct(used, total) { return total ? Math.min((used/total)*100,100) : 0; }
+  function fmtMB(v) { 
+    if (!v) return '0 MB';
+    if (v >= 1024) return (v/1024).toFixed(2)+' GB';
+    return parseFloat(v).toFixed(1)+' MB';
+  }
+
+  const itens = [
+    {
+      label: 'Dados Móveis 4G',
+      icon: '📶',
+      cor: '#00bfff',
+      used: dados.used || 0,
+      total: dados.total || 0,
+      fmtUsed: fmtMB(dados.used),
+      fmtTotal: fmtMB(dados.total),
+      pct: pct(dados.used, dados.total)
+    },
+    {
+      label: 'Ligações',
+      icon: '📞',
+      cor: '#00e5a0',
+      used: voz.used || 0,
+      total: voz.total || 0,
+      fmtUsed: (voz.used||0)+' min',
+      fmtTotal: (voz.total||0)+' min',
+      pct: pct(voz.used, voz.total)
+    },
+    {
+      label: 'SMS',
+      icon: '💬',
+      cor: '#f5b041',
+      used: sms.used || 0,
+      total: sms.total || 0,
+      fmtUsed: (sms.used||0)+' SMS',
+      fmtTotal: (sms.total||0)+' SMS',
+      pct: pct(sms.used, sms.total)
+    }
+  ];
+
+  return `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+      ${itens.map(it => `
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
+            <span style="font-size:16px">${it.icon}</span>
+            <span style="color:var(--text);font-size:12px;font-weight:600">${it.label}</span>
+          </div>
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px">Disponível</div>
+          <div style="font-size:16px;font-weight:700;color:${it.cor};margin-bottom:10px">${it.fmtTotal}</div>
+          <div style="background:var(--bg4);border-radius:4px;height:8px;overflow:hidden;margin-bottom:6px">
+            <div style="height:8px;border-radius:4px;background:${it.cor};width:${it.pct}%;transition:width 0.5s"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text3)">
+            <span>Usado: ${it.fmtUsed}</span>
+            <span>${it.pct.toFixed(0)}%</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
+}
+
 async function realizarConsulta() {
   const tipo = document.getElementById('consulta-tipo').value;
   const valor = document.getElementById('consulta-valor').value.trim();
@@ -2084,11 +2162,20 @@ async function realizarConsulta() {
     const data = await api('GET', `/api/consulta/linha?tipo=${tipo}&valor=${encodeURIComponent(valor.replace(/\D/g,'') || valor)}`);
     const linhas = data.linhas || [];
     if (!linhas.length) { res.innerHTML = '<div class="empty-state"><div class="ico">🔍</div><p>Nenhuma linha encontrada</p></div>'; return; }
-    res.innerHTML = linhas.map(l => renderLinhaConsulta(l)).join('');
+    // Busca consumo de cada linha em paralelo
+    const resultados = await Promise.all(linhas.map(async l => {
+      let cons = null;
+      const ms = l.msisdn;
+      if (ms) {
+        try { cons = await api('GET', `/api/bora/consumo/${ms}`); } catch {}
+      }
+      return { linha: l, consumo: cons };
+    }));
+    res.innerHTML = resultados.map(({ linha, consumo }) => renderLinhaConsulta(linha, consumo)).join('');
   } catch(e) { res.innerHTML = `<div class="section-card" style="border-color:var(--red);color:var(--red)">${e.message}</div>`; }
 }
 
-function renderLinhaConsulta(l) {
+function renderLinhaConsulta(l, cons) {
   if (!l || l.erro) return `<div class="section-card" style="border-color:var(--red);color:var(--red)">${l?.erro || 'Erro ao carregar linha'}</div>`;
   const plano = l.plan?.[l.plan.length-1];
   const venc = plano?.expiration ? new Date(plano.expiration).toLocaleDateString('pt-BR') : '—';
@@ -2135,7 +2222,11 @@ function renderLinhaConsulta(l) {
       <div class="info-row"><span class="k">Nome</span><span class="v">${l.name||'—'}</span></div>
     </div>
 
-    <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+    <div style="margin-top:16px">
+      <div style="font-weight:700;color:var(--text);margin-bottom:10px;font-size:13px">CONSUMO ATUAL</div>
+      ${renderGraficoConsumo(cons, l.msisdn)}
+    </div>
+    <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
       <button class="btn btn-primary btn-sm" onclick="navegarParaRecarga('${l.msisdn}')">⚡ Recarregar</button>
       <button class="btn btn-secondary btn-sm" onclick="navegarParaPortabilidade('${l.document}')">↔ Portabilidade</button>
     </div>
