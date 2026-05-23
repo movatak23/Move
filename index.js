@@ -960,6 +960,158 @@ app.post('/api/portabilidade/realizar', authMiddleware, async (req, res) => {
   }
 });
 
+
+// ─── PROMOÇÕES ────────────────────────────────────────────────────────────────
+app.get('/api/promocoes', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM promocoes WHERE ativo=true AND (validade IS NULL OR validade >= NOW()) ORDER BY criado_em DESC"
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/promocoes/todas', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM promocoes ORDER BY criado_em DESC");
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/promocoes', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { titulo, descricao, tipo, validade } = req.body;
+    const { rows } = await pool.query(
+      "INSERT INTO promocoes (titulo, descricao, tipo, validade) VALUES ($1,$2,$3,$4) RETURNING *",
+      [titulo, descricao, tipo || 'info', validade || null]
+    );
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/promocoes/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { titulo, descricao, tipo, validade, ativo } = req.body;
+    const { rows } = await pool.query(
+      "UPDATE promocoes SET titulo=$1, descricao=$2, tipo=$3, validade=$4, ativo=$5 WHERE id=$6 RETURNING *",
+      [titulo, descricao, tipo, validade || null, ativo, req.params.id]
+    );
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/promocoes/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    await pool.query("DELETE FROM promocoes WHERE id=$1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── RANKING ──────────────────────────────────────────────────────────────────
+app.get('/api/ranking', authMiddleware, async (req, res) => {
+  try {
+    const { periodo } = req.query; // 'hoje', 'semana', 'mes'
+    let filtro = '';
+    if (periodo === 'hoje') filtro = "AND DATE(t.data_transacao) = CURRENT_DATE";
+    else if (periodo === 'semana') filtro = "AND t.data_transacao >= NOW() - INTERVAL '7 days'";
+    else filtro = "AND DATE_TRUNC('month', t.data_transacao) = DATE_TRUNC('month', NOW())";
+
+    const { rows } = await pool.query(`
+      SELECT v.id, v.nome, v.email,
+        COUNT(DISTINCT CASE WHEN t.tipo='ativacao' THEN t.id END) as ativacoes,
+        COUNT(DISTINCT CASE WHEN t.tipo='recarga' THEN t.id END) as recargas,
+        COALESCE(SUM(t.comissao),0) as total_comissao,
+        COUNT(DISTINCT t.id) as total_transacoes
+      FROM vendedores v
+      LEFT JOIN transacoes t ON t.vendedor_id = v.id ${filtro}
+      WHERE v.role = 'vendedor' AND v.ativo = true
+      GROUP BY v.id, v.nome, v.email
+      ORDER BY total_transacoes DESC, total_comissao DESC
+    `);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── INADIMPLÊNCIA ────────────────────────────────────────────────────────────
+app.get('/api/inadimplencia', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Subscriber/billets/pending');
+    res.json(data);
+  } catch {
+    // Fallback: busca boletos pendentes de todas as linhas ativas
+    try {
+      const { rows: linhas } = await pool.query(
+        "SELECT DISTINCT documento_cliente FROM linhas WHERE status='ativa' AND documento_cliente IS NOT NULL LIMIT 50"
+      );
+      const resultados = [];
+      for (const l of linhas.slice(0,20)) {
+        try {
+          const boletos = await boraGet(`/api/Subscriber/${l.documento_cliente}/billets`);
+          if (Array.isArray(boletos) && boletos.length) {
+            resultados.push(...boletos.map(b => ({ ...b, documento: l.documento_cliente })));
+          }
+        } catch {}
+      }
+      res.json(resultados);
+    } catch (e) { res.status(500).json({ erro: e.message }); }
+  }
+});
+
+// ─── ALERTAS DE VENCIMENTO (cron diário) ─────────────────────────────────────
+cron.schedule('0 9 * * *', async () => {
+  console.log('[ALERTA] Verificando vencimentos...');
+  try {
+    const { rows: linhas } = await pool.query(`
+      SELECT l.*, v.nome as vendedor_nome, v.email as vendedor_email
+      FROM linhas l JOIN vendedores v ON v.id = l.vendedor_id
+      WHERE l.status = 'ativa' AND l.msisdn IS NOT NULL
+    `);
+    const hoje = new Date();
+    const em3dias = new Date(hoje); em3dias.setDate(hoje.getDate()+3);
+    for (const linha of linhas) {
+      try {
+        const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+        const planArray = Array.isArray(details?.plan) ? details.plan : [];
+        const ultimo = planArray[planArray.length-1];
+        if (!ultimo?.expiration) continue;
+        const venc = new Date(ultimo.expiration);
+        const diasRestantes = Math.ceil((venc-hoje)/(1000*60*60*24));
+        if (diasRestantes <= 3 && diasRestantes >= 0) {
+          // Registra alerta no banco
+          await pool.query(
+            `INSERT INTO alertas_vencimento (linha_id, vendedor_id, msisdn, dias_restantes, data_vencimento)
+             VALUES ($1,$2,$3,$4,$5) ON CONFLICT (linha_id, DATE(NOW())) DO NOTHING`,
+            [linha.id, linha.vendedor_id, linha.msisdn, diasRestantes, venc]
+          );
+          console.log(`[ALERTA] ${linha.msisdn} vence em ${diasRestantes} dias — vendedor: ${linha.vendedor_nome}`);
+        }
+      } catch {}
+    }
+  } catch (e) { console.error('[ALERTA] Erro:', e.message); }
+});
+
+app.get('/api/alertas/vencimento', authMiddleware, async (req, res) => {
+  try {
+    const vendedorId = req.user.role === 'admin' ? null : req.user.id;
+    const query = vendedorId
+      ? `SELECT * FROM alertas_vencimento WHERE vendedor_id=$1 AND data_alerta >= NOW()-INTERVAL '7 days' ORDER BY dias_restantes ASC`
+      : `SELECT av.*, v.nome as vendedor_nome FROM alertas_vencimento av JOIN vendedores v ON v.id=av.vendedor_id WHERE av.data_alerta >= NOW()-INTERVAL '7 days' ORDER BY av.dias_restantes ASC`;
+    const params = vendedorId ? [vendedorId] : [];
+    const { rows } = await pool.query(query, params);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Reenvio de boleto
+app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const data = await boraPost(`/api/Subscriber/billets/${req.params.billetId}/resend`, {});
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
 // ─── CRON — Polling de recargas via /details ─────────────────────────────────
 async function checarRecargas() {
   console.log(`[CRON] Iniciando polling — ${new Date().toISOString()}`);
