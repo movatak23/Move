@@ -849,6 +849,16 @@ app.get('/api/cliente/consumo/:msisdn', authCliente, async (req, res) => {
   }
 });
 
+// Consumo acessível por token admin/vendedor
+app.get('/api/bora/consumo/:msisdn', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscription/${req.params.msisdn}/consumption`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
 app.get('/api/cliente/planos-recarga/:msisdn', authCliente, async (req, res) => {
   try {
     const data = await boraGet('/api/Plan/Recharge', { msisdn: req.params.msisdn });
