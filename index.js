@@ -1102,6 +1102,106 @@ app.get('/api/alertas/vencimento', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+
+// ─── BLOQUEIO / DESBLOQUEIO ───────────────────────────────────────────────────
+app.post('/api/bora/linha/:msisdn/bloquear', authMiddleware, async (req, res) => {
+  try {
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    const accountId = details?.accountId;
+    if (!accountId) throw new Error('accountId não encontrado para esta linha');
+    const data = await boraPost(`/api/Subscription/temporarily-suspend/${accountId}`, {});
+    // Atualiza status no banco
+    await pool.query("UPDATE linhas SET status='bloqueada' WHERE msisdn=$1", [req.params.msisdn]);
+    res.json({ ok: true, data });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/bora/linha/:msisdn/desbloquear', authMiddleware, async (req, res) => {
+  try {
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    const accountId = details?.accountId;
+    if (!accountId) throw new Error('accountId não encontrado para esta linha');
+    const data = await boraPost(`/api/Subscription/release/${accountId}`, {});
+    await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [req.params.msisdn]);
+    res.json({ ok: true, data });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── TROCAR PLANO ─────────────────────────────────────────────────────────────
+app.get('/api/bora/trocar-plano/:msisdn', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscription/changeplan/${req.params.msisdn}`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraPost('/api/Subscription/changeplan', req.body);
+    // Atualiza plano no banco se tiver MSISDN
+    if (req.body.msisdn && req.body.planId) {
+      await pool.query(
+        "UPDATE linhas SET plano_id=$1 WHERE msisdn=$2",
+        [req.body.planId, req.body.msisdn]
+      );
+    }
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── REATIVAÇÃO DE LINHA ──────────────────────────────────────────────────────
+app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscription/reactivation/${req.params.msisdn}`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraPost('/api/Subscription/reactivation', req.body);
+    if (req.body.msisdn) {
+      await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [req.body.msisdn]);
+    }
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── RELATÓRIO DE CHURN ───────────────────────────────────────────────────────
+app.get('/api/relatorio/churn', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { periodo } = req.query; // 30, 60, 90
+    const dias = parseInt(periodo) || 30;
+    const { rows } = await pool.query(`
+      SELECT l.*, v.nome as vendedor_nome,
+        EXTRACT(DAY FROM NOW() - l.data_ativacao) as dias_ativo
+      FROM linhas l
+      LEFT JOIN vendedores v ON v.id = l.vendedor_id
+      WHERE l.status IN ('cancelada','suspensa','bloqueada','cancelled','suspended')
+        AND l.data_ativacao >= NOW() - INTERVAL '${dias} days'
+      ORDER BY l.data_ativacao DESC
+    `);
+    // Complementa com dados da Bora se tiver msisdn
+    res.json({
+      total: rows.length,
+      periodo: dias,
+      linhas: rows
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Reenvio de boleto
 app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, adminOnly, async (req, res) => {
   try {
