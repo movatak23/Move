@@ -2718,6 +2718,41 @@ async function verificarAlertaEsim() {
   } catch {}
 }
 
+// ── CHURN ─────────────────────────────────────────────────────────────────────
+async function loadChurn(dias = 60) {
+  ['30','60','90'].forEach(d => {
+    document.getElementById('churn-'+d)?.classList.remove('btn-primary');
+    document.getElementById('churn-'+d)?.classList.add('btn-secondary');
+  });
+  document.getElementById('churn-'+dias)?.classList.add('btn-primary');
+  document.getElementById('churn-'+dias)?.classList.remove('btn-secondary');
+
+  document.getElementById('tbl-churn').innerHTML = '<tr><td colspan="7" class="loading">Carregando...</td></tr>';
+  try {
+    const data = await api('GET', `/api/relatorio/churn?periodo=${dias}`);
+    const linhas = data.linhas || [];
+
+    document.getElementById('churn-stats').innerHTML =
+      '<div class="stat-card red"><div class="stat-label">Total Churn</div><div class="stat-value" style="color:var(--red)">' + data.total + '</div></div>' +
+      '<div class="stat-card"><div class="stat-label">Período</div><div class="stat-value">' + dias + ' dias</div></div>';
+
+    const tbody = document.getElementById('tbl-churn');
+    if (!linhas.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><div class="ico">✓</div><p>Nenhuma linha cancelada no período</p></td></tr>';
+      return;
+    }
+    tbody.innerHTML = linhas.map(l => `<tr>
+      <td class="mono">${l.msisdn || '—'}</td>
+      <td>${l.nome_cliente || '—'}</td>
+      <td>${l.vendedor_nome || '—'}</td>
+      <td>${l.plano_nome || '—'}</td>
+      <td><span class="badge badge-red">${l.status || '—'}</span></td>
+      <td>${l.dias_ativo ?? '—'}</td>
+      <td><button class="btn btn-secondary btn-sm" onclick="reativarLinha('${l.msisdn}')">▶ Reativar</button></td>
+    </tr>`).join('');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 // ── AUTO LOGIN ────────────────────────────────────────────────────────────────
 (function() {
   const t = localStorage.getItem('bv_token');
