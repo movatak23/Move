@@ -147,7 +147,7 @@ app.post('/api/vendedores', authMiddleware, adminOnly, async (req, res) => {
 
 app.put('/api/vendedores/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { nome, telefone, ativo, senha } = req.body;
+    const { nome, telefone, ativo, senha, permissoes } = req.body;
     if (senha) {
       const hash = await bcrypt.hash(senha, 10);
       await pool.query('UPDATE vendedores SET nome=$1, telefone=$2, ativo=$3, senha_hash=$4 WHERE id=$5',
@@ -156,10 +156,34 @@ app.put('/api/vendedores/:id', authMiddleware, adminOnly, async (req, res) => {
       await pool.query('UPDATE vendedores SET nome=$1, telefone=$2, ativo=$3 WHERE id=$4',
         [nome, telefone, ativo, req.params.id]);
     }
+    // Salva permissões
+    if (permissoes) {
+      await pool.query('DELETE FROM vendedor_permissoes WHERE vendedor_id=$1', [req.params.id]);
+      for (const perm of permissoes) {
+        await pool.query('INSERT INTO vendedor_permissoes (vendedor_id, permissao) VALUES ($1,$2)', [req.params.id, perm]);
+      }
+    }
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
+});
+
+// Busca permissões de um vendedor
+app.get('/api/vendedores/:id/permissoes', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT permissao FROM vendedor_permissoes WHERE vendedor_id=$1', [req.params.id]);
+    res.json(rows.map(r => r.permissao));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Verifica permissão do usuário logado
+app.get('/api/minhas-permissoes', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role === 'admin') return res.json(['consulta','recarga','portabilidade','boleto_combado','troca_plano']);
+    const { rows } = await pool.query('SELECT permissao FROM vendedor_permissoes WHERE vendedor_id=$1', [req.user.id]);
+    res.json(rows.map(r => r.permissao));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // ─── PLANOS COMISSÃO (admin) ──────────────────────────────────────────────────
@@ -863,6 +887,64 @@ app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
       pix: pixData ? { code: pixData.code, qrCodeUrl: pixData.qrCodeUrl } : null,
       billet: pagamentoResp?.billet ? { url: pagamentoResp.billet.url, barcode: pagamentoResp.billet.digitableLine || pagamentoResp.billet.barCode } : null
     });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+
+// ─── CONSULTA DE LINHA ────────────────────────────────────────────────────────
+app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
+  try {
+    const { tipo, valor } = req.query;
+    // Vendedor só vê linhas da própria carteira
+    if (req.user.role !== 'admin') {
+      const { rows: carteira } = await pool.query(
+        'SELECT * FROM linhas WHERE vendedor_id=$1', [req.user.id]
+      );
+      // Filtra pela carteira
+      const linha = carteira.find(l => 
+        l.msisdn === valor || l.iccid === valor || 
+        l.documento_cliente === valor.replace(/\D/g,'')
+      );
+      if (!linha) return res.status(403).json({ erro: 'Linha não encontrada na sua carteira' });
+      const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+      return res.json({ linhas: [details] });
+    }
+    // Admin busca qualquer linha
+    let endpoint;
+    if (tipo === 'cpf') endpoint = `/api/Subscription/${valor.replace(/\D/g,'')}`;
+    else endpoint = `/api/Subscription/${valor}/details`;
+    const data = await boraGet(endpoint);
+    const lista = Array.isArray(data) ? data : [data];
+    // Busca detalhes de cada linha
+    const detalhes = await Promise.all(lista.slice(0,10).map(async s => {
+      try {
+        const ms = s.msisdn || s.phoneNumber || s.number;
+        if (!ms || s.activationDate) return s;
+        return await boraGet(`/api/Subscription/${ms}/details`);
+      } catch { return s; }
+    }));
+    res.json({ linhas: detalhes });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── PORTABILIDADE ────────────────────────────────────────────────────────────
+app.get('/api/portabilidade/lista', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Portability/List');
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/portabilidade/realizar', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraPost('/api/Portability', req.body);
+    res.json(data);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
