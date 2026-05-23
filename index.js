@@ -769,7 +769,24 @@ function authCliente(req, res, next) {
 
 app.get('/api/cliente/linha/:cpf', authCliente, async (req, res) => {
   try {
-    const details = await boraGet(`/api/Subscription/${req.params.cpf}/details`);
+    const cpf = req.params.cpf.replace(/\D/g, '');
+
+    // 1. Busca subscriber pelo CPF para obter MSISDN
+    const subscriber = await boraGet(`/api/Subscriber/${cpf}/document`);
+    if (!subscriber) throw new Error('Subscriber não encontrado');
+
+    // 2. Busca linhas do subscriber pelo documento
+    const linhas = await boraGet(`/api/Subscription/${cpf}`);
+    const lista = Array.isArray(linhas) ? linhas : (linhas?.subscriptions || linhas?.items || [linhas]);
+    if (!lista.length) throw new Error('Nenhuma linha encontrada');
+
+    // 3. Pega a primeira linha ativa
+    const primeiraLinha = lista[0];
+    const identificador = primeiraLinha?.msisdn || primeiraLinha?.iccid || primeiraLinha?.identifier;
+    if (!identificador) throw new Error('Identificador da linha não encontrado');
+
+    // 4. Busca detalhes completos
+    const details = await boraGet(`/api/Subscription/${identificador}/details`);
     res.json({ linha: details });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
