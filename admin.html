@@ -551,6 +551,7 @@ select option { background: var(--bg3); }
 
     <!-- ── DASHBOARD ADMIN ──────────────────── -->
     <div class="page" id="page-dashboard">
+      <div id="banner-promocoes" style="display:none;margin:0 0 20px 0"></div>
       <div class="page-header">
         <div>
           <div class="page-title">Dashboard</div>
@@ -757,6 +758,7 @@ select option { background: var(--bg3); }
 
     <!-- ── MEU PAINEL (vendedor) ─────────────── -->
     <div class="page" id="page-meu-painel">
+      <div id="banner-promocoes" style="display:none;margin:0 0 20px 0"></div>
       <div class="page-header">
         <div>
           <div class="page-title">Meu Painel</div>
@@ -942,6 +944,43 @@ select option { background: var(--bg3); }
       </div>
     </div>
 
+
+    <!-- ── RANKING ───────────────────────── -->
+    <div class="page" id="page-ranking">
+      <div class="page-header">
+        <div><div class="page-title">🏆 Ranking de Vendedores</div><div class="page-sub">Performance em tempo real</div></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-secondary btn-sm" onclick="loadRanking('hoje')" id="rank-hoje">Hoje</button>
+          <button class="btn btn-secondary btn-sm" onclick="loadRanking('semana')" id="rank-semana">7 dias</button>
+          <button class="btn btn-primary btn-sm" onclick="loadRanking('mes')" id="rank-mes">Este mês</button>
+        </div>
+      </div>
+      <div id="ranking-lista"></div>
+    </div>
+
+    <!-- ── INADIMPLÊNCIA ──────────────────── -->
+    <div class="page" id="page-inadimplencia">
+      <div class="page-header">
+        <div><div class="page-title">⚠ Inadimplência</div><div class="page-sub">Boletos e PIX pendentes</div></div>
+        <button class="btn btn-secondary" onclick="loadInadimplencia()">↻ Atualizar</button>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Cliente</th><th>Documento</th><th>Valor</th><th>Vencimento</th><th>Status</th><th>Ações</th></tr></thead>
+          <tbody id="tbl-inadimplencia"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── PROMOÇÕES (ADMIN) ───────────────── -->
+    <div class="page" id="page-promocoes-admin">
+      <div class="page-header">
+        <div><div class="page-title">🎯 Promoções</div><div class="page-sub">Benefícios e comunicados para vendedores</div></div>
+        <button class="btn btn-primary" onclick="abrirModalPromocao()">+ Nova Promoção</button>
+      </div>
+      <div id="promocoes-lista-admin"></div>
+    </div>
+
   </div><!-- /main-content -->
 </div><!-- /app-screen -->
 
@@ -1055,6 +1094,35 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- Modal Promoção -->
+<div class="modal-overlay" id="modal-promocao">
+  <div class="modal" style="width:520px">
+    <div class="modal-title" id="modal-prom-title">Nova Promoção</div>
+    <div class="form-row single">
+      <div class="field"><label>Título</label><input type="text" id="prom-titulo" placeholder="Ex: Comissão dobrada em junho!"></div>
+    </div>
+    <div class="form-row single">
+      <div class="field"><label>Descrição</label><textarea id="prom-descricao" rows="4" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 14px;color:var(--text);font-family:var(--sans);font-size:13px;resize:vertical" placeholder="Detalhe os benefícios, regras e período..."></textarea></div>
+    </div>
+    <div class="form-row">
+      <div class="field">
+        <label>Tipo</label>
+        <select id="prom-tipo">
+          <option value="info">ℹ Informação</option>
+          <option value="success">🎯 Promoção</option>
+          <option value="warning">⚡ Urgente</option>
+          <option value="meta">🏆 Meta</option>
+        </select>
+      </div>
+      <div class="field"><label>Válido até (opcional)</label><input type="date" id="prom-validade"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-promocao')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarPromocao()">Publicar</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -1130,6 +1198,7 @@ async function iniciarApp() {
     loadVendedores();
     loadPlanosComissao();
     setTimeout(verificarAlertaEsim, 2000);
+    setTimeout(loadPromocoes, 1000);
   } else {
     navegarPara('meu-painel');
     loadMeuPainel();
@@ -1155,6 +1224,9 @@ function construirNav() {
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { page: 'esim', icon: '◈', label: 'E-SIM' },
     { section: 'Ferramentas' },
+    { page: 'ranking', icon: '🏆', label: 'Ranking' },
+    { page: 'inadimplencia', icon: '⚠', label: 'Inadimplência' },
+    { page: 'promocoes-admin', icon: '🎯', label: 'Promoções' },
     { page: 'consulta', icon: '🔍', label: 'Consultar Linha' },
     { page: 'portabilidade', icon: '↔', label: 'Portabilidade' },
   ] : [
@@ -1163,6 +1235,7 @@ function construirNav() {
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { section: 'Ferramentas' },
+    { page: 'ranking', icon: '🏆', label: 'Ranking' },
     { page: 'consulta', icon: '🔍', label: 'Consultar Linha', perm: 'consulta' },
     { page: 'portabilidade', icon: '↔', label: 'Portabilidade', perm: 'portabilidade' },
   ];
@@ -1184,6 +1257,9 @@ function navegarPara(page) {
   if (page === 'calculadora') initCalculadora();
   if (page === 'esim') loadEsim();
   if (page === 'portabilidade') loadPortabilidade();
+  if (page === 'ranking') loadRanking('mes');
+  if (page === 'inadimplencia') loadInadimplencia();
+  if (page === 'promocoes-admin') loadPromocoesAdmin();
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -2286,6 +2362,193 @@ async function realizarPortabilidade() {
     toast('Portabilidade solicitada com sucesso');
     fecharModal('modal-portabilidade');
     loadPortabilidade();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+
+
+// ── PROMOÇÕES ─────────────────────────────────────────────────────────────────
+let editPromoId = null;
+
+async function loadPromocoes() {
+  try {
+    const promos = await api('GET', '/api/promocoes');
+    const banner = document.getElementById('banner-promocoes');
+    if (!banner) return;
+    if (!promos.length) { banner.style.display='none'; return; }
+    banner.style.display = 'block';
+    banner.innerHTML = promos.map(p => {
+      const cores = {
+        info: { bg:'var(--blue-dim)', border:'var(--blue)', icon:'ℹ', cor:'var(--blue)' },
+        success: { bg:'var(--accent-dim2)', border:'var(--accent)', icon:'🎯', cor:'var(--accent)' },
+        warning: { bg:'var(--yellow-dim)', border:'var(--yellow)', icon:'⚡', cor:'var(--yellow)' },
+        meta: { bg:'rgba(155,89,182,0.12)', border:'#9b59b6', icon:'🏆', cor:'#9b59b6' },
+      };
+      const c = cores[p.tipo] || cores.info;
+      const venc = p.validade ? ' · Válido até '+new Date(p.validade).toLocaleDateString('pt-BR') : '';
+      return `<div style="background:${c.bg};border:1px solid ${c.border};border-radius:var(--r);padding:14px 18px;margin-bottom:8px;display:flex;gap:14px;align-items:flex-start">
+        <span style="font-size:22px;flex-shrink:0">${c.icon}</span>
+        <div style="flex:1">
+          <div style="color:${c.cor};font-weight:700;font-size:14px;margin-bottom:3px">${p.titulo}</div>
+          <div style="color:var(--text);font-size:13px;line-height:1.5">${p.descricao}</div>
+          ${p.validade ? `<div style="color:var(--text3);font-size:11px;margin-top:4px">${venc}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
+async function loadPromocoesAdmin() {
+  try {
+    const promos = await api('GET', '/api/promocoes/todas');
+    const lista = document.getElementById('promocoes-lista-admin');
+    if (!promos.length) {
+      lista.innerHTML = '<div class="empty-state"><div class="ico">🎯</div><p>Nenhuma promoção criada</p></div>';
+      return;
+    }
+    lista.innerHTML = promos.map(p => {
+      const cores = { info:'badge-blue', success:'badge-green', warning:'badge-yellow', meta:'badge-green' };
+      const icons = { info:'ℹ', success:'🎯', warning:'⚡', meta:'🏆' };
+      const venc = p.validade ? new Date(p.validade).toLocaleDateString('pt-BR') : 'Sem prazo';
+      return `<div class="section-card" style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+          <div style="display:flex;gap:10px;align-items:center">
+            <span style="font-size:20px">${icons[p.tipo]||'ℹ'}</span>
+            <div>
+              <div style="font-weight:700;font-size:15px;color:var(--text)">${p.titulo}</div>
+              <div style="font-size:11px;color:var(--text3)">Válido até: ${venc} · <span class="badge ${p.ativo?'badge-green':'badge-red'}">${p.ativo?'Ativo':'Inativo'}</span></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary btn-sm" onclick="editarPromocao(${JSON.stringify(p).replace(/"/g,'&quot;')})">Editar</button>
+            <button class="btn btn-danger btn-sm" onclick="deletarPromocao(${p.id})">Excluir</button>
+          </div>
+        </div>
+        <div style="color:var(--text2);font-size:13px;line-height:1.6">${p.descricao}</div>
+      </div>`;
+    }).join('');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function abrirModalPromocao() {
+  editPromoId = null;
+  document.getElementById('modal-prom-title').textContent = 'Nova Promoção';
+  document.getElementById('prom-titulo').value = '';
+  document.getElementById('prom-descricao').value = '';
+  document.getElementById('prom-tipo').value = 'success';
+  document.getElementById('prom-validade').value = '';
+  document.getElementById('modal-promocao').classList.add('open');
+}
+
+function editarPromocao(p) {
+  editPromoId = p.id;
+  document.getElementById('modal-prom-title').textContent = 'Editar Promoção';
+  document.getElementById('prom-titulo').value = p.titulo;
+  document.getElementById('prom-descricao').value = p.descricao;
+  document.getElementById('prom-tipo').value = p.tipo;
+  document.getElementById('prom-validade').value = p.validade ? p.validade.substring(0,10) : '';
+  document.getElementById('modal-promocao').classList.add('open');
+}
+
+async function salvarPromocao() {
+  const body = {
+    titulo: document.getElementById('prom-titulo').value.trim(),
+    descricao: document.getElementById('prom-descricao').value.trim(),
+    tipo: document.getElementById('prom-tipo').value,
+    validade: document.getElementById('prom-validade').value || null,
+    ativo: true
+  };
+  if (!body.titulo || !body.descricao) { toast('Preencha título e descrição','error'); return; }
+  try {
+    if (editPromoId) await api('PUT', `/api/promocoes/${editPromoId}`, body);
+    else await api('POST', '/api/promocoes', body);
+    toast('Promoção salva!');
+    fecharModal('modal-promocao');
+    loadPromocoesAdmin();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function deletarPromocao(id) {
+  if (!confirm('Excluir esta promoção?')) return;
+  try {
+    await api('DELETE', `/api/promocoes/${id}`);
+    toast('Promoção excluída');
+    loadPromocoesAdmin();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── RANKING ───────────────────────────────────────────────────────────────────
+async function loadRanking(periodo = 'mes') {
+  ['hoje','semana','mes'].forEach(p => {
+    document.getElementById('rank-'+p)?.classList.remove('btn-primary');
+    document.getElementById('rank-'+p)?.classList.add('btn-secondary');
+  });
+  document.getElementById('rank-'+periodo)?.classList.add('btn-primary');
+  document.getElementById('rank-'+periodo)?.classList.remove('btn-secondary');
+
+  try {
+    const dados = await api('GET', `/api/ranking?periodo=${periodo}`);
+    const lista = document.getElementById('ranking-lista');
+    if (!dados.length) {
+      lista.innerHTML = '<div class="empty-state"><div class="ico">🏆</div><p>Nenhuma transação no período</p></div>';
+      return;
+    }
+    const medalhas = ['🥇','🥈','🥉'];
+    lista.innerHTML = dados.map((v, i) => `
+      <div class="section-card" style="margin-bottom:10px;display:flex;align-items:center;gap:20px;${i===0?'border-color:var(--yellow)':''}">
+        <div style="font-size:${i<3?'36':'24'}px;width:48px;text-align:center">${medalhas[i]||'#'+(i+1)}</div>
+        <div style="flex:1">
+          <div style="font-size:16px;font-weight:700;color:var(--text)">${v.nome}</div>
+          <div style="color:var(--text2);font-size:12px">${v.email}</div>
+        </div>
+        <div style="text-align:center;min-width:70px">
+          <div style="font-size:22px;font-weight:700;color:var(--accent)">${v.ativacoes}</div>
+          <div style="font-size:10px;color:var(--text3)">ATIVAÇÕES</div>
+        </div>
+        <div style="text-align:center;min-width:70px">
+          <div style="font-size:22px;font-weight:700;color:var(--blue)">${v.recargas}</div>
+          <div style="font-size:10px;color:var(--text3)">RECARGAS</div>
+        </div>
+        <div style="text-align:center;min-width:100px">
+          <div style="font-size:18px;font-weight:700;color:var(--yellow)">R$ ${parseFloat(v.total_comissao).toFixed(2)}</div>
+          <div style="font-size:10px;color:var(--text3)">COMISSÃO</div>
+        </div>
+      </div>
+    `).join('');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── INADIMPLÊNCIA ─────────────────────────────────────────────────────────────
+async function loadInadimplencia() {
+  try {
+    const dados = await api('GET', '/api/inadimplencia');
+    const tbody = document.getElementById('tbl-inadimplencia');
+    const lista = Array.isArray(dados) ? dados : [];
+    if (!lista.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state"><div class="ico">✓</div><p>Nenhuma inadimplência encontrada</p></td></tr>';
+      return;
+    }
+    tbody.innerHTML = lista.map(b => {
+      const venc = b.dueDate || b.expiration ? new Date(b.dueDate||b.expiration).toLocaleDateString('pt-BR') : '—';
+      const valor = b.value ? 'R$ '+(parseFloat(b.value)/100).toFixed(2) : '—';
+      return `<tr>
+        <td>${b.name||b.nome||'—'}</td>
+        <td class="mono">${b.documento||b.document||'—'}</td>
+        <td class="currency">${valor}</td>
+        <td class="text-muted">${venc}</td>
+        <td><span class="badge badge-red">Pendente</span></td>
+        <td>
+          <button class="btn btn-secondary btn-sm" onclick="reenviarBoleto('${b.billetId||b.id}')">↻ Reenviar</button>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function reenviarBoleto(billetId) {
+  try {
+    await api('POST', `/api/bora/boleto/${billetId}/reenviar`);
+    toast('Boleto reenviado por e-mail');
   } catch(e) { toast(e.message,'error'); }
 }
 
