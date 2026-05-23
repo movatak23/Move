@@ -767,6 +767,29 @@ function authCliente(req, res, next) {
   }
 }
 
+app.get('/api/cliente/linhas/:cpf', authCliente, async (req, res) => {
+  try {
+    const cpf = req.params.cpf;
+    // Busca todas as assinaturas do CPF
+    const subs = await boraGet(`/api/Subscription/${cpf}`);
+    const lista = Array.isArray(subs) ? subs : (subs.subscriptions || subs.items || []);
+    if (!lista.length) return res.json({ linhas: [] });
+    // Busca detalhes de cada linha em paralelo (máx 5)
+    const detalhes = await Promise.all(
+      lista.slice(0,10).map(async s => {
+        try {
+          const ms = s.msisdn || s.phoneNumber || s.number;
+          if (!ms) return s;
+          return await boraGet(`/api/Subscription/${ms}/details`);
+        } catch { return s; }
+      })
+    );
+    res.json({ linhas: detalhes });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
 app.get('/api/cliente/linha/:cpf', authCliente, async (req, res) => {
   try {
     const cpf = req.params.cpf.replace(/\D/g, '');
