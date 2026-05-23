@@ -1182,23 +1182,19 @@ app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
 // ─── RELATÓRIO DE CHURN ───────────────────────────────────────────────────────
 app.get('/api/relatorio/churn', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const { periodo } = req.query; // 30, 60, 90
-    const dias = parseInt(periodo) || 30;
-    const { rows } = await pool.query(`
-      SELECT l.*, v.nome as vendedor_nome,
-        EXTRACT(DAY FROM NOW() - l.data_ativacao) as dias_ativo
-      FROM linhas l
-      LEFT JOIN vendedores v ON v.id = l.vendedor_id
-      WHERE l.status IN ('cancelada','suspensa','bloqueada','cancelled','suspended')
-        AND l.data_ativacao >= NOW() - INTERVAL '${dias} days'
-      ORDER BY l.data_ativacao DESC
-    `);
-    // Complementa com dados da Bora se tiver msisdn
-    res.json({
-      total: rows.length,
-      periodo: dias,
-      linhas: rows
-    });
+    const dias = parseInt(req.query.periodo) || 30;
+    const { rows } = await pool.query(
+      `SELECT l.msisdn, l.iccid, l.nome_cliente, l.documento_cliente,
+        l.plano_nome, l.status, l.data_ativacao, v.nome as vendedor_nome,
+        EXTRACT(DAY FROM NOW() - l.data_ativacao)::int as dias_ativo
+       FROM linhas l
+       LEFT JOIN vendedores v ON v.id = l.vendedor_id
+       WHERE l.status IN ('cancelada','suspensa','bloqueada','cancelled','suspended')
+         AND l.data_ativacao >= NOW() - ($1 * INTERVAL '1 day')
+       ORDER BY l.data_ativacao DESC`,
+      [dias]
+    );
+    res.json({ total: rows.length, periodo: dias, linhas: rows });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
