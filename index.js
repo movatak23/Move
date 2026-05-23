@@ -42,7 +42,7 @@ async function getBoraToken() {
   const token = resp.data?.token || resp.data?.accessToken || resp.headers['x-access-token'];
   if (!token) throw new Error('Token Bora não retornado');
   boraTokenCache = token;
-  boraTokenExpira = Date.now() + 50 * 60 * 1000; // 50 min (antes dos 60 expirar)
+  boraTokenExpira = Date.now() + 50 * 60 * 1000;
   await pool.query(
     'INSERT INTO bora_auth (token, token_gerado_em) VALUES ($1, NOW()) ON CONFLICT DO NOTHING',
     [token]
@@ -56,7 +56,6 @@ async function boraGet(endpoint, params = {}) {
     headers: { Authorization: `Bearer ${token}` },
     params
   });
-  // Refresh token se vier no header
   const novoToken = resp.headers['x-access-token'];
   if (novoToken) {
     boraTokenCache = novoToken;
@@ -156,7 +155,6 @@ app.put('/api/vendedores/:id', authMiddleware, adminOnly, async (req, res) => {
       await pool.query('UPDATE vendedores SET nome=$1, telefone=$2, ativo=$3 WHERE id=$4',
         [nome, telefone, ativo, req.params.id]);
     }
-    // Salva permissões
     if (permissoes) {
       await pool.query('DELETE FROM vendedor_permissoes WHERE vendedor_id=$1', [req.params.id]);
       for (const perm of permissoes) {
@@ -169,7 +167,6 @@ app.put('/api/vendedores/:id', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
-// Busca permissões de um vendedor
 app.get('/api/vendedores/:id/permissoes', authMiddleware, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT permissao FROM vendedor_permissoes WHERE vendedor_id=$1', [req.params.id]);
@@ -177,7 +174,6 @@ app.get('/api/vendedores/:id/permissoes', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Verifica permissão do usuário logado
 app.get('/api/minhas-permissoes', authMiddleware, async (req, res) => {
   try {
     if (req.user.role === 'admin') return res.json(['consulta','recarga','portabilidade','boleto_combado','troca_plano']);
@@ -216,7 +212,6 @@ app.post('/api/planos-comissao', authMiddleware, adminOnly, async (req, res) => 
 app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
   try {
     const vendedorId = req.params.id;
-    // Vendedor só vê o próprio
     if (req.user.role !== 'admin' && parseInt(req.user.id) !== parseInt(vendedorId)) {
       return res.status(403).json({ erro: 'Acesso negado' });
     }
@@ -224,7 +219,6 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
     const params = [vendedorId];
     let filtro = '';
     if (data_inicio && data_fim) {
-      // Usa periodo_referencia para transações retroativas, data_transacao para demais
       filtro = ` AND (
         CASE WHEN t.fonte IN ('retroativo','bora_details','bora_polling')
           THEN t.periodo_referencia BETWEEN $2 AND $3
@@ -350,7 +344,6 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
   try {
     const { subscriber, cartPayload, paymentType, recorrencia, vendedor_id, plano_id, plano_nome, plano_valor } = req.body;
 
-    // 1. Busca subscriber existente ou cadastra novo
     let clientId = null;
     try {
       const existing = await boraGet(`/api/Subscriber/${subscriber.document}/document`);
@@ -364,7 +357,6 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
 
     if (!clientId) throw new Error('Não foi possível obter clientId do subscriber');
 
-    // 2. Cria carrinho com clientId correto
     const cartBody = {
       iccid: cartPayload.iccid,
       ddd: cartPayload.ddd,
@@ -372,7 +364,6 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
       planType: cartPayload.planType || 'Controle',
       clientId
     };
-    // Portabilidade: envia msisdn do número a portar
     if (cartPayload.msisdnPortabilidade) {
       cartBody.msisdn = cartPayload.msisdnPortabilidade;
     }
@@ -380,7 +371,6 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
     const cartId = cart.cartId || cart.id;
     if (!cartId) throw new Error('cartId não retornado pela Bora');
 
-    // 3. Finaliza pagamento
     const recType = recorrencia || 'BILLET';
     let pagamento;
     if (paymentType === 'pix') {
@@ -399,14 +389,12 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
       throw new Error('paymentType inválido: use pix, billet ou billetcombo');
     }
 
-    // 4. Busca comissão do plano
     const { rows: planoRows } = await pool.query(
       'SELECT comissao_ativacao FROM planos_comissao WHERE plano_id=$1',
       [plano_id]
     );
     const comissao = planoRows[0]?.comissao_ativacao || 0;
 
-    // 5. Salva linha no banco
     const iccid = cartPayload.iccid || subscriber.iccid;
     const msisdn = pagamento.msisdn || cartPayload.msisdn || null;
     const { rows: linhaRows } = await pool.query(
@@ -418,17 +406,14 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
     );
     const linhaId = linhaRows[0].id;
 
-    // 6. Registra transação de ativação
     await pool.query(
       `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
        VALUES ($1,$2,'ativacao',$3,$4,$5,$6,'sistema')`,
       [linhaId, vendedor_id, plano_id, plano_nome, plano_valor, comissao]
     );
 
-    // Extrai dados do PIX se houver
     const pixData = pagamento?.pix || null;
 
-    // Marca ICCID como usado no banco de E-SIMs
     try {
       await pool.query(
         `UPDATE esims SET status='usado', vendedor_id=$1, msisdn=$2,
@@ -469,11 +454,8 @@ app.get('/api/bora/linha/:identificador', authMiddleware, async (req, res) => {
   }
 });
 
-
-// ─── Calculadora retroativa via /details ─────────────────────────────────────
 app.get('/api/bora/historic/:msisdn', authMiddleware, async (req, res) => {
   try {
-    // Busca detalhes atuais da linha
     const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
     res.json(details);
   } catch (e) {
@@ -486,7 +468,6 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
   try {
     const { msisdn, plano_id, data_inicio, data_fim } = req.body;
 
-    // Suporte a múltiplos números separados por vírgula
     const numeros = msisdn.split(',')
       .map(n => n.trim())
       .filter(n => n.length >= 8)
@@ -494,7 +475,6 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
 
     if (!numeros.length) throw new Error('Nenhum número válido informado');
 
-    // Busca comissões uma vez só
     const { rows: planosComissao } = await pool.query('SELECT * FROM planos_comissao');
     const mapaComissaoId = {};
     const mapaComissaoNome = {};
@@ -509,7 +489,6 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
              null;
     }
 
-    // Processa todos os números em paralelo (evita timeout)
     async function processarNumero(msisdnNorm) {
       try {
         const details = await boraGet(`/api/Subscription/${msisdnNorm}/details`);
@@ -517,7 +496,6 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
         const statusLinha  = details?.status || '—';
         let planArray = Array.isArray(details?.plan) ? details.plan : [];
 
-        // Filtro por período se informado
         if (data_inicio || data_fim) {
           const ini = data_inicio ? new Date(data_inicio) : null;
           const fim = data_fim ? new Date(data_fim + 'T23:59:59') : null;
@@ -566,7 +544,6 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
       }
     }
 
-    // Processa em lotes de 5 para não sobrecarregar a API Bora
     const linhas = [];
     const LOTE = 5;
     for (let i = 0; i < numeros.length; i += LOTE) {
@@ -587,7 +564,6 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
   try {
     const { msisdn, vendedor_id, plano_id, plano_nome, recargas } = req.body;
 
-    // Busca ou cria linha
     let { rows: linhaRows } = await pool.query(
       'SELECT id FROM linhas WHERE msisdn=$1', [msisdn]
     );
@@ -616,7 +592,6 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
         [linhaId, periodoCheck]
       );
       if (existe.length) continue;
-      // Normaliza periodo para AAAA-MM (evita duplicatas com datas completas)
       const periodoNorm = String(r.periodo || '').substring(0, 7);
       await pool.query(
         `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
@@ -632,7 +607,6 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
     res.status(500).json({ erro: e.message });
   }
 });
-
 
 // ─── E-SIM — Import via upload ───────────────────────────────────────────────
 const multer = require('multer');
@@ -650,20 +624,17 @@ app.post('/api/esim/importar', authMiddleware, adminOnly, uploadMem.single('plan
     let ignorados = 0;
 
     for (const row of rows) {
-      // ICCID pode estar em qualquer coluna — procura o que começa com 89
       let iccid = null;
       let statusCol = null;
       for (let i = 0; i < row.length; i++) {
         const val = String(row[i] || '').trim().replace(/\s/g,'');
         if (val.startsWith('89') && val.length >= 18) {
           iccid = val;
-          // Status é a próxima coluna não vazia
           statusCol = String(row[i + 1] || '').trim().toUpperCase();
           break;
         }
       }
       if (!iccid) continue;
-      // Só importa os vazios (disponíveis)
       if (statusCol && statusCol !== '') { ignorados++; continue; }
 
       try {
@@ -724,26 +695,15 @@ app.get('/api/esim/historico', authMiddleware, adminOnly, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-
 // ─── CLIENTE APP ──────────────────────────────────────────────────────────────
 const bcryptCliente = require('bcryptjs');
 const jwtCliente = require('jsonwebtoken');
-
-// Tabela clientes (criar no banco):
-// CREATE TABLE IF NOT EXISTS clientes (
-//   id SERIAL PRIMARY KEY,
-//   cpf VARCHAR(11) UNIQUE NOT NULL,
-//   nome VARCHAR(200) NOT NULL,
-//   senha_hash VARCHAR(255) NOT NULL,
-//   criado_em TIMESTAMP DEFAULT NOW()
-// );
 
 app.post('/api/cliente/cadastro', async (req, res) => {
   try {
     const { cpf, nome, senha } = req.body;
     if (!cpf || !nome || !senha) throw new Error('Campos obrigatórios: cpf, nome, senha');
 
-    // Verifica se CPF existe na Bora
     try {
       await boraGet(`/api/Subscriber/${cpf}/document`);
     } catch {
@@ -794,11 +754,9 @@ function authCliente(req, res, next) {
 app.get('/api/cliente/linhas/:cpf', authCliente, async (req, res) => {
   try {
     const cpf = req.params.cpf;
-    // Busca todas as assinaturas do CPF
     const subs = await boraGet(`/api/Subscription/${cpf}`);
     const lista = Array.isArray(subs) ? subs : (subs.subscriptions || subs.items || []);
     if (!lista.length) return res.json({ linhas: [] });
-    // Busca detalhes de cada linha em paralelo (máx 5)
     const detalhes = await Promise.all(
       lista.slice(0,10).map(async s => {
         try {
@@ -817,22 +775,14 @@ app.get('/api/cliente/linhas/:cpf', authCliente, async (req, res) => {
 app.get('/api/cliente/linha/:cpf', authCliente, async (req, res) => {
   try {
     const cpf = req.params.cpf.replace(/\D/g, '');
-
-    // 1. Busca subscriber pelo CPF para obter MSISDN
     const subscriber = await boraGet(`/api/Subscriber/${cpf}/document`);
     if (!subscriber) throw new Error('Subscriber não encontrado');
-
-    // 2. Busca linhas do subscriber pelo documento
     const linhas = await boraGet(`/api/Subscription/${cpf}`);
     const lista = Array.isArray(linhas) ? linhas : (linhas?.subscriptions || linhas?.items || [linhas]);
     if (!lista.length) throw new Error('Nenhuma linha encontrada');
-
-    // 3. Pega a primeira linha ativa
     const primeiraLinha = lista[0];
     const identificador = primeiraLinha?.msisdn || primeiraLinha?.iccid || primeiraLinha?.identifier;
     if (!identificador) throw new Error('Identificador da linha não encontrado');
-
-    // 4. Busca detalhes completos
     const details = await boraGet(`/api/Subscription/${identificador}/details`);
     res.json({ linha: details });
   } catch (e) {
@@ -849,7 +799,6 @@ app.get('/api/cliente/consumo/:msisdn', authCliente, async (req, res) => {
   }
 });
 
-// Consumo acessível por token admin/vendedor
 app.get('/api/bora/consumo/:msisdn', authMiddleware, async (req, res) => {
   try {
     const data = await boraGet(`/api/Subscription/${req.params.msisdn}/consumption`);
@@ -871,16 +820,11 @@ app.get('/api/cliente/planos-recarga/:msisdn', authCliente, async (req, res) => 
 app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
   try {
     const { msisdn, plano_id, plano_nome, pagamento } = req.body;
-
-    // Busca subscriber para pegar clientId
     const subDetails = await boraGet(`/api/Subscription/${msisdn}/details`);
     const clientId = subDetails?.boraIntegration?.customerId || subDetails?.boraData?.customerId || null;
-
-    // Cria carrinho de recarga
     const cart = await boraPost('/api/Cart/recharge', { msisdn, planId: plano_id, clientId });
     const cartId = cart.cartId || cart.id;
     if (!cartId) throw new Error('cartId não retornado pela Bora');
-
     let pagamentoResp;
     if (pagamento === 'pix') {
       pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/pix`, {});
@@ -889,7 +833,6 @@ app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
     } else {
       throw new Error('Forma de pagamento inválida');
     }
-
     const pixData = pagamentoResp?.pix || null;
     res.json({
       ok: true,
@@ -902,32 +845,27 @@ app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
   }
 });
 
-
 // ─── CONSULTA DE LINHA ────────────────────────────────────────────────────────
 app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
   try {
     const { tipo, valor } = req.query;
-    // Vendedor só vê linhas da própria carteira
     if (req.user.role !== 'admin') {
       const { rows: carteira } = await pool.query(
         'SELECT * FROM linhas WHERE vendedor_id=$1', [req.user.id]
       );
-      // Filtra pela carteira
-      const linha = carteira.find(l => 
-        l.msisdn === valor || l.iccid === valor || 
+      const linha = carteira.find(l =>
+        l.msisdn === valor || l.iccid === valor ||
         l.documento_cliente === valor.replace(/\D/g,'')
       );
       if (!linha) return res.status(403).json({ erro: 'Linha não encontrada na sua carteira' });
       const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
       return res.json({ linhas: [details] });
     }
-    // Admin busca qualquer linha
     let endpoint;
     if (tipo === 'cpf') endpoint = `/api/Subscription/${valor.replace(/\D/g,'')}`;
     else endpoint = `/api/Subscription/${valor}/details`;
     const data = await boraGet(endpoint);
     const lista = Array.isArray(data) ? data : [data];
-    // Busca detalhes de cada linha
     const detalhes = await Promise.all(lista.slice(0,10).map(async s => {
       try {
         const ms = s.msisdn || s.phoneNumber || s.number;
@@ -959,7 +897,6 @@ app.post('/api/portabilidade/realizar', authMiddleware, async (req, res) => {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
 });
-
 
 // ─── PROMOÇÕES ────────────────────────────────────────────────────────────────
 app.get('/api/promocoes', authMiddleware, async (req, res) => {
@@ -1010,7 +947,7 @@ app.delete('/api/promocoes/:id', authMiddleware, adminOnly, async (req, res) => 
 // ─── RANKING ──────────────────────────────────────────────────────────────────
 app.get('/api/ranking', authMiddleware, async (req, res) => {
   try {
-    const { periodo } = req.query; // 'hoje', 'semana', 'mes'
+    const { periodo } = req.query;
     let filtro = '';
     if (periodo === 'hoje') filtro = "AND DATE(t.data_transacao) = CURRENT_DATE";
     else if (periodo === 'semana') filtro = "AND t.data_transacao >= NOW() - INTERVAL '7 days'";
@@ -1038,7 +975,6 @@ app.get('/api/inadimplencia', authMiddleware, adminOnly, async (req, res) => {
     const data = await boraGet('/api/Subscriber/billets/pending');
     res.json(data);
   } catch {
-    // Fallback: busca boletos pendentes de todas as linhas ativas
     try {
       const { rows: linhas } = await pool.query(
         "SELECT DISTINCT documento_cliente FROM linhas WHERE status='ativa' AND documento_cliente IS NOT NULL LIMIT 50"
@@ -1067,7 +1003,6 @@ cron.schedule('0 9 * * *', async () => {
       WHERE l.status = 'ativa' AND l.msisdn IS NOT NULL
     `);
     const hoje = new Date();
-    const em3dias = new Date(hoje); em3dias.setDate(hoje.getDate()+3);
     for (const linha of linhas) {
       try {
         const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
@@ -1077,7 +1012,6 @@ cron.schedule('0 9 * * *', async () => {
         const venc = new Date(ultimo.expiration);
         const diasRestantes = Math.ceil((venc-hoje)/(1000*60*60*24));
         if (diasRestantes <= 3 && diasRestantes >= 0) {
-          // Registra alerta no banco
           await pool.query(
             `INSERT INTO alertas_vencimento (linha_id, vendedor_id, msisdn, dias_restantes, data_vencimento)
              VALUES ($1,$2,$3,$4,$5) ON CONFLICT (linha_id, DATE(NOW())) DO NOTHING`,
@@ -1102,7 +1036,6 @@ app.get('/api/alertas/vencimento', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-
 // ─── BLOQUEIO / DESBLOQUEIO ───────────────────────────────────────────────────
 app.post('/api/bora/linha/:msisdn/bloquear', authMiddleware, async (req, res) => {
   try {
@@ -1110,7 +1043,6 @@ app.post('/api/bora/linha/:msisdn/bloquear', authMiddleware, async (req, res) =>
     const accountId = details?.accountId;
     if (!accountId) throw new Error('accountId não encontrado para esta linha');
     const data = await boraPost(`/api/Subscription/temporarily-suspend/${accountId}`, {});
-    // Atualiza status no banco
     await pool.query("UPDATE linhas SET status='bloqueada' WHERE msisdn=$1", [req.params.msisdn]);
     res.json({ ok: true, data });
   } catch (e) {
@@ -1144,7 +1076,6 @@ app.get('/api/bora/trocar-plano/:msisdn', authMiddleware, async (req, res) => {
 app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
   try {
     const data = await boraPost('/api/Subscription/changeplan', req.body);
-    // Atualiza plano no banco se tiver MSISDN
     if (req.body.msisdn && req.body.planId) {
       await pool.query(
         "UPDATE linhas SET plano_id=$1 WHERE msisdn=$2",
@@ -1198,7 +1129,7 @@ app.get('/api/relatorio/churn', authMiddleware, adminOnly, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Reenvio de boleto
+// ─── Reenvio de boleto ────────────────────────────────────────────────────────
 app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, adminOnly, async (req, res) => {
   try {
     const data = await boraPost(`/api/Subscriber/billets/${req.params.billetId}/resend`, {});
@@ -1220,7 +1151,6 @@ async function checarRecargas() {
     );
 
     const hoje = new Date();
-    // Período de referência = mês atual (AAAA-MM)
     const mesRef = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
 
     let detectadas = 0;
@@ -1228,15 +1158,12 @@ async function checarRecargas() {
 
     for (const linha of linhas) {
       try {
-        // 1. Busca detalhes atuais da linha na Bora
         const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
 
-        // 2. Extrai plano atual retornado pela Bora
         const planoAtualId = details?.planData?.id || details?.plan?.id || details?.planId || null;
         const planoAtualNome = details?.planData?.name || details?.plan?.name || details?.planName || linha.plano_nome;
         const statusLinha = details?.status || details?.lineStatus || 'ativa';
 
-        // 3. Se plano mudou, atualiza no banco
         if (planoAtualId && planoAtualId !== linha.plano_id) {
           await pool.query(
             'UPDATE linhas SET plano_id=$1, plano_nome=$2 WHERE id=$3',
@@ -1248,7 +1175,6 @@ async function checarRecargas() {
           linha.plano_nome = planoAtualNome;
         }
 
-        // 4. Verifica se linha está suspensa/cancelada
         const statusNorm = String(statusLinha).toLowerCase();
         if (statusNorm.includes('suspend') || statusNorm.includes('cancel') || statusNorm.includes('inativ')) {
           await pool.query('UPDATE linhas SET status=$1 WHERE id=$2', [statusNorm, linha.id]);
@@ -1256,7 +1182,6 @@ async function checarRecargas() {
           continue;
         }
 
-        // 5. Verifica se já tem recarga registrada neste mês
         const { rows: existe } = await pool.query(
           `SELECT id FROM transacoes
            WHERE linha_id=$1 AND tipo='recarga' AND periodo_referencia=$2`,
@@ -1267,19 +1192,15 @@ async function checarRecargas() {
           continue;
         }
 
-        // 6. Só registra recarga se a linha tem atividade no mês atual
-        // Critério: data de renovação/próximo vencimento está no mês corrente ou passou
         const proximoVenc = details?.planData?.nextRenewalDate || details?.nextRenewalDate || null;
         let linhaAtiva = false;
         if (proximoVenc) {
           const venc = new Date(proximoVenc);
-          // Se o próximo vencimento é futuro, significa que já pagou este mês
           linhaAtiva = venc >= hoje || venc.getMonth() === hoje.getMonth();
         } else {
-          // Sem data de vencimento: usa data de ativação como critério
           const dataAtiv = new Date(linha.data_ativacao);
           const mesesAtiva = (hoje.getFullYear() - dataAtiv.getFullYear()) * 12 + (hoje.getMonth() - dataAtiv.getMonth());
-          linhaAtiva = mesesAtiva >= 1; // Pelo menos 1 mês ativa = houve pelo menos 1 recarga
+          linhaAtiva = mesesAtiva >= 1;
         }
 
         if (!linhaAtiva) {
@@ -1287,7 +1208,6 @@ async function checarRecargas() {
           continue;
         }
 
-        // 7. Busca comissão do plano atual
         const { rows: planoRows } = await pool.query(
           'SELECT comissao_recarga, plano_nome FROM planos_comissao WHERE plano_id=$1',
           [linha.plano_id]
@@ -1298,7 +1218,6 @@ async function checarRecargas() {
           continue;
         }
 
-        // 8. Registra recarga com comissão do plano atual
         await pool.query(
           `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
            VALUES ($1,$2,'recarga',$3,$4,$5,$6,'bora_details')`,
@@ -1309,7 +1228,13 @@ async function checarRecargas() {
 
         await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
       } catch (err) {
-        console.error(`[CRON] Erro na linha ${linha.msisdn}: ${err.message}`);
+        // FIX: linha não encontrada na Bora (404) → marca como cancelada no banco
+        if (err.response?.status === 404) {
+          await pool.query("UPDATE linhas SET status='cancelada' WHERE id=$1", [linha.id]);
+          console.log(`[CRON] Linha ${linha.msisdn} não encontrada na Bora (404) — marcada como cancelada`);
+        } else {
+          console.error(`[CRON] Erro na linha ${linha.msisdn}: ${err.message}`);
+        }
       }
     }
 
@@ -1337,6 +1262,5 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Bora Vendas rodando na porta ${PORT}`);
-  // Roda polling 2 minutos após iniciar
   setTimeout(checarRecargas, 2 * 60 * 1000);
 });
