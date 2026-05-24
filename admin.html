@@ -1097,22 +1097,29 @@ select option { background: var(--bg3); }
 
 <!-- Modal Reativar Linha -->
 <div class="modal-overlay" id="modal-reativar">
-  <div class="modal" style="width:480px">
+  <div class="modal" style="width:540px">
     <div class="modal-title">▶ Reativar Linha</div>
     <div id="reativar-info" style="margin-bottom:16px"></div>
-    <div class="form-row single">
-      <div class="field">
-        <label>Forma de Pagamento da Recorrência</label>
-        <select id="reativar-pay">
-          <option value="BilletCombo">Boleto Combado</option>
-          <option value="Billet">Boleto</option>
-          <option value="Credit">Cartão de Crédito</option>
-        </select>
+    <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:10px">Escolha o Plano</div>
+    <div id="reativar-planos-lista" class="loading" style="margin-bottom:16px">Carregando planos...</div>
+    <div id="reativar-sem-comissao" style="display:none;background:var(--yellow-dim);border:1px solid var(--yellow);border-radius:var(--r);padding:10px 14px;font-size:12px;color:var(--yellow);margin-bottom:14px">
+      ⚠ Este plano não está cadastrado na plataforma. Nenhuma comissão será registrada pela reativação.
+    </div>
+    <div id="reativar-pay-wrap" style="display:none">
+      <div class="form-row single">
+        <div class="field">
+          <label>Forma de Pagamento</label>
+          <select id="reativar-pay">
+            <option value="BilletCombo">Boleto Combado</option>
+            <option value="Billet">Boleto</option>
+            <option value="Credit">Cartão de Crédito</option>
+          </select>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="fecharModal('modal-reativar')">Cancelar</button>
-      <button class="btn btn-primary" onclick="confirmarReativacao()">Reativar</button>
+      <button class="btn btn-primary" id="btn-confirmar-reativar" onclick="confirmarReativacao()" style="display:none">Reativar</button>
     </div>
   </div>
 </div>
@@ -2742,17 +2749,68 @@ function reativarLinha(msisdn) {
   document.getElementById('reativar-info').innerHTML =
     `<div class="info-card">
       <div class="info-row"><span class="k">Número</span><span class="v mono">${msisdn}</span></div>
-      <div class="info-row"><span class="k">Ação</span><span class="v">Reativar linha cancelada/suspensa</span></div>
     </div>`;
+  document.getElementById('reativar-planos-lista').innerHTML = '<div class="loading">Carregando planos...</div>';
+  document.getElementById('reativar-sem-comissao').style.display = 'none';
+  document.getElementById('reativar-pay-wrap').style.display = 'none';
+  document.getElementById('btn-confirmar-reativar').style.display = 'none';
   document.getElementById('modal-reativar')._msisdn = msisdn;
+  document.getElementById('modal-reativar')._planId = null;
   document.getElementById('modal-reativar').classList.add('open');
+
+  // Carrega planos disponíveis e comissões em paralelo
+  Promise.all([
+    api('GET', `/api/bora/reativar/${msisdn}`),
+    api('GET', '/api/planos-comissao')
+  ]).then(([data, comissoes]) => {
+    const planos = Array.isArray(data) ? data : (data.plans || data.items || [data].filter(d => d && d.planId));
+    const mapaComissao = {};
+    comissoes.forEach(c => { mapaComissao[String(c.plano_id)] = c; });
+
+    if (!planos.length) {
+      document.getElementById('reativar-planos-lista').innerHTML =
+        '<div style="color:var(--text2);font-size:13px">Nenhum plano disponível para reativação</div>';
+      return;
+    }
+
+    document.getElementById('reativar-planos-lista').innerHTML =
+      '<div class="planos-grid" style="margin-bottom:0">' +
+      planos.map(p => {
+        const pid = String(p.idPlanExternal || p.planId || p.id || '');
+        const pnome = p.name || p.nome || p.planName || pid;
+        const pval = parseFloat(p.value || p.price || p.valor || 0).toFixed(2);
+        const com = mapaComissao[pid];
+        return `<div class="plano-card" id="reat-${pid}" onclick="selecionarPlanoReativacao('${pid}', ${!com})">
+          <div class="pnome">${pnome}</div>
+          <div class="pval">R$ ${pval}</div>
+          ${com
+            ? `<div class="pcomissao">★ Comissão: R$ ${parseFloat(com.comissao_ativacao).toFixed(2)}</div>`
+            : '<div class="pcomissao" style="color:var(--red)">Sem comissão configurada</div>'}
+        </div>`;
+      }).join('') +
+      '</div>';
+  }).catch(e => {
+    document.getElementById('reativar-planos-lista').innerHTML =
+      `<div style="color:var(--red);font-size:13px">${e.message}</div>`;
+  });
+}
+
+function selecionarPlanoReativacao(planId, semComissao) {
+  document.querySelectorAll('[id^="reat-"]').forEach(el => el.classList.remove('selected'));
+  document.getElementById('reat-' + planId)?.classList.add('selected');
+  document.getElementById('modal-reativar')._planId = planId;
+  document.getElementById('reativar-sem-comissao').style.display = semComissao ? 'block' : 'none';
+  document.getElementById('reativar-pay-wrap').style.display = 'block';
+  document.getElementById('btn-confirmar-reativar').style.display = 'inline-flex';
 }
 
 async function confirmarReativacao() {
   const msisdn = document.getElementById('modal-reativar')._msisdn;
-  if (!msisdn) { toast('MSISDN não encontrado', 'error'); return; }
+  const planId = document.getElementById('modal-reativar')._planId;
+  const paymentType = document.getElementById('reativar-pay').value;
+  if (!msisdn || !planId) { toast('Selecione um plano', 'error'); return; }
   try {
-    await api('POST', '/api/bora/reativar', { msisdn });
+    await api('POST', '/api/bora/reativar', { msisdn, planId, paymentType });
     toast(`Linha ${msisdn} reativada com sucesso`);
     fecharModal('modal-reativar');
     realizarConsulta();
