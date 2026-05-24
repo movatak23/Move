@@ -2750,10 +2750,9 @@ function reativarLinha(msisdn) {
 
 async function confirmarReativacao() {
   const msisdn = document.getElementById('modal-reativar')._msisdn;
-  const recorrencia = document.getElementById('reativar-pay').value;
   if (!msisdn) { toast('MSISDN não encontrado', 'error'); return; }
   try {
-    await api('POST', '/api/bora/reativar', { msisdn, recurrenceType: recorrencia });
+    await api('POST', '/api/bora/reativar', { msisdn });
     toast(`Linha ${msisdn} reativada com sucesso`);
     fecharModal('modal-reativar');
     realizarConsulta();
