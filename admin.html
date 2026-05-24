@@ -2759,6 +2759,9 @@ function reativarLinha(msisdn) {
     const planValue = data.planValue ? (data.planValue / 100).toFixed(2) : '0.00';
     const recType = data.recurrencePaymentType || '—';
 
+    // Guarda planId resolvido pelo backend
+    document.getElementById('modal-reativar')._planId = data.planId || null;
+
     // Verifica se plano tem comissão cadastrada (por nome)
     const temComissao = comissoes.some(c =>
       String(c.plano_nome).toUpperCase().trim() === String(planName).toUpperCase().trim()
@@ -2798,10 +2801,13 @@ function selecionarPlanoReativacao(planId, semComissao) {
 
 async function confirmarReativacao() {
   const msisdn = document.getElementById('modal-reativar')._msisdn;
+  const planId = document.getElementById('modal-reativar')._planId;
   const paymentType = document.getElementById('reativar-pay').value;
   if (!msisdn) { toast('MSISDN não encontrado', 'error'); return; }
   try {
-    await api('POST', '/api/bora/reativar', { msisdn, paymentType });
+    const body = { msisdn, paymentType };
+    if (planId) body.planId = planId;
+    await api('POST', '/api/bora/reativar', body);
     toast(`Linha ${msisdn} reativada com sucesso`);
     fecharModal('modal-reativar');
     realizarConsulta();
