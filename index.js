@@ -77,6 +77,19 @@ async function boraPost(endpoint, body = {}) {
   return resp.data;
 }
 
+async function boraPut(endpoint, body = {}) {
+  const token = await getBoraToken();
+  const resp = await axios.put(`${BORA_BASE}${endpoint}`, body, {
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  });
+  const novoToken = resp.headers['x-access-token'];
+  if (novoToken) {
+    boraTokenCache = novoToken;
+    boraTokenExpira = Date.now() + 50 * 60 * 1000;
+  }
+  return resp.data;
+}
+
 // ─── Middleware Auth próprio ──────────────────────────────────────────────────
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization;
@@ -1042,7 +1055,7 @@ app.post('/api/bora/linha/:msisdn/bloquear', authMiddleware, async (req, res) =>
     const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
     const accountId = details?.accountId;
     if (!accountId) throw new Error('accountId não encontrado para esta linha');
-    const data = await boraPost(`/api/Subscription/temporarily-suspend/${accountId}`, {});
+    const data = await boraPut(`/api/Subscription/temporarily-suspend/${accountId}`, {});
     await pool.query("UPDATE linhas SET status='bloqueada' WHERE msisdn=$1", [req.params.msisdn]);
     res.json({ ok: true, data });
   } catch (e) {
@@ -1055,7 +1068,7 @@ app.post('/api/bora/linha/:msisdn/desbloquear', authMiddleware, async (req, res)
     const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
     const accountId = details?.accountId;
     if (!accountId) throw new Error('accountId não encontrado para esta linha');
-    const data = await boraPost(`/api/Subscription/release/${accountId}`, {});
+    const data = await boraPut(`/api/Subscription/release/${accountId}`, {});
     await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [req.params.msisdn]);
     res.json({ ok: true, data });
   } catch (e) {
@@ -1100,10 +1113,10 @@ app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
 
 app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
   try {
-    const data = await boraPost('/api/Subscription/reactivation', req.body);
-    if (req.body.msisdn) {
-      await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [req.body.msisdn]);
-    }
+    const { msisdn } = req.body;
+    if (!msisdn) throw new Error('msisdn obrigatório');
+    const data = await boraPost('/api/Subscription/reactivation', { msisdn });
+    await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [msisdn]);
     res.json(data);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
