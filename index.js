@@ -1105,6 +1105,19 @@ app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
 app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
   try {
     const data = await boraGet(`/api/Subscription/reactivation/${req.params.msisdn}`);
+    // Tenta resolver o planId pelo nome do plano nos planos de ativação
+    if (data && data.planName && !data.planId) {
+      try {
+        const planos = await boraGet('/api/Plan/Activation');
+        const lista = Array.isArray(planos) ? planos : (planos.plans || planos.items || []);
+        const match = lista.find(p =>
+          String(p.name || p.nome || '').toUpperCase().trim() === String(data.planName).toUpperCase().trim()
+        );
+        if (match) {
+          data.planId = match.idPlanExternal || match.id || match.planId || null;
+        }
+      } catch {}
+    }
     res.json(data);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
