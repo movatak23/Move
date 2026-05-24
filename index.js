@@ -1113,9 +1113,12 @@ app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
 
 app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
   try {
-    const { msisdn } = req.body;
+    const { msisdn, planId, paymentType } = req.body;
     if (!msisdn) throw new Error('msisdn obrigatório');
-    const data = await boraPost('/api/Subscription/reactivation', { msisdn });
+    const body = { msisdn };
+    if (planId) body.planId = planId;
+    if (paymentType) body.paymentType = paymentType;
+    const data = await boraPost('/api/Subscription/reactivation', body);
     await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [msisdn]);
     res.json(data);
   } catch (e) {
