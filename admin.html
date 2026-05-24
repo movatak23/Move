@@ -2718,6 +2718,107 @@ async function verificarAlertaEsim() {
   } catch {}
 }
 
+// ── BLOQUEIO / DESBLOQUEIO / REATIVAÇÃO ──────────────────────────────────────
+async function bloquearLinha(msisdn) {
+  if (!confirm(`Bloquear a linha ${msisdn}?`)) return;
+  try {
+    await api('POST', `/api/bora/linha/${msisdn}/bloquear`);
+    toast(`Linha ${msisdn} bloqueada`);
+    realizarConsulta();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function desbloquearLinha(msisdn) {
+  if (!confirm(`Desbloquear a linha ${msisdn}?`)) return;
+  try {
+    await api('POST', `/api/bora/linha/${msisdn}/desbloquear`);
+    toast(`Linha ${msisdn} desbloqueada`);
+    realizarConsulta();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function reativarLinha(msisdn) {
+  if (!msisdn || msisdn === '—') { toast('MSISDN inválido', 'error'); return; }
+  document.getElementById('reativar-info').innerHTML =
+    `<div class="info-card">
+      <div class="info-row"><span class="k">Número</span><span class="v mono">${msisdn}</span></div>
+      <div class="info-row"><span class="k">Ação</span><span class="v">Reativar linha cancelada/suspensa</span></div>
+    </div>`;
+  document.getElementById('modal-reativar')._msisdn = msisdn;
+  document.getElementById('modal-reativar').classList.add('open');
+}
+
+async function confirmarReativacao() {
+  const msisdn = document.getElementById('modal-reativar')._msisdn;
+  const recorrencia = document.getElementById('reativar-pay').value;
+  if (!msisdn) { toast('MSISDN não encontrado', 'error'); return; }
+  try {
+    await api('POST', '/api/bora/reativar', { msisdn, recurrenceType: recorrencia });
+    toast(`Linha ${msisdn} reativada com sucesso`);
+    fecharModal('modal-reativar');
+    realizarConsulta();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── TROCAR PLANO ──────────────────────────────────────────────────────────────
+let _trocarPlanoMsisdn = null;
+let _trocarPlanoSelecionado = null;
+
+async function abrirTrocarPlano(msisdn) {
+  _trocarPlanoMsisdn = msisdn;
+  _trocarPlanoSelecionado = null;
+  document.getElementById('trocar-plano-msisdn-info').textContent = `Linha: ${msisdn}`;
+  document.getElementById('trocar-plano-lista').innerHTML = '<div class="loading">Carregando planos disponíveis...</div>';
+  document.getElementById('trocar-plano-pagamento').style.display = 'none';
+  document.getElementById('btn-confirmar-troca').style.display = 'none';
+  document.getElementById('modal-trocar-plano').classList.add('open');
+  try {
+    const data = await api('GET', `/api/bora/trocar-plano/${msisdn}`);
+    const planos = Array.isArray(data) ? data : (data.plans || data.items || []);
+    if (!planos.length) {
+      document.getElementById('trocar-plano-lista').innerHTML = '<div style="color:var(--text2);padding:12px">Nenhum plano disponível para troca</div>';
+      return;
+    }
+    document.getElementById('trocar-plano-lista').innerHTML =
+      '<div class="planos-grid" style="margin-bottom:0">' +
+      planos.map(p => {
+        const pid = p.idPlanExternal || p.id || p.planId || '';
+        const pnome = p.name || p.nome || pid;
+        const pval = parseFloat(p.value || p.price || p.valor || 0).toFixed(2);
+        return `<div class="plano-card" id="tp-${pid}" onclick="selecionarPlanoTroca('${pid}','${pnome}')">
+          <div class="pnome">${pnome}</div>
+          <div class="pval">R$ ${pval}</div>
+        </div>`;
+      }).join('') +
+      '</div>';
+  } catch(e) {
+    document.getElementById('trocar-plano-lista').innerHTML = `<div style="color:var(--red);padding:12px">${e.message}</div>`;
+  }
+}
+
+function selecionarPlanoTroca(planId, planNome) {
+  document.querySelectorAll('[id^="tp-"]').forEach(el => el.classList.remove('selected'));
+  document.getElementById('tp-' + planId)?.classList.add('selected');
+  _trocarPlanoSelecionado = { id: planId, nome: planNome };
+  document.getElementById('trocar-plano-pagamento').style.display = 'block';
+  document.getElementById('btn-confirmar-troca').style.display = 'inline-flex';
+}
+
+async function confirmarTrocaPlano() {
+  if (!_trocarPlanoMsisdn || !_trocarPlanoSelecionado) { toast('Selecione um plano', 'error'); return; }
+  const paymentType = document.getElementById('trocar-plano-pay').value;
+  try {
+    await api('POST', '/api/bora/trocar-plano', {
+      msisdn: _trocarPlanoMsisdn,
+      planId: _trocarPlanoSelecionado.id,
+      paymentType
+    });
+    toast(`Plano alterado para ${_trocarPlanoSelecionado.nome}`);
+    fecharModal('modal-trocar-plano');
+    realizarConsulta();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
 // ── CHURN ─────────────────────────────────────────────────────────────────────
 async function loadChurn(dias = 60) {
   ['30','60','90'].forEach(d => {
