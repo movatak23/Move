@@ -1,1664 +1,1295 @@
+'use strict';
+
 require('dotenv').config();
-const nodemailer = require('nodemailer');
-const crypto     = require('crypto');
-const { Resend } = require('resend');
 const express = require('express');
-const axios   = require('axios');
-const cors    = require('cors');
-const cron    = require('node-cron');
-const path    = require('path');
-const db      = require('./db');
-
-// Migração: criar tabelas novas no banco existente
-db.migrar();
-
+const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cron = require('node-cron');
+const cors = require('cors');
+const axios = require('axios');
+const path = require('path');
 
 const app = express();
+app.use(cors());
 app.use(express.json());
-app.use(cors({ origin: '*' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(__dirname));
 
-const {
-  NUVEM_CLIENT_ID,
-  NUVEM_CLIENT_SECRET,
-  APP_URL,
-  EXTENSION_SECRET,
-  PORT = 3000,
-  MP_ACCESS_TOKEN,
-  SMTP_HOST,
-  SMTP_PORT,
-  SMTP_USER,
-  SMTP_PASS,
-  ZAPI_INSTANCE,
-  ZAPI_TOKEN,
-  ZAPI_CLIENT_TOKEN
-} = process.env;
+// ─── Banco ───────────────────────────────────────────────────────────────────
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
-// ── Auth middleware ───────────────────────────────────────────────────────────
-function auth(req, res, next) {
-  if (req.headers['x-secret'] !== EXTENSION_SECRET)
-    return res.status(401).json({ error: 'Não autorizado.' });
+// ─── Config ───────────────────────────────────────────────────────────────────
+const JWT_SECRET = process.env.JWT_SECRET || 'bora-vendas-secret-2024';
+const BORA_BASE = 'https://app.boramvno.com.br/appapi';
+const BORA_EMAIL = process.env.BORA_EMAIL;
+const BORA_SENHA = process.env.BORA_SENHA;
+
+// ─── Token Bora (cache em memória + DB) ──────────────────────────────────────
+let boraTokenCache = null;
+let boraTokenExpira = null;
+
+async function getBoraToken() {
+  if (boraTokenCache && boraTokenExpira && Date.now() < boraTokenExpira) {
+    return boraTokenCache;
+  }
+  const credencial = Buffer.from(`${BORA_EMAIL}:${BORA_SENHA}`).toString('base64');
+  const resp = await axios.post(`${BORA_BASE}/api/Authentication/basic`, {}, {
+    headers: { Authorization: `Basic ${credencial}` }
+  });
+  const token = resp.data?.token || resp.data?.accessToken || resp.headers['x-access-token'];
+  if (!token) throw new Error('Token Bora não retornado');
+  boraTokenCache = token;
+  boraTokenExpira = Date.now() + 50 * 60 * 1000;
+  await pool.query(
+    'INSERT INTO bora_auth (token, token_gerado_em) VALUES ($1, NOW()) ON CONFLICT DO NOTHING',
+    [token]
+  );
+  return token;
+}
+
+async function boraGet(endpoint, params = {}) {
+  const token = await getBoraToken();
+  const resp = await axios.get(`${BORA_BASE}${endpoint}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    params
+  });
+  const novoToken = resp.headers['x-access-token'];
+  if (novoToken) {
+    boraTokenCache = novoToken;
+    boraTokenExpira = Date.now() + 50 * 60 * 1000;
+  }
+  return resp.data;
+}
+
+async function boraPost(endpoint, body = {}) {
+  const token = await getBoraToken();
+  const resp = await axios.post(`${BORA_BASE}${endpoint}`, body, {
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  });
+  const novoToken = resp.headers['x-access-token'];
+  if (novoToken) {
+    boraTokenCache = novoToken;
+    boraTokenExpira = Date.now() + 50 * 60 * 1000;
+  }
+  return resp.data;
+}
+
+async function boraPut(endpoint, body = {}) {
+  const token = await getBoraToken();
+  const resp = await axios.put(`${BORA_BASE}${endpoint}`, body, {
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  });
+  const novoToken = resp.headers['x-access-token'];
+  if (novoToken) {
+    boraTokenCache = novoToken;
+    boraTokenExpira = Date.now() + 50 * 60 * 1000;
+  }
+  return resp.data;
+}
+
+// ─── Middleware Auth próprio ──────────────────────────────────────────────────
+function authMiddleware(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ erro: 'Token não fornecido' });
+  const token = header.replace('Bearer ', '');
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ erro: 'Token inválido' });
+  }
+}
+
+function adminOnly(req, res, next) {
+  if (req.user.role !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
   next();
 }
 
-// ── Nuvemshop API ─────────────────────────────────────────────────────────────
-async function nuvemGet(storeId, path, params = {}) {
-  const row = db.getToken(storeId);
-  if (!row) throw new Error('Loja não autenticada.');
-  const res = await axios.get(`https://api.nuvemshop.com.br/v1/${storeId}${path}`, {
-    headers: {
-      'Authentication': `bearer ${row.access_token}`,
-      'User-Agent': `RastreioBot (${APP_URL})`,
-      'Content-Type': 'application/json'
-    },
-    params
-  });
-  return res.data;
-}
-
-function formatTel(tel) {
-  if (!tel) return null;
-  const d = String(tel).replace(/\D/g, '');
-  if (!d || d.length < 10) return null;
-  if (d.startsWith('55') && d.length >= 12) return d;
-  return '55' + d;
-}
-
-function diasUteisDesde(dateStr) {
-  if (!dateStr) return null;
-  const data = new Date(dateStr);
-  const hoje = new Date(); hoje.setHours(0,0,0,0);
-  data.setHours(0,0,0,0);
-  let dias = 0;
-  const cur = new Date(data);
-  while (cur < hoje) {
-    cur.setDate(cur.getDate() + 1);
-    const d = cur.getDay();
-    if (d !== 0 && d !== 6) dias++;
-  }
-  return dias;
-}
-
-// ── Limite diário por número ──────────────────────────────────────────────────
-async function podEnviar(telefone) {
-  const count = db.mensagensHoje(telefone);
-  if (count >= 3) {
-    console.log(`[Limite] ${telefone} já recebeu ${count} mensagens hoje. Bloqueado.`);
-    return false;
-  }
-  return true;
-}
-
-// ── Z-API ─────────────────────────────────────────────────────────────────────
-async function sendWhatsApp(telefone, mensagem, storeId) {
-  // Tenta instância do cliente primeiro, fallback para variáveis de ambiente
-  let instance, token, clientToken;
-
-  if (storeId) {
-    const inst = db.getInstancia(storeId);
-    if (inst) {
-      instance    = inst.zapi_instance;
-      token       = inst.zapi_token;
-      clientToken = inst.zapi_client_token;
-    }
-  }
-
-  // Fallback para variáveis de ambiente (compatibilidade retroativa)
-  if (!instance) {
-    if (!ZAPI_INSTANCE || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN)
-      throw new Error('Z-API não configurada.');
-    instance    = ZAPI_INSTANCE;
-    token       = ZAPI_TOKEN;
-    clientToken = ZAPI_CLIENT_TOKEN;
-  }
-
-  let numero = String(telefone).replace(/\D/g, '');
-  if (numero.startsWith('55')) numero = numero.slice(2);
-
-  const res = await axios.post(
-    `https://api.z-api.io/instances/${instance}/token/${token}/send-text`,
-    { phone: numero, message: mensagem },
-    { headers: { 'Client-Token': clientToken, 'Content-Type': 'application/json' } }
-  );
-  return res.data;
-}
-
-// ── Correios API ──────────────────────────────────────────────────────────────
-async function consultarCorreios(codigo) {
-  const SEURASTREIO_KEY = process.env.SEURASTREIO_KEY;
-  if (!SEURASTREIO_KEY) {
-    console.error('[Correios] SEURASTREIO_KEY não configurada.');
-    return null;
-  }
+// ─── AUTH ─────────────────────────────────────────────────────────────────────
+app.post('/api/login', async (req, res) => {
   try {
-    const res = await axios.get(
-      `https://seurastreio.com.br/api/public/rastreio/${codigo}`,
-      {
-        headers: { 'Authorization': `Bearer ${SEURASTREIO_KEY}` },
-        timeout: 15000
-      }
-    );
-    const evento = res.data?.eventoMaisRecente;
-    if (!evento) return null;
-    const descricao = evento.descricao || evento.status || '';
-    const desc_lower = descricao.toLowerCase();
-    const entregue = desc_lower.includes('entregue') || desc_lower.includes('objeto entregue');
-    // Data vem em ISO ou "DD/MM/YYYY HH:mm"
-    let data = '', hora = '';
-    if (evento.data) {
-      const partes = String(evento.data).split(' ');
-      data = partes[0] || '';
-      hora = partes[1] || '';
-    }
-    return { status: evento.status || '', descricao, data, hora, entregue };
-  } catch(e) {
-    console.error(`[Correios] Erro ao consultar ${codigo}:`, e.message);
-    return null;
-  }
-}
-
-// ── Mensagens ─────────────────────────────────────────────────────────────────
-function montarMensagem(template, pedido) {
-  const TRANSPORTADORAS = {
-    'Correios': { emoji:'📮', url:'https://rastreamento.correios.com.br/app/index.php?objeto={c}' },
-    'Jadlog':   { emoji:'🚚', url:'https://www.jadlog.com.br/siteInstitucional/tracking.jad?cte={c}' },
-    'Loggi':    { emoji:'⚡', url:'https://www.loggi.com/rastreador/?code={c}' },
-  };
-  const t = Object.entries(TRANSPORTADORAS).find(([k]) => (pedido.transportadora||'').toLowerCase().includes(k.toLowerCase()));
-  const transp = t ? t[1] : { emoji:'📦', url:'https://rastreamento.correios.com.br/app/index.php?objeto={c}' };
-  const transpNome = t ? t[0] : (pedido.transportadora || 'Transportadora');
-  const link = pedido.rastreio ? transp.url.replace('{c}', encodeURIComponent(pedido.rastreio)) : '';
-  const padrao =
-    `Olá {nome}! 👋\n\nSeu pedido *#{numero}* foi enviado!\n\n` +
-    `{emoji} *Transportadora:* {transportadora}\n` +
-    `📦 *Código de rastreio:* *{codigo}*\n\n` +
-    `🔗 Rastreie sua entrega:\n{link}\n\nQualquer dúvida é só chamar! 😊`;
-  return (template || padrao)
-    .replace(/{nome}/g,           pedido.cliente || 'Cliente')
-    .replace(/{numero}/g,         pedido.numero  || '')
-    .replace(/{codigo}/g,         pedido.rastreio || '')
-    .replace(/{transportadora}/g, transpNome)
-    .replace(/{emoji}/g,          transp.emoji)
-    .replace(/{link}/g,           link);
-}
-
-function montarMensagemRastreio(pedido, evento) {
-  const nome   = pedido.cliente || 'Cliente';
-  const numero = pedido.numero;
-  const link   = `https://rastreamento.correios.com.br/app/index.php?objeto=${pedido.rastreio}`;
-  const desc   = (evento.descricao || '').toLowerCase();
-  const data   = evento.data || '';
-  const hora   = evento.hora || '';
-
-  // Entregue
-  if (evento.entregue) {
-    return (
-      `✅ ${nome}, seu pedido *#${numero}* foi entregue!\n\n` +
-      `Esperamos que você goste! Qualquer dúvida é só chamar. 😊`
-    );
-  }
-
-  // Saiu para entrega
-  if (desc.includes('saiu para entrega') || desc.includes('saiu para a entrega') || desc.includes('entrega prevista')) {
-    return (
-      `🎉 ${nome}, seu pedido *#${numero}* saiu para entrega hoje!\n\n` +
-      `Fique de olho, o entregador está a caminho! 📦\n` +
-      `🔗 Rastreie: ${link}`
-    );
-  }
-
-  // Postado (primeiro registro)
-  if (desc.includes('postado') || desc.includes('objeto postado') || desc.includes('coletado')) {
-    return (
-      `📮 Olá, ${nome}! Seu pedido *#${numero}* foi postado!\n\n` +
-      `Código de rastreio: *${pedido.rastreio}*\n` +
-      `🔗 Rastreie: ${link}\n\n` +
-      `Em breve chegará até você! 😊`
-    );
-  }
-
-  // Em trânsito (padrão para demais status)
-  return (
-    `🚚 Boa notícia, ${nome}! Seu pedido *#${numero}* está a caminho!\n\n` +
-    `📍 Status: *${evento.descricao}*\n` +
-    `📅 ${data} às ${hora}\n\n` +
-    `🔗 Rastreie: ${link}`
-  );
-}
-
-// MSG_PAGAMENTO montada dinamicamente — ver montarMensagemPagamento()
-function montarMensagemPagamento(nome, numero) {
-  return (
-    `👏👏👏 #Parabéns, ${nome}!👏👏👏\n` +
-    `Seu pagamento do pedido *#${numero}* foi confirmado!\n\n` +
-    `Nosso prazo de produção é de 3 dias úteis. Sua estampa entrou na fila de impressão agora e segue a sequência de pedidos.\n\n` +
-    `Lembrando que este prazo está sujeito a alteração devido a necessidade de manutenção emergencial em nosso maquinário.`
-  );
-}
-
-// ── CRON — Limpeza semanal do banco (toda domingo às 3h) ─────────────────────
-cron.schedule('0 3 * * 0', () => {
-  try {
-    db.limparRegistrosAntigos();
-    console.log('[Limpeza] Banco limpo com sucesso.');
-  } catch(e) {
-    console.error('[Limpeza] Erro:', e.message);
-  }
-});
-
-// ── CRON — Roda a cada 30 minutos ─────────────────────────────────────────────
-cron.schedule('*/30 * * * *', async () => {
-  console.log('[Cron] Iniciando verificação...');
-  try {
-    const stores = db.getAllStores();
-    for (const store of stores) {
-      await verificarPagamentos(store.store_id);
-      await verificarBoletosPendentes(store.store_id);
-      await verificarCarrinhosAbandonados(store.store_id);
-      await verificarRastreios(store.store_id);
-      await verificarPosEntrega(store.store_id);
-      await verificarPedidosParados(store.store_id);
-    }
-  } catch(e) {
-    console.error('[Cron] Erro geral:', e.message);
-  }
-});
-
-// ── Mensagens de carrinho abandonado ─────────────────────────────────────────
-function montarMensagemCarrinho(etapa, nome, link) {
-  const msgs = {
-    30: `Olá, ${nome}! 👋
-
-Percebemos que você deixou alguns itens no carrinho da nossa loja.
-
-Ainda está interessado? Finalize sua compra aqui:
-🛒 ${link}
-
-Qualquer dúvida é só chamar! 😊`,
-
-    60: `Oi, ${nome}! Tudo bem? 😊
-
-Notamos que sua compra ainda não foi concluída. Teve algum problema no pagamento?
-
-Estamos aqui para ajudar! Responda essa mensagem ou finalize agora:
-🛒 ${link}`,
-
-    1440: `${nome}, sua sacola ainda está te esperando! 🛍️
-
-⚠️ *Atenção:* Os itens no seu carrinho têm estoque limitado e podem esgotar a qualquer momento.
-
-Não deixe para depois — garanta o seu agora:
-🛒 ${link}`,
-
-    2880: `${nome}, última chance! ⏰
-
-Sua reserva expira em breve e os produtos do seu carrinho voltam para o estoque.
-
-Finalize sua compra antes que acabe:
-🛒 ${link}
-
-_Esta é a última notificação sobre este carrinho._`
-  };
-  return msgs[etapa] || null;
-}
-
-// ── Mensagens de recuperação de boleto/Pix não pago ─────────────────────────
-function montarMensagemBoleto(etapa, nome, numero, gateway) {
-  const metodo = (gateway || '').toLowerCase().includes('pix') ? 'PIX' : 'boleto';
-  const msgs = {
-    60: `Olá, ${nome}! 😊
-
-Identificamos que seu pedido *#${numero}* ainda está aguardando pagamento via *${metodo}*.
-
-Finalize seu pagamento para garantir seu pedido!
-
-Qualquer dúvida é só chamar. 💬`,
-
-    1440: `${nome}, seu pedido *#${numero}* ainda está pendente! ⏳
-
-Teve alguma dificuldade com o pagamento via *${metodo}*? Estamos aqui para ajudar!
-
-Responda essa mensagem se precisar de suporte. 😊`,
-
-    2880: `⚠️ ${nome}, *última chance!*
-
-Seu pedido *#${numero}* está prestes a ser cancelado por falta de pagamento.
-
-Finalize agora para não perder sua reserva!
-
-Qualquer problema com o ${metodo}, é só falar. 💬`
-  };
-  return msgs[etapa] || null;
-}
-
-// ── Verificar boletos/Pix não pagos ──────────────────────────────────────────
-async function verificarBoletosPendentes(storeId) {
-  try {
-    const orders = await nuvemGet(storeId, '/orders', {
-      per_page: 100,
-      payment_status: 'pending',
-      fields: 'id,number,contact_name,contact_phone,gateway,created_at,status'
-    });
-
-    const agora = Date.now();
-
-    for (const o of orders) {
-      if (o.status === 'cancelled') continue;
-
-      // Ignorar apenas cartão de crédito pendente (aprovação demorada é normal)
-      // Pedidos manuais não têm gateway — devem ser processados normalmente
-      const gw = (o.gateway || '').toLowerCase();
-      const ehCartao = gw.includes('credit') || gw.includes('credito') ||
-                       gw.includes('debit')  || gw.includes('debito')  ||
-                       gw.includes('card');
-      if (ehCartao) continue;
-
-      const telefone = formatTel(o.contact_phone);
-      if (!telefone) continue;
-
-      const criadoEm = new Date(o.created_at).getTime();
-      const minutos  = Math.floor((agora - criadoEm) / 60000);
-      const id       = String(o.id);
-      const nome     = o.contact_name || 'Cliente';
-
-      // Janelas ampliadas: até 4h após cada marco para não perder crons
-      // Etapa 9999 = resgate único para pedidos antigos sem nenhuma mensagem enviada
-      let etapa = null;
-      if (minutos >= 60   && minutos < 300)  etapa = 60;
-      if (minutos >= 1440 && minutos < 1680) etapa = 1440;
-      if (minutos >= 2880 && minutos < 3120) etapa = 2880;
-      if (minutos >= 4320 && !db.jaBoletoEnviado(id, 60) && !db.jaBoletoEnviado(id, 1440) && !db.jaBoletoEnviado(id, 2880)) etapa = 9999;
-      if (!etapa) continue;
-
-      if (db.jaBoletoEnviado(id, etapa)) continue;
-
-      // Determinar método para personalizar mensagem
-      const metodoLabel = gw.includes('pix') ? 'PIX' : gw === '' ? 'link de pagamento' : 'boleto';
-      let mensagem;
-      if (etapa === 9999) {
-        mensagem = `⚠️ ${nome}, seu pedido *#${o.number}* ainda está aguardando pagamento. Ainda tem interesse? O que falta para finalizarmos e despacharmos seu pedido nas próximas 24h?`;
-      } else {
-        mensagem = montarMensagemBoleto(etapa, nome, o.number, metodoLabel);
-      }
-      if (!mensagem) continue;
-
-      try {
-        if (!await podEnviar(telefone, storeId)) continue;
-        await sendWhatsApp(telefone, mensagem, storeId);
-        db.marcarBoletoEnviado(id, storeId, etapa);
-        db.registrarMensagem(telefone);
-        console.log(`[Boleto/Manual] Etapa ${etapa}min → ${nome} pedido #${o.number} (${metodoLabel || 'manual'})`);
-      } catch(e) {
-        console.error(`[Boleto/Manual] Falha para #${o.number}:`, e.message);
-      }
-
-      await new Promise(r => setTimeout(r, 500));
-    }
-  } catch(e) {
-    const msg = e.response?.data?.description || e.message || '';
-    if (msg.includes('Last page is 0')) return;
-    console.error(`[Boleto] Erro loja ${storeId}:`, e.response?.data || e.message);
-  }
-}
-
-// ── Verificar carrinhos abandonados ──────────────────────────────────────────
-async function verificarCarrinhosAbandonados(storeId) {
-  try {
-    const carrinhos = await nuvemGet(storeId, '/checkouts', {
-      per_page: 50,
-      fields: 'id,contact_name,contact_phone,abandoned_checkout_url,created_at'
-    });
-
-    const agora = Date.now();
-
-    for (const c of carrinhos) {
-      if (!c.contact_phone) continue;
-      const telefone = formatTel(c.contact_phone);
-      if (!telefone) continue;
-
-      const criadoEm = new Date(c.created_at).getTime();
-      const minutos = Math.floor((agora - criadoEm) / 60000);
-      const nome = c.contact_name || 'Cliente';
-      const link = c.abandoned_checkout_url || '';
-      const id   = String(c.id);
-
-      // Define qual etapa deve ser disparada
-      let etapa = null;
-      if (minutos >= 30  && minutos < 90)   etapa = 30;
-      if (minutos >= 60  && minutos < 120)  etapa = 60;
-      if (minutos >= 1440 && minutos < 1500) etapa = 1440;
-      if (minutos >= 2880 && minutos < 2940) etapa = 2880;
-      if (!etapa) continue;
-
-      // Verifica se essa etapa já foi enviada
-      if (db.jaCarrinhoEnviado(id, etapa)) continue;
-
-      const mensagem = montarMensagemCarrinho(etapa, nome, link);
-      if (!mensagem) continue;
-
-      try {
-        if (!await podEnviar(telefone, storeId)) continue;
-        await sendWhatsApp(telefone, mensagem, storeId);
-        db.marcarCarrinhoEnviado(id, storeId, etapa, telefone);
-        db.registrarMensagem(telefone);
-        console.log(`[Carrinho] Etapa ${etapa}min enviada para ${nome} — carrinho #${id}`);
-      } catch(e) {
-        console.error(`[Carrinho] Falha etapa ${etapa}min para #${id}:`, e.message);
-      }
-
-      await new Promise(r => setTimeout(r, 500));
-    }
-    // Cruzar carrinhos com pedidos pagos para marcar recuperados
-    try {
-      const pedidosPagos = await nuvemGet(storeId, '/orders', {
-        per_page: 100,
-        payment_status: 'paid',
-        fields: 'id,contact_phone,created_at'
-      });
-      for (const o of pedidosPagos) {
-        const tel = formatTel(o.contact_phone);
-        if (tel) db.marcarCarrinhoRecuperado(tel, storeId);
-      }
-    } catch(e) { /* silencioso — não bloqueia o fluxo principal */ }
-
-  } catch(e) {
-    const msg = e.response?.data?.description || e.message || '';
-    if (msg.includes('Last page is 0')) return;
-    console.error(`[Carrinho] Erro loja ${storeId}:`, e.response?.data || e.message);
-  }
-}
-
-// ── Verificar pagamentos recentes (últimas 2h) ────────────────────────────────
-async function verificarPagamentos(storeId) {
-  try {
-    const desde = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-    const orders = await nuvemGet(storeId, '/orders', {
-      per_page: 50,
-      payment_status: 'paid',
-      created_at_min: desde,
-      fields: 'id,number,contact_name,contact_phone,payment_status,created_at'
-    });
-
-    for (const o of orders) {
-      if (o.status === 'cancelled') continue;
-      if (db.jaConfirmacaoEnviada(String(o.id))) continue;
-
-      const telefone = formatTel(o.contact_phone);
-      if (!telefone) continue;
-
-      try {
-        await sendWhatsApp(telefone, montarMensagemPagamento(o.contact_name || 'Cliente', o.number));
-        db.marcarConfirmacaoEnviada(String(o.id), storeId);
-        console.log(`[Pagamento] WhatsApp enviado para pedido #${o.number}`);
-      } catch(e) {
-        console.error(`[Pagamento] Falha para #${o.number}:`, e.message);
-      }
-
-      await new Promise(r => setTimeout(r, 500));
-    }
-  } catch(e) {
-    const msg = e.response?.data?.description || e.message || '';
-    if (msg.includes('Last page is 0')) return; // sem pedidos — silencioso
-    console.error(`[Pagamento] Erro loja ${storeId}:`, e.response?.data || e.message);
-  }
-}
-
-// ── Verificar mudanças de rastreio ────────────────────────────────────────────
-async function verificarRastreios(storeId) {
-  try {
-    const orders = await nuvemGet(storeId, '/orders', {
-      per_page: 200,
-      payment_status: 'paid',
-      fields: 'id,number,contact_name,contact_phone,shipping_status,shipping_tracking_number,created_at'
-    });
-
-    for (const o of orders) {
-      if (o.status === 'cancelled') continue;
-      const rastreio = o.shipping_tracking_number?.trim();
-      if (!rastreio) continue;
-      const telefone = formatTel(o.contact_phone);
-      if (!telefone) continue;
-      if (!/^[A-Z]{2}\d{9}[A-Z]{2}$/i.test(rastreio)) continue;
-      if (db.statusRastreio(rastreio) === 'entregue') continue;
-
-      const evento = await consultarCorreios(rastreio);
-      if (!evento) continue;
-
-      const statusAnterior = db.statusRastreio(rastreio);
-      const statusNovo = evento.entregue ? 'entregue' : evento.descricao;
-
-      if (statusNovo && statusNovo !== statusAnterior) {
-        console.log(`[Rastreio] ${rastreio}: "${statusAnterior}" → "${statusNovo}"`);
-        const pedido = { cliente: o.contact_name, numero: o.number, rastreio };
-        try {
-          if (!await podEnviar(telefone, storeId)) continue;
-          await sendWhatsApp(telefone, montarMensagemRastreio(pedido, evento), storeId);
-          db.registrarMensagem(telefone);
-          console.log(`[Rastreio] WhatsApp enviado para #${o.number}`);
-
-          // Pesquisa de satisfação quando entregue
-          if (evento.entregue && !db.jaSatisfacaoEnviada(String(o.id))) {
-            await new Promise(r => setTimeout(r, 3000));
-            if (await podEnviar(telefone)) {
-              const msgSatisfacao =
-                `Como foi a sua experiência com o pedido *#${o.number}*, ${o.contact_name || 'Cliente'}? 😊\n\n` +
-                `Responda com um número:\n\n` +
-                `5️⃣ — Excelente\n` +
-                `4️⃣ — Bom\n` +
-                `3️⃣ — Regular\n` +
-                `2️⃣ — Ruim\n` +
-                `1️⃣ — Péssimo\n\n` +
-                `Sua opinião é muito importante para continuarmos melhorando! 🙏`;
-              await sendWhatsApp(telefone, msgSatisfacao, storeId);
-              db.marcarSatisfacaoEnviada(String(o.id), storeId);
-              db.registrarMensagem(telefone);
-              console.log(`[Satisfação] Pesquisa enviada para #${o.number}`);
-            }
-          }
-        } catch(e) {
-          console.error(`[Rastreio] Falha para #${o.number}:`, e.message);
-        }
-        db.atualizarStatusRastreio(rastreio, statusNovo, evento.data + ' ' + evento.hora);
-      } else if (!statusAnterior) {
-        db.atualizarStatusRastreio(rastreio, statusNovo || 'postado', evento.data + ' ' + evento.hora);
-      }
-
-      await new Promise(r => setTimeout(r, 7000)); // respeita limite 10req/min SeuRastreio
-    }
-  } catch(e) {
-    console.error(`[Rastreio] Erro loja ${storeId}:`, e.response?.data || e.message);
-  }
-}
-
-// ── OAuth ─────────────────────────────────────────────────────────────────────
-app.get('/auth/install', (req, res) => {
-  const { store_id, session_code } = req.query;
-  const state = session_code ? `ext_${session_code}` : (store_id || 'manual');
-  if (session_code) {
-    try { db.upsertAuthSession(session_code, 'pending'); } catch(e) {}
-  }
-  const redirect = encodeURIComponent(`${APP_URL}/auth/callback`);
-  res.redirect(`https://www.nuvemshop.com.br/apps/${NUVEM_CLIENT_ID}/authorize?state=${state}&redirect_uri=${redirect}`);
-});
-
-app.get('/auth/callback', async (req, res) => {
-  const { code, state: storeId } = req.query;
-  if (!code) return res.status(400).send('Código OAuth ausente.');
-  try {
-    const { data } = await axios.post('https://www.nuvemshop.com.br/apps/authorize/token', {
-      client_id: NUVEM_CLIENT_ID,
-      client_secret: NUVEM_CLIENT_SECRET,
-      grant_type: 'authorization_code',
-      code
-    }, { headers: { 'Content-Type': 'application/json' } });
-    const rawState = String(storeId || '');
-    const sessionCode = rawState.startsWith('ext_') ? rawState.slice(4) : null;
-    const sid = String(data.user_id || (sessionCode ? '' : storeId));
-    if (sid) db.saveToken(sid, data.access_token);
-    if (sessionCode) {
-      const realSid = String(data.user_id || sid);
-      if (realSid) db.saveToken(realSid, data.access_token);
-      try { db.completeAuthSession(sessionCode, realSid); } catch(e) {}
-    }
-    const isExt = !!sessionCode;
-    res.send(`<!DOCTYPE html><html><head><meta charset="UTF-8"/>
-    <style>*{font-family:sans-serif;text-align:center;}body{background:#0d0d10;color:#fff;padding:3rem;}
-    h2{color:#00d084;}code{background:#1e1e25;padding:4px 10px;border-radius:6px;font-size:18px;color:#00d084;}</style></head>
-    <body><h2>✅ RastreioBot conectado!</h2><p>Loja autenticada com sucesso.</p>
-    <p style="margin-top:1.5rem;">Seu <strong>Store ID</strong>:</p><code>${sid}</code>
-    ${isExt ? '<p style="color:#00d084;margin-top:1rem;">Você pode fechar esta aba e voltar para a extensão.</p>' : '<p style="color:#888;margin-top:1.5rem;">Cole esse ID nas configurações da extensão.</p>'}
-    </body></html>`);
-  } catch(e) {
-    console.error('OAuth erro:', e.response?.data || e.message);
-    res.status(500).send('Erro na autenticação. Tente novamente.');
-  }
-});
-
-// ── Pedidos ───────────────────────────────────────────────────────────────────
-app.get('/pedidos/:storeId', auth, async (req, res) => {
-  const { storeId } = req.params;
-  const prazo = parseInt(req.query.prazo || '3');
-  const incluirNotificados = req.query.incluir_notificados === 'true';
-  try {
-    const orders = await nuvemGet(storeId, '/orders', {
-      per_page: 200,
-      payment_status: 'paid',
-      fields: 'id,number,contact_name,contact_phone,shipping_status,shipping_tracking_number,shipping_option,created_at'
-    });
-    const resultado = [];
-    for (const o of orders) {
-      if (o.status === 'cancelled') continue;
-      const jaEnviado = db.jaNotificado(String(o.id));
-      if (jaEnviado && !incluirNotificados) continue;
-      const tel = formatTel(o.contact_phone);
-      const diasUteis = diasUteisDesde(o.created_at);
-      let statusPrazo = null;
-      const temRastreio = !!(o.shipping_tracking_number && o.shipping_tracking_number.trim());
-      const foiEnviado  = o.shipping_status === 'shipped' || temRastreio;
-      if (!foiEnviado) {
-        statusPrazo = diasUteis > prazo ? 'atrasado' : diasUteis === prazo ? 'hoje' : 'ok';
-      }
-      const statusRastreio = temRastreio ? db.statusRastreio(o.shipping_tracking_number.trim()) : null;
-      resultado.push({
-        order_id: String(o.id), numero: o.number, cliente: o.contact_name || '',
-        telefone: tel, rastreio: o.shipping_tracking_number || '',
-        transportadora: o.shipping_option || '',
-        status: foiEnviado ? 'shipped' : (o.shipping_status || 'pending'),
-        statusRastreio, diasUteis, statusPrazo, ja_notificado: jaEnviado, created_at: o.created_at
-      });
-    }
-    resultado.sort((a, b) => {
-      const p = x => x.statusPrazo === 'atrasado' ? 0 : x.statusPrazo === 'hoje' ? 1 : x.status === 'shipped' ? 2 : 3;
-      return p(a) - p(b);
-    });
-    res.json({ success: true, total: resultado.length, pedidos: resultado });
-  } catch(e) {
-    console.error('Erro /pedidos:', e.response?.data || e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── Marcar notificado ─────────────────────────────────────────────────────────
-app.post('/notificado', auth, (req, res) => {
-  const { order_id, store_id, rastreio, telefone } = req.body;
-  if (!order_id || !store_id) return res.status(400).json({ error: 'order_id e store_id obrigatórios.' });
-  db.marcarNotificado(order_id, store_id, rastreio, telefone);
-  res.json({ success: true });
-});
-
-// ── Gestão de clientes (uso interno — você mesmo acessa) ─────────────────────
-
-// Listar todos os clientes
-app.get('/admin/clientes', auth, (req, res) => {
-  const clientes = db.listarInstancias();
-  const stores   = db.getAllStores();
-  res.json({ success: true, total: clientes.length, clientes, stores });
-});
-
-// Cadastrar novo cliente
-app.post('/admin/clientes', auth, (req, res) => {
-  const { store_id, zapi_instance, zapi_token, zapi_client_token, nome_cliente } = req.body;
-  if (!store_id || !zapi_instance || !zapi_token || !zapi_client_token)
-    return res.status(400).json({ error: 'store_id, zapi_instance, zapi_token e zapi_client_token obrigatórios.' });
-  db.salvarInstancia(store_id, zapi_instance, zapi_token, zapi_client_token, nome_cliente);
-  res.json({ success: true, message: `Cliente ${nome_cliente || store_id} cadastrado.` });
-});
-
-// Remover cliente
-app.delete('/admin/clientes/:storeId', auth, (req, res) => {
-  // Remove apenas a instância, mantém tokens OAuth
-  const { storeId } = req.params;
-  res.json({ success: true, message: `Cliente ${storeId} removido.` });
-});
-
-// ── Rastreio público (sem auth) ───────────────────────────────────────────────
-app.get('/rastreio-publico', async (req, res) => {
-  const { codigo } = req.query;
-  if (!codigo) return res.status(400).json({ success: false, error: 'Código obrigatório.' });
-  const evento = await consultarCorreios(codigo);
-  if (!evento) return res.json({ success: false, error: 'Não encontrado.' });
-  res.json({ success: true, evento });
-});
-
-// ── Health check ──────────────────────────────────────────────────────────────
-app.get('/status', (req, res) => {
-  const stores = db.getAllStores();
-  res.json({ ok: true, lojas: stores.length, versao: '2.5.0', cron: 'ativo (30min)' });
-});
-
-// ── API Dashboard Admin ───────────────────────────────────────────────────────
-app.get('/admin/dashboard', auth, (req, res) => {
-  try {
-    const stats = db.getAdminStats();
-    res.json({ success: true, ...stats });
-  } catch(e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── API Dashboard Lojista ─────────────────────────────────────────────────────
-app.get('/dashboard/:storeId', auth, async (req, res) => {
-  const { storeId } = req.params;
-  try {
-    const stats = db.getLojistaStats(storeId);
-    // Verifica status Z-API
-    let zapiConectado = false;
-    try {
-      const inst = db.getInstancia(storeId) || {};
-      const instance = inst.zapi_instance || process.env.ZAPI_INSTANCE;
-      const token    = inst.zapi_token    || process.env.ZAPI_TOKEN;
-      const client   = inst.zapi_client_token || process.env.ZAPI_CLIENT_TOKEN;
-      if (instance && token && client) {
-        const r = await axios.get(
-          `https://api.z-api.io/instances/${instance}/token/${token}/status`,
-          { headers: { 'Client-Token': client }, timeout: 5000 }
-        );
-        zapiConectado = r.data?.connected === true || r.data?.status === 'connected';
-      }
-    } catch(e) { zapiConectado = false; }
-    res.json({ success: true, ...stats, zapiConectado });
-  } catch(e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── Dashboard completo Nuvemshop (extensão Chrome) ───────────────────────────
-app.get('/dashboard-nuvem/:storeId', auth, async (req, res) => {
-  const { storeId } = req.params;
-  try {
-    // Railway em UTC — meia-noite BRT = 03:00 UTC
-    const _agora = new Date();
-    const _brt = new Date(_agora.getTime() - 3 * 60 * 60 * 1000);
-    const _ano = _brt.getUTCFullYear(), _mes = _brt.getUTCMonth(), _dia = _brt.getUTCDate();
-    const _brtIso = (y, m, d) => new Date(Date.UTC(y, m, d, 3, 0, 0)).toISOString();
-    const inicioDia    = _brtIso(_ano, _mes, _dia);
-    const inicioOntem  = _brtIso(_ano, _mes, _dia - 1);
-    const inicioSemana = _brtIso(_ano, _mes, _dia - _brt.getUTCDay());
-    const inicioMes    = _brtIso(_ano, _mes, 1);
-
-    const nuvemSafe = async (path, params) => {
-      try { return await nuvemGet(storeId, path, params); }
-      catch(e) {
-        const status = e.response?.status;
-        if (status === 404 || (e.response?.data?.description || '').includes('Last page is 0')) return [];
-        throw e;
-      }
-    };
-
-    const [pedidosHoje, pedidosOntem, pedidosSemana, pedidosMes] = await Promise.all([
-      nuvemSafe('/orders', { created_at_min: inicioDia,    per_page: 200 }),
-      nuvemSafe('/orders', { created_at_min: inicioOntem,  created_at_max: inicioDia, per_page: 200 }),
-      nuvemSafe('/orders', { created_at_min: inicioSemana, per_page: 200 }),
-      nuvemSafe('/orders', { created_at_min: inicioMes,    per_page: 200 })
-    ]);
-
-    // Filtra pedidos pagos (exclui cancelados e pendentes)
-    const pagosHoje   = pedidosHoje.filter(p => p.payment_status === 'paid');
-    const pagosOntem  = pedidosOntem.filter(p => p.payment_status === 'paid');
-    const pagosSemana = pedidosSemana.filter(p => p.payment_status === 'paid');
-    const pagosMes    = pedidosMes.filter(p => p.payment_status === 'paid');
-
-    // Métricas hoje
-    const totalHoje       = pagosHoje.reduce((s, p) => s + parseFloat(p.total || 0), 0);
-    const freteHoje       = pagosHoje.reduce((s, p) => s + parseFloat(p.shipping_cost_owner || 0), 0);
-    const ticketMedioHoje = pagosHoje.length > 0 ? totalHoje / pagosHoje.length : 0;
-
-    // Métricas ontem
-    const totalOntem = pagosOntem.reduce((s, p) => s + parseFloat(p.total || 0), 0);
-
-    // Variação
-    const variacaoValor = totalOntem > 0 ? ((totalHoje - totalOntem) / totalOntem * 100) : null;
-    const variacaoQtd   = pagosOntem.length > 0 ? ((pagosHoje.length - pagosOntem.length) / pagosOntem.length * 100) : null;
-
-    // Pendentes de ação
-    const aguardandoPagamento = pedidosHoje.filter(p => p.payment_status === 'pending').length;
-    const aguardandoEnvio     = pedidosHoje.filter(p => p.payment_status === 'paid' && p.shipping_status === 'unpacked').length;
-
-    // Produto mais vendido hoje
-    const prodContagem = {};
-    for (const p of pagosHoje) {
-      for (const prod of (p.products || [])) {
-        const nome = prod.name || 'Produto';
-        prodContagem[nome] = (prodContagem[nome] || 0) + (prod.quantity || 1);
-      }
-    }
-    const prodMaisVendido = Object.entries(prodContagem).sort((a,b) => b[1]-a[1])[0] || null;
-
-    // Hora de pico
-    const contagemHoras = {};
-    for (const p of pedidosHoje) {
-      const h = new Date(p.created_at).getHours();
-      contagemHoras[h] = (contagemHoras[h] || 0) + 1;
-    }
-    const picoPar = Object.entries(contagemHoras).sort((a,b) => b[1]-a[1])[0];
-    const horaPico = picoPar ? `${String(picoPar[0]).padStart(2,'0')}h` : null;
-
-    // Semana e mês
-    const totalSemana  = pagosSemana.reduce((s, p) => s + parseFloat(p.total || 0), 0);
-    const freteSemana  = pagosSemana.reduce((s, p) => s + parseFloat(p.shipping_cost_owner || 0), 0);
-    const totalMes     = pagosMes.reduce((s, p) => s + parseFloat(p.total || 0), 0);
-    const freteMes     = pagosMes.reduce((s, p) => s + parseFloat(p.shipping_cost_owner || 0), 0);
-    const ticketSemana = pagosSemana.length > 0 ? totalSemana / pagosSemana.length : 0;
-    const ticketMes    = pagosMes.length    > 0 ? totalMes    / pagosMes.length    : 0;
-
-    // Últimos 5 pedidos de hoje
-    const ultimos = pedidosHoje.slice(0, 5).map(p => ({
-      numero:  p.number,
-      total:   parseFloat(p.total || 0),
-      status:  p.payment_status,
-      cliente: p.customer ? (p.customer.name || 'Cliente') : 'Cliente',
-      hora:    new Date(p.created_at).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit', timeZone:'America/Recife' })
-    }));
-
-    // Score de saúde
-    let score = 100;
-    const totalPedidos = pagosHoje.length + aguardandoPagamento + aguardandoEnvio;
-    if (totalPedidos > 0) {
-      const txPendente = (aguardandoPagamento + aguardandoEnvio) / totalPedidos;
-      score -= Math.round(txPendente * 40);
-    }
-    if (totalHoje === 0) score -= 20;
-    score = Math.max(0, Math.min(100, score));
-
-    res.json({
-      success: true,
-      hoje: {
-        qtd: pagosHoje.length,
-        total: totalHoje,
-        frete: freteHoje,
-        ticketMedio: ticketMedioHoje,
-        variacaoValor,
-        variacaoQtd,
-        aguardandoPagamento,
-        aguardandoEnvio,
-        prodMaisVendido,
-        horaPico
-      },
-      semana: { qtd: pagosSemana.length, total: totalSemana },
-      mes:    { qtd: pagosMes.length, total: totalMes, frete: freteMes },
-      semana_det: { qtd: pagosSemana.length, total: totalSemana, frete: freteSemana, ticketMedio: ticketSemana },
-      mes_det:    { qtd: pagosMes.length,    total: totalMes,    frete: freteMes,    ticketMedio: ticketMes    },
-      ultimos,
-      score,
-      atualizadoEm: new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit', timeZone:'America/Recife' })
-    });
-  } catch(e) {
-    console.error('[Dashboard Nuvem]', e.message);
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ── Auth status (polling da extensão) ────────────────────────────────────────
-app.get('/auth/status', (req, res) => {
-  const { code } = req.query;
-  if (!code) return res.status(400).json({ error: 'code obrigatorio' });
-  try {
-    const row = db.getAuthSession(code);
-    if (!row) return res.json({ status: 'pending' });
-    if (row.status === 'done') {
-      db.deleteAuthSession(code);
-      return res.json({ status: 'done', store_id: row.store_id });
-    }
-    res.json({ status: row.status });
-  } catch(e) {
-    res.json({ status: 'pending' });
-  }
-});
-
-// ── Email via Resend ──────────────────────────────────────────────────────────
-async function enviarChavePorEmail(email, chave, plano, expiraEm) {
-  const resend = new Resend(process.env.RESEND_API_KEY);
-  const expira = new Date(expiraEm).toLocaleDateString('pt-BR');
-  await resend.emails.send({
-    from: 'LoggZap <contato@loggzap.com.br>',
-    to: email,
-    subject: 'Sua chave de ativacao LoggZap',
-    html: '<div style="font-family:sans-serif;max-width:500px;margin:0 auto;background:#0d0d10;color:#ededf2;padding:32px;border-radius:12px">' +
-      '<h2 style="color:#4f8ef7">LoggZap Dashboard</h2>' +
-      '<p>Seu pagamento foi confirmado! Aqui esta sua chave de ativacao:</p>' +
-      '<div style="background:#1e1e25;border:1px solid #4f8ef7;border-radius:8px;padding:16px;text-align:center;margin:24px 0">' +
-      '<code style="font-size:20px;color:#00d084;letter-spacing:2px">' + chave + '</code></div>' +
-      '<p><strong>Plano:</strong> ' + (plano === 'basic' ? 'Basic - R$29/mes' : 'Premium - R$397/mes') + '</p>' +
-      '<p><strong>Valido ate:</strong> ' + expira + '</p>' +
-      '<p style="margin-top:24px">Para ativar: abra a extensao → Configuracoes → Cole a chave → Ativar chave.</p>' +
-      '<hr style="border-color:#2a2a35;margin:24px 0">' +
-      '<p style="color:#888;font-size:12px">LoggZap | suporte: contato@loggzap.com.br</p></div>'
-  });
-}
-
-function gerarChave(plano) {
-  const crypto = require('crypto');
-  const prefixo = plano === 'premium' ? 'LZP' : 'LZB';
-  const rand = crypto.randomBytes(6).toString('hex').toUpperCase();
-  return prefixo + '-' + rand.slice(0,4) + '-' + rand.slice(4,8) + '-' + rand.slice(8);
-}
-
-// ── Rota de teste de email ────────────────────────────────────────────────────
-app.get('/teste/email', async (req, res) => {
-  const email = req.query.email;
-  if (!email) return res.status(400).json({ error: 'Informe ?email=seu@email.com' });
-  try {
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    await resend.emails.send({
-      from: 'LoggZap <contato@loggzap.com.br>',
-      to: email,
-      subject: '✅ Teste de email LoggZap',
-      html: '<div style="font-family:sans-serif;max-width:500px;margin:0 auto;background:#0d0d10;color:#ededf2;padding:32px;border-radius:12px">' +
-        '<h2 style="color:#00d084">✅ Email funcionando!</h2>' +
-        '<p>O Resend está configurado corretamente para o domínio <strong>loggzap.com.br</strong>.</p>' +
-        '<hr style="border-color:#2a2a35;margin:24px 0">' +
-        '<p style="color:#888;font-size:12px">LoggZap | contato@loggzap.com.br</p></div>'
-    });
-    res.json({ success: true, enviado_para: email });
-  } catch(e) {
-    console.error('[Teste Email]', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── Checkout Mercado Pago ─────────────────────────────────────────────────────
-app.post('/checkout/criar', async (req, res) => {
-  const { plano, email } = req.body;
-  if (!plano || !email) return res.status(400).json({ error: 'plano e email obrigatorios' });
-  if (!MP_ACCESS_TOKEN) return res.status(500).json({ error: 'MP_ACCESS_TOKEN nao configurado' });
-  const precos = { basic: 29, premium: 397 };
-  const nomes  = { basic: 'LoggZap Basic', premium: 'LoggZap Premium' };
-  if (!precos[plano]) return res.status(400).json({ error: 'plano invalido' });
-  try {
-    const { data } = await axios.post(
-      'https://api.mercadopago.com/checkout/preferences',
-      {
-        items: [{ title: nomes[plano], quantity: 1, unit_price: precos[plano], currency_id: 'BRL' }],
-        payer: { email },
-        back_urls: {
-          success: APP_URL + '/checkout/sucesso',
-          failure: APP_URL + '/checkout/erro',
-          pending: APP_URL + '/checkout/pendente'
-        },
-        auto_return: 'approved',
-        external_reference: JSON.stringify({ plano, email, meses: 1 }),
-        notification_url: APP_URL + '/webhook/mp'
-      },
-      { headers: { 'Authorization': 'Bearer ' + MP_ACCESS_TOKEN, 'Content-Type': 'application/json' } }
-    );
-    res.json({ success: true, url: data.init_point, id: data.id });
-  } catch(e) {
-    console.error('[Checkout MP]', e.response?.data || e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ── Webhook Mercado Pago ──────────────────────────────────────────────────────
-app.post('/webhook/mp', async (req, res) => {
-  res.sendStatus(200);
-  const { type, data } = req.body;
-  if (type !== 'payment') return;
-  try {
-    const { data: pagamento } = await axios.get(
-      'https://api.mercadopago.com/v1/payments/' + data.id,
-      { headers: { 'Authorization': 'Bearer ' + MP_ACCESS_TOKEN } }
-    );
-    if (pagamento.status !== 'approved') return;
-    const ref = JSON.parse(pagamento.external_reference || '{}');
-    const { plano, email, meses = 1 } = ref;
-    if (!plano || !email) return;
-    const jaProcessado = db.getLicencasPorPayment(String(data.id));
-    if (jaProcessado) return;
-    const chave = gerarChave(plano);
-    db.criarLicenca(chave, plano, null, meses);
-    db.salvarPaymentId(chave, String(data.id));
-    await enviarChavePorEmail(email, chave, plano,
-      new Date(Date.now() + meses * 30 * 24 * 60 * 60 * 1000).toISOString()
-    );
-    console.log('[MP] Licenca ' + chave + ' gerada para ' + email + ' — plano ' + plano);
-  } catch(e) {
-    console.error('[Webhook MP]', e.message);
-  }
-});
-
-// ── Validar licenca (extensao) ────────────────────────────────────────────────
-app.post('/licenca/validar', auth, (req, res) => {
-  const { chave, store_id } = req.body;
-  if (!chave || !store_id) return res.status(400).json({ error: 'chave e store_id obrigatorios' });
-  const resultado = db.validarLicenca(chave, store_id);
-  res.json(resultado);
-});
-
-app.get('/licenca/status/:storeId', auth, (req, res) => {
-  const lic = db.getLicencaPorStore(req.params.storeId);
-  if (!lic) return res.json({ plano: 'trial', valida: false });
-  if (new Date(lic.expira_em) < new Date()) return res.json({ plano: 'trial', valida: false, motivo: 'expirada' });
-  res.json({ plano: lic.plano, valida: true, expira_em: lic.expira_em });
-});
-
-// ── Cadastro de novo usuário ──────────────────────────────────────────────────
-app.post('/cadastro', async (req, res) => {
-  const { nome, email, whatsapp, plano } = req.body;
-  if (!nome || !email) return res.status(400).json({ error: 'Nome e email são obrigatórios.' });
-
-  try {
-    const resend = new Resend(process.env.RESEND_API_KEY);
-    const nomeFormatado = nome.split(' ').map(p => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase()).join(' ');
-    const isPremium = (plano === 'premium');
-
-    // Email com extensão + manual
-    await resend.emails.send({
-      from: 'LoggZap <contato@loggzap.com.br>',
-      to: email,
-      subject: '⚡ Seu LoggZap Dashboard está pronto para instalar',
-      html: `
-        <!DOCTYPE html>
-        <html lang="pt-BR">
-        <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
-        <body style="margin:0;padding:0;background:#07090e;font-family:'DM Sans',Arial,sans-serif;color:#eef0f8">
-          <div style="max-width:600px;margin:0 auto;padding:40px 24px">
-            <div style="text-align:center;margin-bottom:36px">
-              <span style="font-size:32px;font-weight:800">Logg<span style="color:#00d084">Zap</span></span>
-            </div>
-            <div style="background:#0c0f16;border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:32px">
-              <h1 style="font-size:22px;font-weight:700;margin:0 0 12px">Olá, ${nomeFormatado}! 👋</h1>
-              <p style="color:#8b93a8;font-size:15px;line-height:1.7;margin:0 0 24px">
-                Seu acesso ao <strong style="color:#00d084">LoggZap Dashboard</strong> está pronto. 
-                Siga os passos abaixo para instalar em menos de 5 minutos.
-              </p>
-              
-              ${isPremium ? `<div style="background:linear-gradient(135deg,rgba(79,142,247,0.1),rgba(79,142,247,0.05));border:1px solid rgba(79,142,247,0.3);border-radius:10px;padding:20px;margin-bottom:24px">
-                <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#4f8ef7;text-transform:uppercase;margin-bottom:12px">&#9889; Você escolheu o Premium</div>
-                <p style="color:#8b93a8;font-size:14px;margin:0 0 12px;line-height:1.65">Após instalar e configurar a extensão, acesse dentro dela:</p>
-                <div style="background:#07090e;border-radius:8px;padding:14px;font-size:14px;color:#eef0f8;line-height:1.8">
-                  &#9881; <strong>Configurações</strong> &rarr; <strong>Plano</strong> &rarr; <strong>Assinar Premium</strong>
-                </div>
-                <p style="color:#8b93a8;font-size:13px;margin:12px 0 0">Você será redirecionado para o pagamento seguro via Mercado Pago.</p>
-              </div>` : ''}
-              <div style="background:#11151e;border-radius:10px;padding:20px;margin-bottom:24px">
-                <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#00d084;text-transform:uppercase;margin-bottom:12px">Passo 1 — Baixe a extensão</div>
-                <p style="color:#8b93a8;font-size:14px;margin:0 0 16px">Clique no botão abaixo para baixar o arquivo da extensão:</p>
-                <a href="${process.env.APP_URL}/download/extensao" style="display:inline-block;background:#00d084;color:#000;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:700;font-size:14px">⬇️ Baixar LoggZap v2.6</a>
-              </div>
-
-              <div style="background:#11151e;border-radius:10px;padding:20px;margin-bottom:24px">
-                <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#00d084;text-transform:uppercase;margin-bottom:12px">Passo 2 — Leia o manual</div>
-                <p style="color:#8b93a8;font-size:14px;margin:0 0 16px">O manual completo de instalação está disponível online:</p>
-                <a href="${process.env.APP_URL}/manual" style="display:inline-block;border:1px solid rgba(255,255,255,0.15);color:#eef0f8;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px">📖 Ver manual de instalação</a>
-              </div>
-
-              <div style="background:#11151e;border-radius:10px;padding:20px">
-                <div style="font-size:12px;font-weight:700;letter-spacing:2px;color:#00d084;text-transform:uppercase;margin-bottom:12px">Dados de configuração</div>
-                <p style="color:#8b93a8;font-size:14px;margin:0 0 8px">Use estes dados quando for configurar a extensão:</p>
-                <div style="background:#07090e;border-radius:6px;padding:14px;font-family:monospace;font-size:13px;color:#00d084">
-                  Chave Secreta: MinhaChave2024Secreta
-                </div>
-              </div>
-            </div>
-
-            <div style="text-align:center;margin-top:32px">
-              <p style="color:#424a61;font-size:13px">Seu trial de 7 dias começa quando você instalar a extensão.</p>
-              <p style="color:#424a61;font-size:13px;margin-top:8px">Dúvidas? <a href="mailto:contato@loggzap.com.br" style="color:#00d084">contato@loggzap.com.br</a></p>
-            </div>
-          </div>
-        </body>
-        </html>
-      `
-    });
-
-    console.log('[Cadastro] Lead registrado:', nome, email, plano);
-
-    // Notificar leads@loggzap.com.br
-    try {
-      await resend.emails.send({
-        from: 'LoggZap <contato@loggzap.com.br>',
-        to: 'leads@loggzap.com.br',
-        subject: `🔔 Novo lead: ${nome} — Plano ${plano}`,
-        html: `
-          <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px;background:#0c0f16;color:#eef0f8;border-radius:12px">
-            <h2 style="color:#00d084;margin:0 0 20px">Novo cadastro no LoggZap</h2>
-            <table style="width:100%;border-collapse:collapse">
-              <tr><td style="padding:8px 0;color:#8b93a8;font-size:14px">Nome</td><td style="padding:8px 0;font-size:14px"><strong>${nome}</strong></td></tr>
-              <tr><td style="padding:8px 0;color:#8b93a8;font-size:14px">Email</td><td style="padding:8px 0;font-size:14px"><a href="mailto:${email}" style="color:#00d084">${email}</a></td></tr>
-              <tr><td style="padding:8px 0;color:#8b93a8;font-size:14px">WhatsApp</td><td style="padding:8px 0;font-size:14px">${whatsapp || '—'}</td></tr>
-              <tr><td style="padding:8px 0;color:#8b93a8;font-size:14px">Plano</td><td style="padding:8px 0;font-size:14px"><strong style="color:#00d084">${plano}</strong></td></tr>
-              <tr><td style="padding:8px 0;color:#8b93a8;font-size:14px">Data</td><td style="padding:8px 0;font-size:14px">${new Date().toLocaleString('pt-BR', {timeZone:'America/Recife'})}</td></tr>
-            </table>
-          </div>
-        `
-      });
-    } catch(notifErr) { console.error('[Cadastro] Erro notif lead:', notifErr.message); }
-
-    res.json({ success: true });
-  } catch(e) {
-    console.error('[Cadastro] Erro:', e.message);
-    res.status(500).json({ error: 'Erro ao enviar email. Tente novamente.' });
-  }
-});
-
-// ── Download da extensão ──────────────────────────────────────────────────────
-app.get('/download/extensao', (req, res) => {
-  const path = require('path');
-  const file = path.join(__dirname, 'public', 'LoggZap_v2.6.zip');
-  res.download(file, 'LoggZap_Dashboard_v2.6.zip');
-});
-
-// ── Manual de instalação ──────────────────────────────────────────────────────
-app.get('/manual', (req, res) => {
-  const path = require('path');
-  res.sendFile(path.join(__dirname, 'public', 'manual-loggzap.html'));
-});
-
-
-// ── Paginas de retorno do checkout ───────────────────────────────────────────
-app.get('/checkout/sucesso', (req, res) => {
-  res.send('<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{font-family:sans-serif;text-align:center;}body{background:#0d0d10;color:#fff;padding:3rem;}</style></head><body><h2 style="color:#00d084">Pagamento aprovado!</h2><p>Sua chave sera enviada para o seu email em instantes.</p><p style="color:#888;margin-top:1rem">Verifique tambem a pasta de spam.</p></body></html>');
-});
-
-app.get('/checkout/erro', (req, res) => {
-  res.send('<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{font-family:sans-serif;text-align:center;}body{background:#0d0d10;color:#fff;padding:3rem;}</style></head><body><h2 style="color:#e05a5a">Pagamento nao aprovado</h2><p>Tente novamente ou entre em contato: contato@loggzap.com.br</p></body></html>');
-});
-
-app.get('/checkout/pendente', (req, res) => {
-  res.send('<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{font-family:sans-serif;text-align:center;}body{background:#0d0d10;color:#fff;padding:3rem;}</style></head><body><h2 style="color:#e8a030">Pagamento em processamento</h2><p>Voce recebera a chave por email assim que o pagamento for confirmado.</p></body></html>');
-});
-
-
-// ── Rota de teste de email (remover em producao) ──────────────────────────────
-app.post('/teste/email', auth, async (req, res) => {
-  const { email, plano = 'basic' } = req.body;
-  if (!email) return res.status(400).json({ error: 'email obrigatorio' });
-  try {
-    const chave = gerarChave(plano);
-    const expiraEm = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    db.criarLicenca(chave, plano, null, 1);
-    // Tenta enviar email com timeout
-    let emailEnviado = false;
-    try {
-      await Promise.race([
-        enviarChavePorEmail(email, chave, plano, expiraEm),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000))
-      ]);
-      emailEnviado = true;
-    } catch(emailErr) {
-      console.error('[Teste Email] Falha no envio:', emailErr.message);
-    }
-    res.json({ success: true, chave, emailEnviado, mensagem: emailEnviado ? 'Email enviado!' : 'Licenca criada mas email falhou. Use a chave manualmente.' });
-  } catch(e) {
-    console.error('[Teste Email]', e.message);
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// ── Diagnóstico Nuvemshop ─────────────────────────────────────────────────────
-app.get('/diagnostico/:storeId', async (req, res) => {
-  const { storeId } = req.params;
-  try {
-    const row = db.getToken(storeId);
-    if (!row) return res.json({ erro: 'Token nao encontrado no banco', storeId });
-    const token = row.access_token;
-    const tokenPreview = token ? token.substring(0, 10) + '...' : 'VAZIO';
-    
-    let nuvemRes = null;
-    let nuvemErro = null;
-    try {
-      const r = await axios.get(
-        `https://api.nuvemshop.com.br/v1/${storeId}/orders`,
-        {
-          headers: {
-            'Authentication': `bearer ${token}`,
-            'User-Agent': `RastreioBot (${APP_URL})`
-          },
-          params: { per_page: 1 }
-        }
-      );
-      nuvemRes = { status: r.status, total: Array.isArray(r.data) ? r.data.length : 'nao array' };
-    } catch(e) {
-      nuvemErro = { status: e.response?.status, msg: e.response?.data || e.message };
-    }
-    
-    res.json({ storeId, tokenPreview, nuvemRes, nuvemErro });
-  } catch(e) {
+    const { email, senha } = req.body;
+    const { rows } = await pool.query('SELECT * FROM vendedores WHERE email=$1 AND ativo=true', [email]);
+    if (!rows.length) return res.status(401).json({ erro: 'Credenciais inválidas' });
+    const v = rows[0];
+    const ok = await bcrypt.compare(senha, v.senha_hash);
+    if (!ok) return res.status(401).json({ erro: 'Credenciais inválidas' });
+    const token = jwt.sign({ id: v.id, nome: v.nome, email: v.email, role: v.role }, JWT_SECRET, { expiresIn: '8h' });
+    res.json({ token, id: v.id, nome: v.nome, role: v.role });
+  } catch (e) {
     res.status(500).json({ erro: e.message });
   }
 });
 
-// ── Ativar plano via chave ────────────────────────────────────────────────────
-app.post('/ativar', auth, (req, res) => {
-  const { chave, store_id } = req.body;
-  if (!chave || !store_id) return res.status(400).json({ error: 'chave e store_id obrigatorios' });
-  // Tabela de chaves — em produção use banco de dados
-  const CHAVES = {
-    'LOGGZAP-BASIC-2026':   'basic',
-    'LOGGZAP-PREMIUM-2026': 'premium'
-  };
-  const plano = CHAVES[chave.toUpperCase()];
-  if (!plano) return res.status(400).json({ error: 'Chave invalida.' });
-  res.json({ success: true, plano, store_id });
-});
-
-// ── Configurações por loja ────────────────────────────────────────────────────
-app.get('/config/:storeId', auth, (req, res) => {
+// ─── VENDEDORES (admin) ───────────────────────────────────────────────────────
+app.get('/api/vendedores', authMiddleware, adminOnly, async (req, res) => {
   try {
-    res.json({ success: true, config: db.getConfig(req.params.storeId) });
-  } catch(e) { res.status(500).json({ error: e.message }); }
+    const { rows } = await pool.query(
+      `SELECT v.id, v.nome, v.email, v.telefone, v.ativo, v.criado_em,
+        COUNT(DISTINCT l.id) AS total_linhas,
+        COALESCE(SUM(t.comissao),0) AS total_comissao
+       FROM vendedores v
+       LEFT JOIN linhas l ON l.vendedor_id = v.id
+       LEFT JOIN transacoes t ON t.vendedor_id = v.id
+       WHERE v.role = 'vendedor'
+       GROUP BY v.id ORDER BY v.nome`
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
-app.post('/config/:storeId', auth, (req, res) => {
+app.post('/api/vendedores', authMiddleware, adminOnly, async (req, res) => {
   try {
-    db.salvarConfig(req.params.storeId, req.body);
-    res.json({ success: true });
-  } catch(e) { res.status(500).json({ error: e.message }); }
+    const { nome, email, senha, telefone } = req.body;
+    const hash = await bcrypt.hash(senha, 10);
+    const { rows } = await pool.query(
+      'INSERT INTO vendedores (nome, email, senha_hash, telefone) VALUES ($1,$2,$3,$4) RETURNING id, nome, email',
+      [nome, email, hash, telefone]
+    );
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
-// ── Opt-out manual ────────────────────────────────────────────────────────────
-app.post('/optout', auth, (req, res) => {
-  const { telefone, storeId, acao } = req.body;
-  if (!telefone) return res.status(400).json({ error: 'telefone obrigatório' });
-  if (acao === 'remover') db.removerOptOut(telefone);
-  else db.marcarOptOut(telefone, storeId);
-  res.json({ success: true });
-});
-
-// ── API Frete ─────────────────────────────────────────────────────────────────
-app.get('/frete/:storeId', auth, async (req, res) => {
-  const { storeId } = req.params;
+app.put('/api/vendedores/:id', authMiddleware, adminOnly, async (req, res) => {
   try {
-    const orders = await nuvemGet(storeId, '/orders', {
-      per_page: 200,
-      payment_status: 'paid',
-      fields: 'id,number,shipping_cost_customer,created_at'
-    });
-
-    const agora  = new Date();
-    const hoje   = new Date(agora); hoje.setHours(0,0,0,0);
-    const semana = new Date(agora); semana.setDate(semana.getDate() - 7); semana.setHours(0,0,0,0);
-    const mes    = new Date(agora); mes.setDate(mes.getDate() - 30);      mes.setHours(0,0,0,0);
-
-    function calcPeriod(desde) {
-      const period   = orders.filter(o => new Date(o.created_at) >= desde);
-      const comFrete = period.filter(o => parseFloat(o.shipping_cost_customer || 0) > 0);
-      const total    = comFrete.reduce((acc, o) => acc + parseFloat(o.shipping_cost_customer || 0), 0);
-      return {
-        total: Math.round(total * 100) / 100,
-        pedidos: comFrete.length,
-        pedidosTotal: period.length
-      };
+    const { nome, telefone, ativo, senha, permissoes } = req.body;
+    if (senha) {
+      const hash = await bcrypt.hash(senha, 10);
+      await pool.query('UPDATE vendedores SET nome=$1, telefone=$2, ativo=$3, senha_hash=$4 WHERE id=$5',
+        [nome, telefone, ativo, hash, req.params.id]);
+    } else {
+      await pool.query('UPDATE vendedores SET nome=$1, telefone=$2, ativo=$3 WHERE id=$4',
+        [nome, telefone, ativo, req.params.id]);
     }
+    if (permissoes) {
+      await pool.query('DELETE FROM vendedor_permissoes WHERE vendedor_id=$1', [req.params.id]);
+      for (const perm of permissoes) {
+        await pool.query('INSERT INTO vendedor_permissoes (vendedor_id, permissao) VALUES ($1,$2)', [req.params.id, perm]);
+      }
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.get('/api/vendedores/:id/permissoes', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT permissao FROM vendedor_permissoes WHERE vendedor_id=$1', [req.params.id]);
+    res.json(rows.map(r => r.permissao));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/minhas-permissoes', authMiddleware, async (req, res) => {
+  try {
+    if (req.user.role === 'admin') return res.json(['consulta','recarga','portabilidade','boleto_combado','troca_plano']);
+    const { rows } = await pool.query('SELECT permissao FROM vendedor_permissoes WHERE vendedor_id=$1', [req.user.id]);
+    res.json(rows.map(r => r.permissao));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── PLANOS COMISSÃO (admin) ──────────────────────────────────────────────────
+app.get('/api/planos-comissao', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM planos_comissao ORDER BY plano_nome');
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/planos-comissao', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { plano_id, plano_nome, plano_valor, comissao_ativacao, comissao_recarga } = req.body;
+    const { rows } = await pool.query(
+      `INSERT INTO planos_comissao (plano_id, plano_nome, plano_valor, comissao_ativacao, comissao_recarga)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (plano_id) DO UPDATE SET plano_nome=$2, plano_valor=$3, comissao_ativacao=$4, comissao_recarga=$5
+       RETURNING *`,
+      [plano_id, plano_nome, plano_valor, comissao_ativacao, comissao_recarga]
+    );
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ─── RELATÓRIOS ───────────────────────────────────────────────────────────────
+app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
+  try {
+    const vendedorId = req.params.id;
+    if (req.user.role !== 'admin' && parseInt(req.user.id) !== parseInt(vendedorId)) {
+      return res.status(403).json({ erro: 'Acesso negado' });
+    }
+    const { data_inicio, data_fim } = req.query;
+    const params = [vendedorId];
+    let filtro = '';
+    if (data_inicio && data_fim) {
+      filtro = ` AND (
+        CASE WHEN t.fonte IN ('retroativo','bora_details','bora_polling')
+          THEN t.periodo_referencia BETWEEN $2 AND $3
+          ELSE t.data_transacao::date::text BETWEEN $2 AND $3
+        END
+      )`;
+      params.push(data_inicio, data_fim);
+    }
+    const { rows: transacoes } = await pool.query(
+      `SELECT t.*, l.msisdn, l.nome_cliente, l.iccid
+       FROM transacoes t
+       LEFT JOIN linhas l ON l.id = t.linha_id
+       WHERE t.vendedor_id = $1${filtro}
+       ORDER BY COALESCE(t.periodo_referencia, t.data_transacao::date::text) DESC`,
+      params
+    );
+    const filtroResumo = filtro.replace(/t\./g, '');
+    const { rows: resumo } = await pool.query(
+      `SELECT tipo, COUNT(*) as quantidade, COALESCE(SUM(comissao),0) as total_comissao
+       FROM transacoes WHERE vendedor_id=$1${filtroResumo}
+       GROUP BY tipo`,
+      params
+    );
+    const { rows: linhas } = await pool.query(
+      'SELECT * FROM linhas WHERE vendedor_id=$1 ORDER BY data_ativacao DESC',
+      [vendedorId]
+    );
+    res.json({ transacoes, resumo, linhas });
+  } catch (e) {
+    console.error('[RELATORIO VENDEDOR]', e.message, e.stack);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.get('/api/relatorio/geral', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { data_inicio, data_fim } = req.query;
+    const params = [];
+    let filtro = 'WHERE 1=1';
+    if (data_inicio && data_fim) {
+      filtro += ' AND t.data_transacao BETWEEN $1 AND $2';
+      params.push(data_inicio, data_fim + ' 23:59:59');
+    }
+    const { rows } = await pool.query(
+      `SELECT v.nome, v.email,
+        COUNT(DISTINCT CASE WHEN t.tipo='ativacao' THEN t.id END) as ativacoes,
+        COUNT(DISTINCT CASE WHEN t.tipo='recarga' THEN t.id END) as recargas,
+        COALESCE(SUM(CASE WHEN t.tipo='ativacao' THEN t.comissao END),0) as comissao_ativacao,
+        COALESCE(SUM(CASE WHEN t.tipo='recarga' THEN t.comissao END),0) as comissao_recarga,
+        COALESCE(SUM(t.comissao),0) as total_comissao
+       FROM vendedores v
+       LEFT JOIN transacoes t ON t.vendedor_id = v.id
+       ${filtro}
+       AND v.role='vendedor'
+       GROUP BY v.id, v.nome, v.email
+       ORDER BY total_comissao DESC`,
+      params
+    );
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ─── PROXY BORA — Subscriber ──────────────────────────────────────────────────
+app.get('/api/bora/subscriber/documento/:doc', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscriber/${req.params.doc}/document`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+app.get('/api/bora/subscriber/iccid/:iccid', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscriber/${req.params.iccid}/iccid`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+app.post('/api/bora/subscriber', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraPost('/api/Subscriber', req.body);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+// ─── PROXY BORA — Planos ──────────────────────────────────────────────────────
+app.get('/api/bora/planos/ativacao', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Plan/Activation');
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+app.get('/api/bora/planos/recarga', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Plan/Recharge', { msisdn: req.query.msisdn });
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+app.get('/api/bora/ddds', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Cart/DDD');
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+// ─── PROXY BORA — Ativação completa ──────────────────────────────────────────
+app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
+  try {
+    const { subscriber, cartPayload, paymentType, recorrencia, vendedor_id, plano_id, plano_nome, plano_valor } = req.body;
+
+    let clientId = null;
+    try {
+      const existing = await boraGet(`/api/Subscriber/${subscriber.document}/document`);
+      clientId = existing?.idSubscriberExternal || existing?.id || null;
+    } catch {}
+
+    if (!clientId) {
+      const subResp = await boraPost('/api/Subscriber', subscriber);
+      clientId = subResp?.idSubscriberExternal || subResp?.id || null;
+    }
+
+    if (!clientId) throw new Error('Não foi possível obter clientId do subscriber');
+
+    const cartBody = {
+      iccid: cartPayload.iccid,
+      ddd: cartPayload.ddd,
+      planId: cartPayload.planId,
+      planType: cartPayload.planType || 'Controle',
+      clientId
+    };
+    if (cartPayload.msisdnPortabilidade) {
+      cartBody.msisdn = cartPayload.msisdnPortabilidade;
+    }
+    const cart = await boraPost('/api/Cart/subscription', cartBody);
+    const cartId = cart.cartId || cart.id;
+    if (!cartId) throw new Error('cartId não retornado pela Bora');
+
+    const recType = recorrencia || 'BILLET';
+    let pagamento;
+    if (paymentType === 'pix') {
+      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/pix`, {
+        isRecurrence: true,
+        recurrenceType: recType
+      });
+    } else if (paymentType === 'billet') {
+      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/billet`, {
+        isRecurrence: true,
+        recurrenceType: recType
+      });
+    } else if (paymentType === 'billetcombo') {
+      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/BilletCombo`, {});
+    } else {
+      throw new Error('paymentType inválido: use pix, billet ou billetcombo');
+    }
+
+    const { rows: planoRows } = await pool.query(
+      'SELECT comissao_ativacao FROM planos_comissao WHERE plano_id=$1',
+      [plano_id]
+    );
+    const comissao = planoRows[0]?.comissao_ativacao || 0;
+
+    const iccid = cartPayload.iccid || subscriber.iccid;
+    const msisdn = pagamento.msisdn || cartPayload.msisdn || null;
+    const { rows: linhaRows } = await pool.query(
+      `INSERT INTO linhas (iccid, msisdn, vendedor_id, plano_id, plano_nome, documento_cliente, nome_cliente)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (iccid) DO UPDATE SET msisdn=$2, vendedor_id=$3, plano_id=$4, plano_nome=$5
+       RETURNING id`,
+      [iccid, msisdn, vendedor_id, plano_id, plano_nome, subscriber.document, subscriber.name]
+    );
+    const linhaId = linhaRows[0].id;
+
+    await pool.query(
+      `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
+       VALUES ($1,$2,'ativacao',$3,$4,$5,$6,'sistema')`,
+      [linhaId, vendedor_id, plano_id, plano_nome, plano_valor, comissao]
+    );
+
+    const pixData = pagamento?.pix || null;
+
+    try {
+      await pool.query(
+        `UPDATE esims SET status='usado', vendedor_id=$1, msisdn=$2,
+         nome_cliente=$3, documento_cliente=$4, usado_em=NOW()
+         WHERE iccid=$5`,
+        [vendedor_id, pagamento?.msisdn || null, subscriber.name, subscriber.document, iccid]
+      );
+    } catch {}
 
     res.json({
-      success: true,
-      hoje:   calcPeriod(hoje),
-      semana: calcPeriod(semana),
-      mes:    calcPeriod(mes)
+      ok: true,
+      cartId,
+      comissao,
+      msisdn: pagamento?.msisdn || pagamento?.pmsisdn || null,
+      isPortability: pagamento?.isPortability || false,
+      pix: pixData ? {
+        code: pixData.code || null,
+        qrCodeUrl: pixData.qrCodeUrl || null,
+        protocol: pixData.protocol || null
+      } : null,
+      billet: pagamento?.billet ? {
+        url: pagamento.billet.url || pagamento.billet.digitableLine || null,
+        barcode: pagamento.billet.barCode || pagamento.billet.digitableLine || null
+      } : null
     });
-  } catch(e) {
-    res.status(500).json({ error: e.message });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
 });
 
-// ── Stats de carrinho ────────────────────────────────────────────────────────
-app.get('/carrinho-stats/:storeId', auth, async (req, res) => {
+// ─── PROXY BORA — Detalhes de linha ───────────────────────────────────────────
+app.get('/api/bora/linha/:identificador', authMiddleware, async (req, res) => {
   try {
-    const stats = db.getCarrinhoStats(req.params.storeId);
-    res.json({ success: true, ...stats });
-  } catch(e) {
-    res.status(500).json({ error: e.message });
+    const data = await boraGet(`/api/Subscription/${req.params.identificador}/details`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
 });
 
-// ── Enviar WhatsApp ───────────────────────────────────────────────────────────
-app.post('/enviar-whatsapp', auth, async (req, res) => {
-  const { telefone, mensagem, order_id, store_id, rastreio } = req.body;
-  if (!telefone || !mensagem) return res.status(400).json({ error: 'telefone e mensagem obrigatórios.' });
+app.get('/api/bora/historic/:msisdn', authMiddleware, async (req, res) => {
   try {
-    const result = await sendWhatsApp(telefone, mensagem, storeId);
-    if (order_id && store_id) db.marcarNotificado(order_id, store_id, rastreio, telefone);
-    res.json({ success: true, result });
-  } catch(e) {
-    res.status(500).json({ success: false, error: e.response?.data?.message || e.message });
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    res.json(details);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
 });
 
-// ── Status Z-API ──────────────────────────────────────────────────────────────
-app.get('/whatsapp/status', auth, async (req, res) => {
-  if (!ZAPI_INSTANCE || !ZAPI_TOKEN || !ZAPI_CLIENT_TOKEN)
-    return res.json({ conectado: false, erro: 'Z-API não configurada.' });
+// ─── Calculadora: simula recargas por período com /details ────────────────────
+app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
   try {
-    const r = await axios.get(
-      `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/status`,
-      { headers: { 'Client-Token': ZAPI_CLIENT_TOKEN } }
-    );
-    const conectado = r.data?.connected === true || r.data?.status === 'connected';
-    res.json({ conectado, estado: r.data?.status || 'unknown', data: r.data });
-  } catch(e) {
-    res.json({ conectado: false, erro: e.message });
-  }
-});
+    const { msisdn, plano_id, data_inicio, data_fim } = req.body;
 
-app.get('/whatsapp/qrcode', auth, (req, res) => {
-  res.json({ success: false, error: 'Com Z-API o QR Code é gerado no painel de z-api.io.' });
-});
+    const numeros = msisdn.split(',')
+      .map(n => n.trim())
+      .filter(n => n.length >= 8)
+      .map(n => n.startsWith('55') ? n : '55' + n);
 
-app.post('/whatsapp/criar-instancia', auth, (req, res) => {
-  res.json({ success: true, message: 'Z-API não precisa criar instância via API.' });
-});
+    if (!numeros.length) throw new Error('Nenhum número válido informado');
 
-// ── Relatório semanal — toda segunda às 8h ───────────────────────────────────
-// ── Pós-entrega ───────────────────────────────────────────────────────────────
-async function verificarPosEntrega(storeId) {
-  try {
-    const orders = await nuvemGet(storeId, '/orders', {
-      per_page: 100,
-      payment_status: 'paid',
-      fields: 'id,number,contact_name,contact_phone,shipping_status,created_at'
+    const { rows: planosComissao } = await pool.query('SELECT * FROM planos_comissao');
+    const mapaComissaoId = {};
+    const mapaComissaoNome = {};
+    planosComissao.forEach(p => {
+      mapaComissaoId[String(p.plano_id)] = p;
+      mapaComissaoNome[String(p.plano_nome).toUpperCase().trim()] = p;
     });
-    const cfg = db.getConfig(storeId);
-    const templatePadrao = `Olá, {nome}! 🎉\n\nSeu pedido *#{numero}* foi entregue! Esperamos que você tenha adorado.\n\nConta pra gente o que achou? Sua opinião é muito importante para nós! 😊`;
-    const template = cfg.template_pos_entrega || templatePadrao;
 
-    for (const o of orders) {
-      if (o.status === 'cancelled') continue;
-      if (o.shipping_status !== 'delivered') continue;
-      if (db.jaPosEntregaEnviado(String(o.id))) continue;
-      const telefone = formatTel(o.contact_phone);
-      if (!telefone) continue;
-      const nome = o.contact_name || 'Cliente';
-      const mensagem = template.replace('{nome}', nome).replace('{numero}', o.number);
+    function buscarComissao(planId, planNome) {
+      return mapaComissaoId[String(planId || '')] ||
+             mapaComissaoNome[String(planNome || '').toUpperCase().trim()] ||
+             null;
+    }
+
+    async function processarNumero(msisdnNorm) {
       try {
-        if (!await podEnviar(telefone, storeId)) continue;
-        await sendWhatsApp(telefone, mensagem, storeId);
-        db.marcarPosEntregaEnviado(String(o.id), storeId);
-        db.registrarMensagem(telefone);
-        console.log(`[PósEntrega] Enviado para ${nome} — pedido #${o.number}`);
-      } catch(e) {
-        console.error(`[PósEntrega] Falha #${o.number}:`, e.message);
-      }
-      await new Promise(r => setTimeout(r, 500));
-    }
-  } catch(e) {
-    const msg = e.response?.data?.description || e.message || '';
-    if (msg.includes('Last page is 0')) return;
-    console.error(`[PósEntrega] Erro loja ${storeId}:`, e.message);
-  }
-}
+        const details = await boraGet(`/api/Subscription/${msisdnNorm}/details`);
+        const dataAtivacao = details?.activationDate || null;
+        const statusLinha  = details?.status || '—';
+        let planArray = Array.isArray(details?.plan) ? details.plan : [];
 
-// ── Alerta pedido parado ──────────────────────────────────────────────────────
-async function verificarPedidosParados(storeId) {
-  try {
-    const cfg = db.getConfig(storeId);
-    const diasLimite = cfg.alerta_parado_dias || 5;
-    const orders = await nuvemGet(storeId, '/orders', {
-      per_page: 100,
-      payment_status: 'paid',
-      fields: 'id,number,contact_name,contact_phone,shipping_status,shipping_tracking_number,created_at'
-    });
-    const inst = db.getInstancia(storeId);
-    if (!inst) return; // sem instância, sem como avisar o lojista
-    const telLojista = inst.zapi_instance ? null : null; // aviso vai para o lojista via número configurado
-
-    for (const o of orders) {
-      if (o.status === 'cancelled') continue;
-      if (o.shipping_status === 'shipped' || o.shipping_status === 'delivered') continue;
-      if (o.shipping_tracking_number?.trim()) continue; // já tem rastreio
-      if (db.jaAlertaParadoEnviado(String(o.id))) continue;
-      const diasUteis = diasUteisDesde(o.created_at);
-      if (diasUteis < diasLimite) continue;
-
-      const telefoneCliente = formatTel(o.contact_phone);
-      const nome = o.contact_name || 'Cliente';
-
-      // Avisa o LOJISTA (número configurado no env)
-      const telLojistaMsg = process.env.LOJISTA_WHATSAPP;
-      if (telLojistaMsg) {
-        try {
-          await sendWhatsApp(telLojistaMsg,
-            `⚠️ *Pedido parado!*\n\nO pedido *#${o.number}* de *${nome}* está há *${diasUteis} dias úteis* sem envio.\n\nVerifique e atualize o rastreio para evitar reclamações.`,
-            storeId
-          );
-          db.marcarAlertaParadoEnviado(String(o.id), storeId);
-          console.log(`[Parado] Alerta enviado ao lojista — pedido #${o.number}`);
-        } catch(e) {
-          console.error(`[Parado] Falha ao alertar lojista #${o.number}:`, e.message);
-        }
-      }
-      await new Promise(r => setTimeout(r, 500));
-    }
-  } catch(e) {
-    const msg = e.response?.data?.description || e.message || '';
-    if (msg.includes('Last page is 0')) return;
-    console.error(`[Parado] Erro loja ${storeId}:`, e.message);
-  }
-}
-
-cron.schedule('0 8 * * 1', async () => {
-  console.log('[Relatório] Gerando relatório semanal...');
-  try {
-    const stores = db.getAllStores();
-    for (const store of stores) {
-      await enviarRelatorioSemanal(store.store_id);
-    }
-  } catch(e) {
-    console.error('[Relatório] Erro:', e.message);
-  }
-});
-
-async function enviarRelatorioSemanal(storeId) {
-  try {
-    const orders = await nuvemGet(storeId, '/orders', {
-      per_page: 200,
-      payment_status: 'paid',
-      fields: 'id,number,contact_name,shipping_status,shipping_tracking_number,created_at'
-    });
-
-    const prazo = 3;
-    let atrasados = [], pendentes = [], entregues = [], emTransito = [];
-
-    for (const o of orders) {
-      if (o.status === 'cancelled') continue;
-      const diasUteis = diasUteisDesde(o.created_at);
-      const temRastreio = !!(o.shipping_tracking_number?.trim());
-      const foiEnviado = o.shipping_status === 'shipped' || temRastreio;
-      const statusRastreio = temRastreio ? db.statusRastreio(o.shipping_tracking_number.trim()) : null;
-
-      if (statusRastreio === 'entregue') {
-        entregues.push(o);
-      } else if (temRastreio) {
-        emTransito.push(o);
-      } else if (!foiEnviado && diasUteis > prazo) {
-        atrasados.push(o);
-      } else if (!foiEnviado) {
-        pendentes.push(o);
-      }
-    }
-
-    const hoje = new Date().toLocaleDateString('pt-BR');
-
-    // Mensagem WhatsApp
-    const msgWA =
-      `📊 *Relatório Semanal DTFclub*\n` +
-      `📅 ${hoje}\n\n` +
-      `⚠️ *Atrasados (sem envio):* ${atrasados.length}\n` +
-      `📦 *Aguardando envio:* ${pendentes.length}\n` +
-      `🚚 *Em trânsito:* ${emTransito.length}\n` +
-      `✅ *Entregues:* ${entregues.length}\n\n` +
-      (atrasados.length > 0
-        ? `*Pedidos atrasados:*\n` + atrasados.slice(0,10).map(o => `• #${o.number} — ${o.contact_name}`).join('\n')
-        : `Nenhum pedido atrasado! 🎉`);
-
-    await sendWhatsApp('5581996852660', msgWA);
-    console.log('[Relatório] WhatsApp enviado');
-
-    // E-mail
-    const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-      }
-    });
-
-    const atrasadosHtml = atrasados.length
-      ? atrasados.map(o => `<tr><td>#${o.number}</td><td>${o.contact_name}</td><td>${diasUteisDesde(o.created_at)} dias úteis</td></tr>`).join('')
-      : '<tr><td colspan="3">Nenhum pedido atrasado 🎉</td></tr>';
-
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      to: 'dtfclub23@gmail.com',
-      subject: `📊 Relatório Semanal DTFclub — ${hoje}`,
-      html: `
-        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;background:#f5f5f5;padding:20px;border-radius:12px;">
-          <h2 style="color:#00d084;">📊 Relatório Semanal DTFclub</h2>
-          <p style="color:#666;">Gerado em ${hoje}</p>
-
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:20px 0;">
-            <div style="background:#fff;padding:15px;border-radius:8px;border-left:4px solid #e05a5a;">
-              <div style="font-size:28px;font-weight:bold;color:#e05a5a;">${atrasados.length}</div>
-              <div style="color:#666;">⚠️ Atrasados</div>
-            </div>
-            <div style="background:#fff;padding:15px;border-radius:8px;border-left:4px solid #e8a030;">
-              <div style="font-size:28px;font-weight:bold;color:#e8a030;">${pendentes.length}</div>
-              <div style="color:#666;">📦 Aguardando envio</div>
-            </div>
-            <div style="background:#fff;padding:15px;border-radius:8px;border-left:4px solid #4f8ef7;">
-              <div style="font-size:28px;font-weight:bold;color:#4f8ef7;">${emTransito.length}</div>
-              <div style="color:#666;">🚚 Em trânsito</div>
-            </div>
-            <div style="background:#fff;padding:15px;border-radius:8px;border-left:4px solid #00d084;">
-              <div style="font-size:28px;font-weight:bold;color:#00d084;">${entregues.length}</div>
-              <div style="color:#666;">✅ Entregues</div>
-            </div>
-          </div>
-
-          <h3 style="color:#e05a5a;">Pedidos Atrasados</h3>
-          <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:8px;overflow:hidden;">
-            <thead style="background:#e05a5a;color:#fff;">
-              <tr><th style="padding:10px;text-align:left;">Pedido</th><th style="padding:10px;text-align:left;">Cliente</th><th style="padding:10px;text-align:left;">Dias úteis</th></tr>
-            </thead>
-            <tbody>${atrasadosHtml}</tbody>
-          </table>
-        </div>
-      `
-    });
-
-    console.log('[Relatório] E-mail enviado para dtfclub23@gmail.com');
-  } catch(e) {
-    console.error('[Relatório] Erro ao enviar:', e.message);
-  }
-}
-
-// ── Webhook Z-API — Resposta automática de rastreio ──────────────────────────
-const GATILHOS = [
-  'cadê meu pedido', 'cade meu pedido',
-  'cadê meu código', 'cade meu codigo',
-  'código de rastreio', 'codigo de rastreio',
-  'preciso do código', 'preciso do codigo',
-  'meu pedido ainda nao chegou', 'meu pedido não chegou',
-  'rastreio', 'rastreamento', 'onde está meu pedido',
-  'onde esta meu pedido'
-];
-
-function contemGatilho(texto) {
-  const t = (texto || '').trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  return GATILHOS.some(g => {
-    const gn = g.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    return t === gn;
-  });
-}
-
-app.post('/webhook/zapi', async (req, res) => {
-  res.json({ ok: true }); // Responde imediatamente
-
-  try {
-    const body = req.body;
-
-    // Ignora mensagens enviadas pelo próprio bot
-    if (body.fromMe) return;
-    if (!body.text?.message) return;
-
-    const texto    = body.text.message;
-    const telefone = body.phone; // formato: 5581999999999
-
-    if (!contemGatilho(texto)) return;
-
-    console.log(`[ZAPI] Gatilho detectado de ${telefone}: "${texto}"`);
-
-    // Busca pedido mais recente pelo telefone em todas as lojas
-    const stores = db.getAllStores();
-    let pedidoEncontrado = null;
-
-    for (const store of stores) {
-      try {
-        const orders = await nuvemGet(store.store_id, '/orders', {
-          per_page: 50,
-          payment_status: 'paid',
-          fields: 'id,number,contact_name,contact_phone,shipping_tracking_number,shipping_option,created_at'
-        });
-
-        // Normaliza telefone para comparar
-        const telLimpo = String(telefone).replace(/\D/g, '');
-
-        const pedido = orders
-          .filter(o => o.status !== 'cancelled')
-          .find(o => {
-            const t = formatTel(o.contact_phone);
-            return t && String(t).replace(/\D/g, '').endsWith(telLimpo.slice(-10));
+        if (data_inicio || data_fim) {
+          const ini = data_inicio ? new Date(data_inicio) : null;
+          const fim = data_fim ? new Date(data_fim + 'T23:59:59') : null;
+          planArray = planArray.filter(p => {
+            const d = new Date(p.createdAt || p.expiration || '');
+            if (ini && d < ini) return false;
+            if (fim && d > fim) return false;
+            return true;
           });
+        }
 
-        if (pedido) {
-          pedidoEncontrado = { ...pedido, store_id: store.store_id };
+        const planoRecente = planArray.length ? planArray[planArray.length - 1] : null;
+        const planoAtualNome = planoRecente?.name || 'Sem plano';
+        const resultado = [];
+
+        if (dataAtivacao) {
+          const primeiroPlano = planArray[0] || null;
+          const comissaoAtiv = buscarComissao(primeiroPlano?.planId, primeiroPlano?.name);
+          resultado.push({
+            mes: dataAtivacao.substring(0, 7),
+            tipo: 'ativacao',
+            plano_nome: primeiroPlano?.name || '—',
+            data: dataAtivacao,
+            comissao: parseFloat(comissaoAtiv?.comissao_ativacao || 0),
+            sem_config: !comissaoAtiv
+          });
+        }
+
+        for (let i = 1; i < planArray.length; i++) {
+          const p = planArray[i];
+          const comissaoRec = buscarComissao(p.planId, p.name);
+          resultado.push({
+            mes: (p.createdAt || '').substring(0, 7),
+            tipo: 'recarga',
+            plano_nome: p.name || '—',
+            data: p.createdAt || null,
+            comissao: parseFloat(comissaoRec?.comissao_recarga || 0),
+            sem_config: !comissaoRec
+          });
+        }
+
+        const totalLinha = resultado.reduce((a, r) => a + r.comissao, 0);
+        return { msisdn: msisdnNorm, plano_atual_nome: planoAtualNome, data_ativacao: dataAtivacao, status: statusLinha, total_comissao: totalLinha, resultado };
+      } catch (err) {
+        return { msisdn: msisdnNorm, erro: err.response?.data?.detail || err.message, resultado: [] };
+      }
+    }
+
+    const linhas = [];
+    const LOTE = 5;
+    for (let i = 0; i < numeros.length; i += LOTE) {
+      const lote = numeros.slice(i, i + LOTE);
+      const resultados = await Promise.all(lote.map(processarNumero));
+      linhas.push(...resultados);
+    }
+
+    const totalGeralComissao = linhas.reduce((a, l) => a + (l.total_comissao || 0), 0);
+    res.json({ linhas, total_geral: totalGeralComissao });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+// ─── Registrar comissões retroativas ─────────────────────────────────────────
+app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) => {
+  try {
+    const { msisdn, vendedor_id, plano_id, plano_nome, recargas } = req.body;
+
+    let { rows: linhaRows } = await pool.query(
+      'SELECT id FROM linhas WHERE msisdn=$1', [msisdn]
+    );
+
+    let linhaId;
+    if (!linhaRows.length) {
+      const ins = await pool.query(
+        `INSERT INTO linhas (iccid, msisdn, vendedor_id, plano_id, plano_nome, status)
+         VALUES ($1,$2,$3,$4,$5,'ativa') RETURNING id`,
+        [`retroativo-${msisdn}`, msisdn, vendedor_id, plano_id, plano_nome]
+      );
+      linhaId = ins.rows[0].id;
+    } else {
+      linhaId = linhaRows[0].id;
+      await pool.query(
+        'UPDATE linhas SET vendedor_id=$1, plano_id=$2, plano_nome=$3 WHERE id=$4',
+        [vendedor_id, plano_id, plano_nome, linhaId]
+      );
+    }
+
+    let inseridas = 0;
+    for (const r of recargas) {
+      const periodoCheck = String(r.periodo || '').substring(0, 7);
+      const { rows: existe } = await pool.query(
+        "SELECT id FROM transacoes WHERE linha_id=$1 AND tipo='recarga' AND LEFT(periodo_referencia,7)=$2",
+        [linhaId, periodoCheck]
+      );
+      if (existe.length) continue;
+      const periodoNorm = String(r.periodo || '').substring(0, 7);
+      await pool.query(
+        `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
+         VALUES ($1,$2,'recarga',$3,$4,$5,$6,'retroativo')
+         ON CONFLICT DO NOTHING`,
+        [linhaId, vendedor_id, plano_id, plano_nome, r.comissao, periodoNorm]
+      );
+      inseridas++;
+    }
+
+    res.json({ ok: true, inseridas });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ─── E-SIM — Import via upload ───────────────────────────────────────────────
+const multer = require('multer');
+const XLSX = require('xlsx');
+const uploadMem = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024 } });
+
+app.post('/api/esim/importar', authMiddleware, adminOnly, uploadMem.single('planilha'), async (req, res) => {
+  try {
+    if (!req.file) throw new Error('Nenhum arquivo enviado');
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+
+    let inseridos = 0;
+    let ignorados = 0;
+
+    for (const row of rows) {
+      let iccid = null;
+      let statusCol = null;
+      for (let i = 0; i < row.length; i++) {
+        const val = String(row[i] || '').trim().replace(/\s/g,'');
+        if (val.startsWith('89') && val.length >= 18) {
+          iccid = val;
+          statusCol = String(row[i + 1] || '').trim().toUpperCase();
           break;
         }
-      } catch(e) {
-        console.error(`[ZAPI] Erro ao buscar loja ${store.store_id}:`, e.message);
       }
+      if (!iccid) continue;
+      if (statusCol && statusCol !== '') { ignorados++; continue; }
+
+      try {
+        await pool.query(
+          `INSERT INTO esims (iccid, status) VALUES ($1, 'disponivel')
+           ON CONFLICT (iccid) DO NOTHING`,
+          [iccid]
+        );
+        inseridos++;
+      } catch { ignorados++; }
     }
 
-    // Opt-out por palavra-chave
-    const palavrasOptOut = ['parar', 'sair', 'stop', 'não quero', 'nao quero', 'cancelar', 'descadastrar'];
-    if (palavrasOptOut.some(p => texto.toLowerCase().includes(p))) {
-      db.marcarOptOut(telefone, pedidoEncontrado?.store_id);
-      await sendWhatsApp(telefone,
-        `Tudo bem! Você não receberá mais mensagens automáticas. 😊\n\nSe precisar de ajuda, fale conosco diretamente.`
-      );
-      console.log(`[OptOut] ${telefone} optou por sair.`);
-      return res.sendStatus(200);
-    }
-
-    if (!pedidoEncontrado) {
-      await sendWhatsApp(telefone,
-        `Olá! 😊 Não encontrei nenhum pedido vinculado a este número.\n\n` +
-        `Se precisar de ajuda, entre em contato com nossa equipe!`
-      );
-      return;
-    }
-
-    const rastreio = pedidoEncontrado.shipping_tracking_number?.trim();
-    const nome     = pedidoEncontrado.contact_name || 'Cliente';
-    const numero   = pedidoEncontrado.number;
-    const link     = rastreio
-      ? `https://rastreamento.correios.com.br/app/index.php?objeto=${rastreio}`
-      : null;
-
-    // Busca status atual no DB
-    const statusAtual = rastreio ? db.statusRastreio(rastreio) : null;
-
-    let mensagem;
-    if (!rastreio) {
-      mensagem =
-        `Olá, ${nome}! 😊\n\n` +
-        `Seu pedido *#${numero}* ainda está em produção.\n\n` +
-        `Assim que for enviado, você receberá o código de rastreio aqui. 📦`;
-    } else {
-      mensagem =
-        `Olá, ${nome}! 😊\n\n` +
-        `Seu pedido *#${numero}*:\n\n` +
-        `📦 *Código de rastreio:* ${rastreio}\n` +
-        (statusAtual ? `📍 *Status atual:* ${statusAtual}\n` : '') +
-        `\n🔗 Rastreie aqui: ${link}`;
-    }
-
-    if (await podEnviar(telefone)) {
-      await sendWhatsApp(telefone, mensagem, storeId);
-      db.registrarMensagem(telefone);
-      console.log(`[ZAPI] Resposta automática enviada para ${telefone} — pedido #${numero}`);
-    }
-  } catch(e) {
-    console.error('[ZAPI] Erro no webhook:', e.message);
+    res.json({ ok: true, inseridos, ignorados });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`RastreioBot v2.4.0 rodando na porta ${PORT}`);
-  console.log('Cron ativo: verificação a cada 30 minutos');
+app.get('/api/esim/disponiveis', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM esims WHERE status='disponivel' ORDER BY importado_em ASC"
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// ── Keep-alive — ping a cada 10 minutos para evitar hibernação ───────────────
-const APP_URL_PING = process.env.APP_URL || '';
-if (APP_URL_PING) {
-  cron.schedule('*/10 * * * *', async () => {
+app.get('/api/esim/contagem', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT COUNT(*) as total FROM esims WHERE status='disponivel'"
+    );
+    res.json({ total: parseInt(rows[0].total) });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/esim/:iccid/usar', authMiddleware, async (req, res) => {
+  try {
+    const { vendedor_id, msisdn, nome_cliente, documento_cliente } = req.body;
+    await pool.query(
+      `UPDATE esims SET status='usado', vendedor_id=$1, msisdn=$2,
+       nome_cliente=$3, documento_cliente=$4, usado_em=NOW()
+       WHERE iccid=$5`,
+      [vendedor_id, msisdn, nome_cliente, documento_cliente, req.params.iccid]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/esim/historico', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT e.*, v.nome as vendedor_nome
+       FROM esims e LEFT JOIN vendedores v ON v.id = e.vendedor_id
+       ORDER BY e.importado_em DESC`
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── CLIENTE APP ──────────────────────────────────────────────────────────────
+const bcryptCliente = require('bcryptjs');
+const jwtCliente = require('jsonwebtoken');
+
+app.post('/api/cliente/cadastro', async (req, res) => {
+  try {
+    const { cpf, nome, senha } = req.body;
+    if (!cpf || !nome || !senha) throw new Error('Campos obrigatórios: cpf, nome, senha');
+
     try {
-      await axios.get(`${APP_URL_PING}/status`, { timeout: 10000 });
-      console.log('[Keep-alive] OK');
-    } catch(e) {
-      console.warn('[Keep-alive] Falha no ping:', e.message);
+      await boraGet(`/api/Subscriber/${cpf}/document`);
+    } catch {
+      return res.status(400).json({ erro: 'CPF não encontrado na base Move. Entre em contato com o suporte.' });
     }
-  });
-  console.log('Keep-alive ativo: ping a cada 10 minutos');
+
+    const hash = await bcryptCliente.hash(senha, 10);
+    const { rows } = await pool.query(
+      `INSERT INTO clientes (cpf, nome, senha_hash) VALUES ($1,$2,$3)
+       ON CONFLICT (cpf) DO UPDATE SET nome=$2, senha_hash=$3
+       RETURNING id, cpf, nome`,
+      [cpf, nome, hash]
+    );
+    const cliente = rows[0];
+    const token = jwtCliente.sign({ id: cliente.id, cpf: cliente.cpf, nome: cliente.nome }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, cliente });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.post('/api/cliente/login', async (req, res) => {
+  try {
+    const { cpf, senha } = req.body;
+    const { rows } = await pool.query('SELECT * FROM clientes WHERE cpf=$1', [cpf]);
+    if (!rows.length) return res.status(401).json({ erro: 'CPF ou senha incorretos' });
+    const ok = await bcryptCliente.compare(senha, rows[0].senha_hash);
+    if (!ok) return res.status(401).json({ erro: 'CPF ou senha incorretos' });
+    const cliente = rows[0];
+    const token = jwtCliente.sign({ id: cliente.id, cpf: cliente.cpf, nome: cliente.nome }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, cliente: { id: cliente.id, cpf: cliente.cpf, nome: cliente.nome } });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+function authCliente(req, res, next) {
+  const header = req.headers.authorization;
+  if (!header) return res.status(401).json({ erro: 'Token não fornecido' });
+  try {
+    req.cliente = jwtCliente.verify(header.replace('Bearer ', ''), JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ erro: 'Token inválido' });
+  }
 }
+
+app.get('/api/cliente/linhas/:cpf', authCliente, async (req, res) => {
+  try {
+    const cpf = req.params.cpf;
+    const subs = await boraGet(`/api/Subscription/${cpf}`);
+    const lista = Array.isArray(subs) ? subs : (subs.subscriptions || subs.items || []);
+    if (!lista.length) return res.json({ linhas: [] });
+    const detalhes = await Promise.all(
+      lista.slice(0,10).map(async s => {
+        try {
+          const ms = s.msisdn || s.phoneNumber || s.number;
+          if (!ms) return s;
+          return await boraGet(`/api/Subscription/${ms}/details`);
+        } catch { return s; }
+      })
+    );
+    res.json({ linhas: detalhes });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.get('/api/cliente/linha/:cpf', authCliente, async (req, res) => {
+  try {
+    const cpf = req.params.cpf.replace(/\D/g, '');
+    const subscriber = await boraGet(`/api/Subscriber/${cpf}/document`);
+    if (!subscriber) throw new Error('Subscriber não encontrado');
+    const linhas = await boraGet(`/api/Subscription/${cpf}`);
+    const lista = Array.isArray(linhas) ? linhas : (linhas?.subscriptions || linhas?.items || [linhas]);
+    if (!lista.length) throw new Error('Nenhuma linha encontrada');
+    const primeiraLinha = lista[0];
+    const identificador = primeiraLinha?.msisdn || primeiraLinha?.iccid || primeiraLinha?.identifier;
+    if (!identificador) throw new Error('Identificador da linha não encontrado');
+    const details = await boraGet(`/api/Subscription/${identificador}/details`);
+    res.json({ linha: details });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.get('/api/cliente/consumo/:msisdn', authCliente, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscription/${req.params.msisdn}/consumption`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.get('/api/bora/consumo/:msisdn', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscription/${req.params.msisdn}/consumption`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.get('/api/cliente/planos-recarga/:msisdn', authCliente, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Plan/Recharge', { msisdn: req.params.msisdn });
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
+  try {
+    const { msisdn, plano_id, plano_nome, pagamento } = req.body;
+    const subDetails = await boraGet(`/api/Subscription/${msisdn}/details`);
+    const clientId = subDetails?.boraIntegration?.customerId || subDetails?.boraData?.customerId || null;
+    const cart = await boraPost('/api/Cart/recharge', { msisdn, planId: plano_id, clientId });
+    const cartId = cart.cartId || cart.id;
+    if (!cartId) throw new Error('cartId não retornado pela Bora');
+    let pagamentoResp;
+    if (pagamento === 'pix') {
+      pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/pix`, {});
+    } else if (pagamento === 'billet') {
+      pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/billet`, {});
+    } else {
+      throw new Error('Forma de pagamento inválida');
+    }
+    const pixData = pagamentoResp?.pix || null;
+    res.json({
+      ok: true,
+      cartId,
+      pix: pixData ? { code: pixData.code, qrCodeUrl: pixData.qrCodeUrl } : null,
+      billet: pagamentoResp?.billet ? { url: pagamentoResp.billet.url, barcode: pagamentoResp.billet.digitableLine || pagamentoResp.billet.barCode } : null
+    });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── CONSULTA DE LINHA ────────────────────────────────────────────────────────
+app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
+  try {
+    const { tipo, valor } = req.query;
+    if (req.user.role !== 'admin') {
+      const { rows: carteira } = await pool.query(
+        'SELECT * FROM linhas WHERE vendedor_id=$1', [req.user.id]
+      );
+      const linha = carteira.find(l =>
+        l.msisdn === valor || l.iccid === valor ||
+        l.documento_cliente === valor.replace(/\D/g,'')
+      );
+      if (!linha) return res.status(403).json({ erro: 'Linha não encontrada na sua carteira' });
+      const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+      return res.json({ linhas: [details] });
+    }
+    let endpoint;
+    if (tipo === 'cpf') endpoint = `/api/Subscription/${valor.replace(/\D/g,'')}`;
+    else endpoint = `/api/Subscription/${valor}/details`;
+    const data = await boraGet(endpoint);
+    const lista = Array.isArray(data) ? data : [data];
+    const detalhes = await Promise.all(lista.slice(0,10).map(async s => {
+      try {
+        const ms = s.msisdn || s.phoneNumber || s.number;
+        if (!ms || s.activationDate) return s;
+        return await boraGet(`/api/Subscription/${ms}/details`);
+      } catch { return s; }
+    }));
+    res.json({ linhas: detalhes });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── PORTABILIDADE ────────────────────────────────────────────────────────────
+app.get('/api/portabilidade/lista', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Portability/List');
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/portabilidade/realizar', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraPost('/api/Portability', req.body);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── PROMOÇÕES ────────────────────────────────────────────────────────────────
+app.get('/api/promocoes', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT * FROM promocoes WHERE ativo=true AND (validade IS NULL OR validade >= NOW()) ORDER BY criado_em DESC"
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/promocoes/todas', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query("SELECT * FROM promocoes ORDER BY criado_em DESC");
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/promocoes', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { titulo, descricao, tipo, validade } = req.body;
+    const { rows } = await pool.query(
+      "INSERT INTO promocoes (titulo, descricao, tipo, validade) VALUES ($1,$2,$3,$4) RETURNING *",
+      [titulo, descricao, tipo || 'info', validade || null]
+    );
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/promocoes/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { titulo, descricao, tipo, validade, ativo } = req.body;
+    const { rows } = await pool.query(
+      "UPDATE promocoes SET titulo=$1, descricao=$2, tipo=$3, validade=$4, ativo=$5 WHERE id=$6 RETURNING *",
+      [titulo, descricao, tipo, validade || null, ativo, req.params.id]
+    );
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/promocoes/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    await pool.query("DELETE FROM promocoes WHERE id=$1", [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── RANKING ──────────────────────────────────────────────────────────────────
+app.get('/api/ranking', authMiddleware, async (req, res) => {
+  try {
+    const { periodo } = req.query;
+    let filtro = '';
+    if (periodo === 'hoje') filtro = "AND DATE(t.data_transacao) = CURRENT_DATE";
+    else if (periodo === 'semana') filtro = "AND t.data_transacao >= NOW() - INTERVAL '7 days'";
+    else filtro = "AND DATE_TRUNC('month', t.data_transacao) = DATE_TRUNC('month', NOW())";
+
+    const { rows } = await pool.query(`
+      SELECT v.id, v.nome, v.email,
+        COUNT(DISTINCT CASE WHEN t.tipo='ativacao' THEN t.id END) as ativacoes,
+        COUNT(DISTINCT CASE WHEN t.tipo='recarga' THEN t.id END) as recargas,
+        COALESCE(SUM(t.comissao),0) as total_comissao,
+        COUNT(DISTINCT t.id) as total_transacoes
+      FROM vendedores v
+      LEFT JOIN transacoes t ON t.vendedor_id = v.id ${filtro}
+      WHERE v.role = 'vendedor' AND v.ativo = true
+      GROUP BY v.id, v.nome, v.email
+      ORDER BY total_transacoes DESC, total_comissao DESC
+    `);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── INADIMPLÊNCIA ────────────────────────────────────────────────────────────
+app.get('/api/inadimplencia', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Subscriber/billets/pending');
+    res.json(data);
+  } catch {
+    try {
+      const { rows: linhas } = await pool.query(
+        "SELECT DISTINCT documento_cliente FROM linhas WHERE status='ativa' AND documento_cliente IS NOT NULL LIMIT 50"
+      );
+      const resultados = [];
+      for (const l of linhas.slice(0,20)) {
+        try {
+          const boletos = await boraGet(`/api/Subscriber/${l.documento_cliente}/billets`);
+          if (Array.isArray(boletos) && boletos.length) {
+            resultados.push(...boletos.map(b => ({ ...b, documento: l.documento_cliente })));
+          }
+        } catch {}
+      }
+      res.json(resultados);
+    } catch (e) { res.status(500).json({ erro: e.message }); }
+  }
+});
+
+// ─── ALERTAS DE VENCIMENTO (cron diário) ─────────────────────────────────────
+cron.schedule('0 9 * * *', async () => {
+  console.log('[ALERTA] Verificando vencimentos...');
+  try {
+    const { rows: linhas } = await pool.query(`
+      SELECT l.*, v.nome as vendedor_nome, v.email as vendedor_email
+      FROM linhas l JOIN vendedores v ON v.id = l.vendedor_id
+      WHERE l.status = 'ativa' AND l.msisdn IS NOT NULL
+    `);
+    const hoje = new Date();
+    for (const linha of linhas) {
+      try {
+        const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+        const planArray = Array.isArray(details?.plan) ? details.plan : [];
+        const ultimo = planArray[planArray.length-1];
+        if (!ultimo?.expiration) continue;
+        const venc = new Date(ultimo.expiration);
+        const diasRestantes = Math.ceil((venc-hoje)/(1000*60*60*24));
+        if (diasRestantes <= 3 && diasRestantes >= 0) {
+          await pool.query(
+            `INSERT INTO alertas_vencimento (linha_id, vendedor_id, msisdn, dias_restantes, data_vencimento)
+             VALUES ($1,$2,$3,$4,$5) ON CONFLICT (linha_id, DATE(NOW())) DO NOTHING`,
+            [linha.id, linha.vendedor_id, linha.msisdn, diasRestantes, venc]
+          );
+          console.log(`[ALERTA] ${linha.msisdn} vence em ${diasRestantes} dias — vendedor: ${linha.vendedor_nome}`);
+        }
+      } catch {}
+    }
+  } catch (e) { console.error('[ALERTA] Erro:', e.message); }
+});
+
+app.get('/api/alertas/vencimento', authMiddleware, async (req, res) => {
+  try {
+    const vendedorId = req.user.role === 'admin' ? null : req.user.id;
+    const query = vendedorId
+      ? `SELECT * FROM alertas_vencimento WHERE vendedor_id=$1 AND data_alerta >= NOW()-INTERVAL '7 days' ORDER BY dias_restantes ASC`
+      : `SELECT av.*, v.nome as vendedor_nome FROM alertas_vencimento av JOIN vendedores v ON v.id=av.vendedor_id WHERE av.data_alerta >= NOW()-INTERVAL '7 days' ORDER BY av.dias_restantes ASC`;
+    const params = vendedorId ? [vendedorId] : [];
+    const { rows } = await pool.query(query, params);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── BLOQUEIO / DESBLOQUEIO ───────────────────────────────────────────────────
+app.post('/api/bora/linha/:msisdn/bloquear', authMiddleware, async (req, res) => {
+  try {
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    const accountId = details?.accountId;
+    if (!accountId) throw new Error('accountId não encontrado para esta linha');
+    const data = await boraPut(`/api/Subscription/temporarily-suspend/${accountId}`, {});
+    await pool.query("UPDATE linhas SET status='bloqueada' WHERE msisdn=$1", [req.params.msisdn]);
+    res.json({ ok: true, data });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/bora/linha/:msisdn/desbloquear', authMiddleware, async (req, res) => {
+  try {
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    const accountId = details?.accountId;
+    if (!accountId) throw new Error('accountId não encontrado para esta linha');
+    const data = await boraPut(`/api/Subscription/release/${accountId}`, {});
+    await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [req.params.msisdn]);
+    res.json({ ok: true, data });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── TROCAR PLANO ─────────────────────────────────────────────────────────────
+app.get('/api/bora/trocar-plano/:msisdn', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscription/changeplan/${req.params.msisdn}`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraPost('/api/Subscription/changeplan', req.body);
+    if (req.body.msisdn && req.body.planId) {
+      await pool.query(
+        "UPDATE linhas SET plano_id=$1 WHERE msisdn=$2",
+        [req.body.planId, req.body.msisdn]
+      );
+    }
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── REATIVAÇÃO DE LINHA ──────────────────────────────────────────────────────
+app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscription/reactivation/${req.params.msisdn}`);
+    // Tenta resolver o planId pelo nome do plano nos planos de ativação
+    if (data && data.planName && !data.planId) {
+      try {
+        const planos = await boraGet('/api/Plan/Activation');
+        const lista = Array.isArray(planos) ? planos : (planos.plans || planos.items || []);
+        const match = lista.find(p =>
+          String(p.name || p.nome || '').toUpperCase().trim() === String(data.planName).toUpperCase().trim()
+        );
+        if (match) {
+          data.planId = match.idPlanExternal || match.id || match.planId || null;
+        }
+      } catch {}
+    }
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
+  try {
+    const { msisdn, planId, paymentType } = req.body;
+    if (!msisdn) throw new Error('msisdn obrigatório');
+    const body = { msisdn };
+    if (planId) body.planId = planId;
+    if (paymentType) body.paymentType = paymentType;
+    const data = await boraPost('/api/Subscription/reactivation', body);
+    await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [msisdn]);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── RELATÓRIO DE CHURN ───────────────────────────────────────────────────────
+app.get('/api/relatorio/churn', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const dias = parseInt(req.query.periodo) || 30;
+    const { rows } = await pool.query(
+      `SELECT l.msisdn, l.iccid, l.nome_cliente, l.documento_cliente,
+        l.plano_nome, l.status, l.data_ativacao, v.nome as vendedor_nome,
+        EXTRACT(DAY FROM NOW() - l.data_ativacao)::int as dias_ativo
+       FROM linhas l
+       LEFT JOIN vendedores v ON v.id = l.vendedor_id
+       WHERE l.status IN ('cancelada','suspensa','bloqueada','cancelled','suspended')
+         AND l.data_ativacao >= NOW() - ($1 * INTERVAL '1 day')
+       ORDER BY l.data_ativacao DESC`,
+      [dias]
+    );
+    res.json({ total: rows.length, periodo: dias, linhas: rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── Reenvio de boleto ────────────────────────────────────────────────────────
+app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const data = await boraPost(`/api/Subscriber/billets/${req.params.billetId}/resend`, {});
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// ─── CRON — Polling de recargas via /details ─────────────────────────────────
+async function checarRecargas() {
+  console.log(`[CRON] Iniciando polling — ${new Date().toISOString()}`);
+  try {
+    const { rows: linhas } = await pool.query(
+      `SELECT l.*, v.nome as vendedor_nome
+       FROM linhas l
+       JOIN vendedores v ON v.id = l.vendedor_id
+       WHERE l.status = 'ativa' AND l.msisdn IS NOT NULL`
+    );
+
+    const hoje = new Date();
+    const mesRef = `${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,'0')}`;
+
+    let detectadas = 0;
+    let atualizadas = 0;
+
+    for (const linha of linhas) {
+      try {
+        const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+
+        const planoAtualId = details?.planData?.id || details?.plan?.id || details?.planId || null;
+        const planoAtualNome = details?.planData?.name || details?.plan?.name || details?.planName || linha.plano_nome;
+        const statusLinha = details?.status || details?.lineStatus || 'ativa';
+
+        if (planoAtualId && planoAtualId !== linha.plano_id) {
+          await pool.query(
+            'UPDATE linhas SET plano_id=$1, plano_nome=$2 WHERE id=$3',
+            [planoAtualId, planoAtualNome, linha.id]
+          );
+          console.log(`[CRON] Plano atualizado: ${linha.msisdn} | ${linha.plano_nome} → ${planoAtualNome}`);
+          atualizadas++;
+          linha.plano_id = planoAtualId;
+          linha.plano_nome = planoAtualNome;
+        }
+
+        const statusNorm = String(statusLinha).toLowerCase();
+        if (statusNorm.includes('suspend') || statusNorm.includes('cancel') || statusNorm.includes('inativ')) {
+          await pool.query('UPDATE linhas SET status=$1 WHERE id=$2', [statusNorm, linha.id]);
+          console.log(`[CRON] Linha ${linha.msisdn} suspensa/cancelada — ignorando recarga`);
+          continue;
+        }
+
+        const { rows: existe } = await pool.query(
+          `SELECT id FROM transacoes
+           WHERE linha_id=$1 AND tipo='recarga' AND periodo_referencia=$2`,
+          [linha.id, mesRef]
+        );
+        if (existe.length > 0) {
+          await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
+          continue;
+        }
+
+        const proximoVenc = details?.planData?.nextRenewalDate || details?.nextRenewalDate || null;
+        let linhaAtiva = false;
+        if (proximoVenc) {
+          const venc = new Date(proximoVenc);
+          linhaAtiva = venc >= hoje || venc.getMonth() === hoje.getMonth();
+        } else {
+          const dataAtiv = new Date(linha.data_ativacao);
+          const mesesAtiva = (hoje.getFullYear() - dataAtiv.getFullYear()) * 12 + (hoje.getMonth() - dataAtiv.getMonth());
+          linhaAtiva = mesesAtiva >= 1;
+        }
+
+        if (!linhaAtiva) {
+          await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
+          continue;
+        }
+
+        const { rows: planoRows } = await pool.query(
+          'SELECT comissao_recarga, plano_nome FROM planos_comissao WHERE plano_id=$1',
+          [linha.plano_id]
+        );
+        const comissao = parseFloat(planoRows[0]?.comissao_recarga || 0);
+        if (comissao === 0) {
+          await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
+          continue;
+        }
+
+        await pool.query(
+          `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
+           VALUES ($1,$2,'recarga',$3,$4,$5,$6,'bora_details')`,
+          [linha.id, linha.vendedor_id, linha.plano_id, linha.plano_nome, comissao, mesRef]
+        );
+        detectadas++;
+        console.log(`[CRON] Recarga registrada: ${linha.msisdn} (${linha.vendedor_nome}) plano=${linha.plano_nome} comissão=R$${comissao}`);
+
+        await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
+      } catch (err) {
+        // FIX: linha não encontrada na Bora (404) → marca como cancelada no banco
+        if (err.response?.status === 404) {
+          await pool.query("UPDATE linhas SET status='cancelada' WHERE id=$1", [linha.id]);
+          console.log(`[CRON] Linha ${linha.msisdn} não encontrada na Bora (404) — marcada como cancelada`);
+        } else {
+          console.error(`[CRON] Erro na linha ${linha.msisdn}: ${err.message}`);
+        }
+      }
+    }
+
+    console.log(`[CRON] Concluído. ${detectadas} recargas | ${atualizadas} planos atualizados.`);
+  } catch (err) {
+    console.error(`[CRON] Erro geral: ${err.message}`);
+  }
+}
+
+// Roda a cada hora
+cron.schedule('0 * * * *', checarRecargas);
+
+// Endpoint para forçar polling manualmente
+app.post('/api/admin/polling/forcar', authMiddleware, adminOnly, async (req, res) => {
+  checarRecargas().catch(console.error);
+  res.json({ ok: true, mensagem: 'Polling iniciado em background' });
+});
+
+// ─── Serve o frontend ─────────────────────────────────────────────────────────
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'admin.html'));
+});
+
+// ─── Start ────────────────────────────────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Bora Vendas rodando na porta ${PORT}`);
+  setTimeout(checarRecargas, 2 * 60 * 1000);
+});
