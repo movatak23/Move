@@ -33,6 +33,24 @@
   --sans: 'DM Sans', sans-serif;
 }
 
+body.light-theme {
+  --bg: #f4f7fb;
+  --bg2: #ffffff;
+  --bg3: #f1f5f9;
+  --bg4: #e8eef6;
+  --border: #d8e1ea;
+  --border2: #c7d3df;
+  --text: #0f172a;
+  --text2: #475569;
+  --text3: #64748b;
+  --accent: #008fd3;
+  --accent2: #0073aa;
+  --accent-dim: rgba(0,143,211,0.08);
+  --accent-dim2: rgba(0,143,211,0.15);
+  --blue: #2563eb;
+  --blue-dim: rgba(37,99,235,0.10);
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
@@ -542,6 +560,8 @@ select option { background: var(--bg3); }
     </div>
     <nav class="sidebar-nav" id="sidebar-nav"></nav>
     <div class="sidebar-bottom">
+      <button class="btn-logout" onclick="alternarTema()" id="btn-theme" style="margin-bottom:8px">☀ Modo claro</button>
+      <button class="btn-logout" onclick="abrirModalMinhaSenha()" style="margin-bottom:8px">🔐 Alterar senha</button>
       <button class="btn-logout" onclick="doLogout()">↩ Sair</button>
     </div>
   </div>
@@ -596,6 +616,23 @@ select option { background: var(--bg3); }
         <table>
           <thead><tr><th>Nome</th><th>E-mail</th><th>Telefone</th><th>Linhas</th><th>Total Comissão</th><th>Status</th><th>Ações</th></tr></thead>
           <tbody id="tbl-vendedores"><tr><td colspan="7" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── ADMINISTRADORES ───────────────────── -->
+    <div class="page" id="page-admins">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Administradores</div>
+          <div class="page-sub">Acessos administrativos da plataforma web</div>
+        </div>
+        <button class="btn btn-primary" onclick="abrirModalAdmin()">+ Novo Administrador</button>
+      </div>
+      <div class="table-card">
+        <table>
+          <thead><tr><th>Nome</th><th>E-mail</th><th>Telefone</th><th>Status</th><th>Criado em</th><th>Ações</th></tr></thead>
+          <tbody id="tbl-admins"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -901,6 +938,42 @@ select option { background: var(--bg3); }
     </div>
 
 
+    <!-- ── RECARGA ─────────────────────────── -->
+    <div class="page" id="page-recarga">
+      <div class="page-header">
+        <div><div class="page-title">Recarga</div><div class="page-sub">Gerar PIX ou boleto de recarga para uma linha</div></div>
+      </div>
+      <div class="section-card">
+        <div class="form-row">
+          <div class="field">
+            <label>Número da linha / MSISDN</label>
+            <input type="text" id="rec-msisdn" placeholder="Ex: 5581999999999">
+          </div>
+          <div class="field" style="display:flex;align-items:flex-end">
+            <button class="btn btn-primary" onclick="buscarPlanosRecarga()">Buscar planos</button>
+          </div>
+        </div>
+        <div id="rec-linha-info"></div>
+      </div>
+      <div class="section-card" id="rec-planos-wrap" style="display:none">
+        <div class="section-title">Escolha o plano</div>
+        <div class="planos-grid" id="rec-planos-grid"></div>
+        <div class="form-row" id="rec-pay-wrap" style="display:none;margin-top:16px">
+          <div class="field">
+            <label>Forma de pagamento</label>
+            <select id="rec-pagamento">
+              <option value="pix">PIX</option>
+              <option value="billet">Boleto</option>
+            </select>
+          </div>
+          <div class="field" style="display:flex;align-items:flex-end">
+            <button class="btn btn-primary" onclick="confirmarRecarga()">Gerar cobrança</button>
+          </div>
+        </div>
+      </div>
+      <div id="rec-resultado"></div>
+    </div>
+
     <!-- ── CONSULTA DE LINHA ──────────────── -->
     <div class="page" id="page-consulta">
       <div class="page-header">
@@ -1195,6 +1268,43 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- Modal Administrador -->
+<div class="modal-overlay" id="modal-admin">
+  <div class="modal">
+    <div class="modal-title" id="modal-admin-title">Novo Administrador</div>
+    <div class="form-row">
+      <div class="field"><label>Nome</label><input type="text" id="ma-nome"></div>
+      <div class="field"><label>Telefone</label><input type="text" id="ma-tel"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>E-mail</label><input type="email" id="ma-email"></div>
+      <div class="field"><label>Senha</label><input type="password" id="ma-senha" placeholder="Deixe em branco para não alterar"></div>
+    </div>
+    <div class="field">
+      <label>Status</label>
+      <select id="ma-ativo"><option value="true">Ativo</option><option value="false">Inativo</option></select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-admin')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarAdmin()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Minha Senha -->
+<div class="modal-overlay" id="modal-minha-senha">
+  <div class="modal" style="width:460px">
+    <div class="modal-title">Alterar minha senha</div>
+    <div class="field" style="margin-bottom:14px"><label>Senha atual</label><input type="password" id="ms-senha-atual"></div>
+    <div class="field" style="margin-bottom:14px"><label>Nova senha</label><input type="password" id="ms-nova-senha"></div>
+    <div class="field"><label>Confirmar nova senha</label><input type="password" id="ms-confirma-senha"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-minha-senha')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarMinhaSenha()">Alterar senha</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -1203,8 +1313,23 @@ const state = {
   token: null, user: null,
   permissoes: [],
   ativacao: { iccid: null, iccidData: null, cliente: null, plano: null, ddd: null, pagamento: null, step: 1 },
-  editVendedorId: null
+  editVendedorId: null,
+  editAdminId: null,
+  recarga: { msisdn: null, plano: null }
 };
+
+function aplicarTema() {
+  const tema = localStorage.getItem('move_theme') || 'dark';
+  document.body.classList.toggle('light-theme', tema === 'light');
+  const btn = document.getElementById('btn-theme');
+  if (btn) btn.textContent = tema === 'light' ? '🌙 Modo escuro' : '☀ Modo claro';
+}
+
+function alternarTema() {
+  const atual = localStorage.getItem('move_theme') || 'dark';
+  localStorage.setItem('move_theme', atual === 'dark' ? 'light' : 'dark');
+  aplicarTema();
+}
 
 // ── API ────────────────────────────────────────────────────────────────────────
 async function api(method, endpoint, body) {
@@ -1255,6 +1380,7 @@ function doLogout() {
 
 // ── APP INIT ───────────────────────────────────────────────────────────────────
 async function iniciarApp() {
+  aplicarTema();
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app-screen').style.display = 'block';
   document.getElementById('sb-nome').textContent = state.user.nome;
@@ -1269,6 +1395,7 @@ async function iniciarApp() {
     loadDashboard();
     loadVendedores();
     loadPlanosComissao();
+    loadAdmins();
     setTimeout(verificarAlertaEsim, 2000);
     setTimeout(loadPromocoes, 1000);
   } else {
@@ -1290,9 +1417,11 @@ function construirNav() {
   const items = isAdmin ? [
     { page: 'dashboard', icon: '◈', label: 'Dashboard' },
     { page: 'vendedores', icon: '◉', label: 'Vendedores' },
+    { page: 'admins', icon: '⚙', label: 'Administradores' },
     { page: 'planos', icon: '◇', label: 'Planos & Comissões' },
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
+    { page: 'recarga', icon: '↻', label: 'Recarga' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { page: 'esim', icon: '◈', label: 'E-SIM' },
     { section: 'Ferramentas' },
@@ -1306,6 +1435,7 @@ function construirNav() {
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
+    { page: 'recarga', icon: '↻', label: 'Recarga', perm: 'recarga' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { section: 'Ferramentas' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
@@ -1327,6 +1457,8 @@ function navegarPara(page) {
   document.getElementById(`page-${page}`)?.classList.add('active');
   document.getElementById(`nav-${page}`)?.classList.add('active');
   if (page === 'ativar') { resetAtivacao(); carregarEsimsDisponiveis(); }
+  if (page === 'admins') loadAdmins();
+  if (page === 'recarga') resetRecarga();
   if (page === 'calculadora') initCalculadora();
   if (page === 'esim') loadEsim();
   if (page === 'portabilidade') loadPortabilidade();
@@ -1414,6 +1546,88 @@ async function salvarVendedor() {
     toast('Vendedor salvo com sucesso');
     fecharModal('modal-vendedor');
     loadVendedores();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── ADMINISTRADORES ──────────────────────────────────────────────────────────
+async function loadAdmins() {
+  if (state.user?.role !== 'admin') return;
+  try {
+    const dados = await api('GET', '/api/admins');
+    window._adminsCache = dados;
+    const tbody = document.getElementById('tbl-admins');
+    if (!tbody) return;
+    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">⚙</div><p>Nenhum administrador cadastrado</p></td></tr>`; return; }
+    tbody.innerHTML = dados.map((a, idx) => `<tr>
+      <td><strong>${a.nome}</strong></td>
+      <td class="text-muted">${a.email}</td>
+      <td class="text-muted">${a.telefone||'—'}</td>
+      <td><span class="badge ${a.ativo?'badge-green':'badge-red'}">${a.ativo?'Ativo':'Inativo'}</span></td>
+      <td class="text-muted">${a.criado_em ? new Date(a.criado_em).toLocaleDateString('pt-BR') : '—'}</td>
+      <td><button class="btn btn-secondary btn-sm" onclick="editarAdminIdx(${idx})">Editar</button></td>
+    </tr>`).join('');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function abrirModalAdmin() {
+  state.editAdminId = null;
+  document.getElementById('modal-admin-title').textContent = 'Novo Administrador';
+  ['ma-nome','ma-tel','ma-email','ma-senha'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('ma-email').disabled = false;
+  document.getElementById('ma-ativo').value = 'true';
+  document.getElementById('modal-admin').classList.add('open');
+}
+
+function editarAdminIdx(idx) {
+  const a = window._adminsCache?.[idx];
+  if (!a) return;
+  state.editAdminId = a.id;
+  document.getElementById('modal-admin-title').textContent = 'Editar Administrador';
+  document.getElementById('ma-nome').value = a.nome || '';
+  document.getElementById('ma-email').value = a.email || '';
+  document.getElementById('ma-email').disabled = true;
+  document.getElementById('ma-tel').value = a.telefone || '';
+  document.getElementById('ma-senha').value = '';
+  document.getElementById('ma-ativo').value = a.ativo ? 'true' : 'false';
+  document.getElementById('modal-admin').classList.add('open');
+}
+
+async function salvarAdmin() {
+  const body = {
+    nome: document.getElementById('ma-nome').value.trim(),
+    email: document.getElementById('ma-email').value.trim(),
+    telefone: document.getElementById('ma-tel').value.trim(),
+    senha: document.getElementById('ma-senha').value,
+    ativo: document.getElementById('ma-ativo').value === 'true'
+  };
+  try {
+    if (state.editAdminId) {
+      if (!body.senha) delete body.senha;
+      await api('PUT', `/api/admins/${state.editAdminId}`, body);
+    } else {
+      if (!body.senha) { toast('Informe uma senha','error'); return; }
+      await api('POST', '/api/admins', body);
+    }
+    toast('Administrador salvo com sucesso');
+    fecharModal('modal-admin');
+    loadAdmins();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function abrirModalMinhaSenha() {
+  ['ms-senha-atual','ms-nova-senha','ms-confirma-senha'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('modal-minha-senha').classList.add('open');
+}
+
+async function salvarMinhaSenha() {
+  const senhaAtual = document.getElementById('ms-senha-atual').value;
+  const novaSenha = document.getElementById('ms-nova-senha').value;
+  const confirma = document.getElementById('ms-confirma-senha').value;
+  if (novaSenha !== confirma) { toast('A confirmação não confere','error'); return; }
+  try {
+    await api('PUT', '/api/minha-senha', { senhaAtual, novaSenha });
+    toast('Senha alterada com sucesso');
+    fecharModal('modal-minha-senha');
   } catch(e) { toast(e.message,'error'); }
 }
 
@@ -2629,16 +2843,16 @@ async function loadInadimplencia() {
         <td class="text-muted">${venc}</td>
         <td><span class="badge badge-red">Pendente</span></td>
         <td>
-          <button class="btn btn-secondary btn-sm" onclick="reenviarBoleto('${b.billetId||b.id}')">↻ Reenviar</button>
+          <button class="btn btn-secondary btn-sm" onclick="reenviarBoleto('${b.billetId||b.id}','${b.msisdn||b.phoneNumber||b.number||''}')">↻ Reenviar</button>
         </td>
       </tr>`;
     }).join('');
   } catch(e) { toast(e.message,'error'); }
 }
 
-async function reenviarBoleto(billetId) {
+async function reenviarBoleto(billetId, msisdn = '') {
   try {
-    await api('POST', `/api/bora/boleto/${billetId}/reenviar`);
+    await api('POST', `/api/bora/boleto/${billetId}/reenviar`, { msisdn });
     toast('Boleto reenviado por e-mail');
   } catch(e) { toast(e.message,'error'); }
 }
@@ -2721,6 +2935,98 @@ async function verificarAlertaEsim() {
       toast('⚠ Atenção: apenas ' + data.total + ' E-SIMs disponíveis!', 'error');
     }
   } catch {}
+}
+
+// ── RECARGA ─────────────────────────────────────────────────────────────────
+function resetRecarga() {
+  state.recarga = { msisdn: null, plano: null };
+  const ids = ['rec-linha-info','rec-planos-grid','rec-resultado'];
+  ids.forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = ''; });
+  const wrap = document.getElementById('rec-planos-wrap'); if (wrap) wrap.style.display = 'none';
+  const pay = document.getElementById('rec-pay-wrap'); if (pay) pay.style.display = 'none';
+}
+
+async function buscarPlanosRecarga() {
+  const msisdn = document.getElementById('rec-msisdn').value.replace(/\D/g,'');
+  if (!msisdn || msisdn.length < 10) { toast('Informe um número válido','error'); return; }
+  state.recarga = { msisdn, plano: null };
+  document.getElementById('rec-linha-info').innerHTML = '<div class="loading">Consultando linha...</div>';
+  document.getElementById('rec-planos-grid').innerHTML = '';
+  document.getElementById('rec-resultado').innerHTML = '';
+  document.getElementById('rec-planos-wrap').style.display = 'none';
+  document.getElementById('rec-pay-wrap').style.display = 'none';
+  try {
+    const [detalhes, planos] = await Promise.all([
+      api('GET', `/api/bora/linha/${msisdn}`),
+      api('GET', `/api/bora/planos/recarga?msisdn=${msisdn}`)
+    ]);
+    const status = detalhes.status || detalhes.lineStatus || '—';
+    const nome = detalhes.subscriberName || detalhes.name || detalhes.customerName || '—';
+    document.getElementById('rec-linha-info').innerHTML = `<div class="info-card">
+      <div class="info-row"><span class="k">Número</span><span class="v mono">${msisdn}</span></div>
+      <div class="info-row"><span class="k">Cliente</span><span class="v">${nome}</span></div>
+      <div class="info-row"><span class="k">Status</span><span class="v">${status}</span></div>
+    </div>`;
+
+    const lista = Array.isArray(planos) ? planos : (planos.plans || planos.items || []);
+    if (!lista.length) {
+      document.getElementById('rec-planos-grid').innerHTML = '<div style="color:var(--text2)">Nenhum plano de recarga retornado para esta linha.</div>';
+      document.getElementById('rec-planos-wrap').style.display = 'block';
+      return;
+    }
+    window._recPlanos = lista.map(p => {
+      const pid = p.idPlanExternal || p.id || p.planId || '';
+      const pnome = p.name || p.nome || pid;
+      const rawVal = p.value || p.price || p.valor || 0;
+      const pval = Number(rawVal) > 999 ? Number(rawVal)/100 : Number(rawVal);
+      return { id: pid, nome: pnome, valor: pval };
+    });
+    document.getElementById('rec-planos-grid').innerHTML = window._recPlanos.map((p, idx) => {
+      return `<div class="plano-card" id="rec-plano-${p.id}" onclick="selecionarPlanoRecargaIdx(${idx})">
+        <div class="pnome">${p.nome}</div>
+        <div class="pval">R$ ${p.valor.toFixed(2)}</div>
+      </div>`;
+    }).join('');
+    document.getElementById('rec-planos-wrap').style.display = 'block';
+  } catch(e) { document.getElementById('rec-linha-info').innerHTML = `<div style="color:var(--red);font-size:13px">${e.message}</div>`; }
+}
+
+function selecionarPlanoRecargaIdx(idx) {
+  const plano = window._recPlanos?.[idx];
+  if (!plano) return;
+  document.querySelectorAll('[id^="rec-plano-"]').forEach(el => el.classList.remove('selected'));
+  document.getElementById('rec-plano-' + plano.id)?.classList.add('selected');
+  state.recarga.plano = plano;
+  document.getElementById('rec-pay-wrap').style.display = 'grid';
+}
+
+async function confirmarRecarga() {
+  if (!state.recarga?.msisdn || !state.recarga?.plano) { toast('Selecione a linha e o plano','error'); return; }
+  const pagamento = document.getElementById('rec-pagamento').value;
+  document.getElementById('rec-resultado').innerHTML = '<div class="section-card loading">Gerando cobrança...</div>';
+  try {
+    const data = await api('POST', '/api/bora/recarregar', {
+      msisdn: state.recarga.msisdn,
+      plano_id: state.recarga.plano.id,
+      plano_nome: state.recarga.plano.nome,
+      plano_valor: state.recarga.plano.valor,
+      pagamento
+    });
+    let html = `<div class="section-card"><div class="section-title">Cobrança gerada</div>
+      <div class="info-row"><span class="k">Cart ID</span><span class="v mono">${data.cartId||'—'}</span></div>`;
+    if (data.pix?.code) {
+      window._pixCode = data.pix.code;
+      html += `<div class="field" style="margin-top:14px"><label>Código PIX</label><textarea readonly rows="4">${data.pix.code}</textarea></div>
+        <button class="btn btn-secondary btn-sm" onclick="copiarPix()">Copiar PIX</button>`;
+    }
+    if (data.billet?.url || data.billet?.barcode) {
+      html += `<div class="field" style="margin-top:14px"><label>Boleto / Linha digitável</label><textarea readonly rows="3">${data.billet.barcode || data.billet.url}</textarea></div>`;
+      if (data.billet.url) html += `<a class="btn btn-secondary btn-sm" href="${data.billet.url}" target="_blank" style="margin-top:10px">Abrir boleto</a>`;
+    }
+    html += '</div>';
+    document.getElementById('rec-resultado').innerHTML = html;
+    toast('Cobrança de recarga gerada');
+  } catch(e) { document.getElementById('rec-resultado').innerHTML = `<div class="section-card" style="color:var(--red)">${e.message}</div>`; }
 }
 
 // ── BLOQUEIO / DESBLOQUEIO / REATIVAÇÃO ──────────────────────────────────────

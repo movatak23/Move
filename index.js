@@ -148,7 +148,9 @@ app.post('/api/vendedores', authMiddleware, adminOnly, async (req, res) => {
     const { nome, email, senha, telefone } = req.body;
     const hash = await bcrypt.hash(senha, 10);
     const { rows } = await pool.query(
-      'INSERT INTO vendedores (nome, email, senha_hash, telefone) VALUES ($1,$2,$3,$4) RETURNING id, nome, email',
+      `INSERT INTO vendedores (nome, email, senha_hash, telefone, role, ativo)
+       VALUES ($1,$2,$3,$4,'vendedor',true)
+       RETURNING id, nome, email`,
       [nome, email, hash, telefone]
     );
     res.json(rows[0]);
@@ -189,9 +191,81 @@ app.get('/api/vendedores/:id/permissoes', authMiddleware, async (req, res) => {
 
 app.get('/api/minhas-permissoes', authMiddleware, async (req, res) => {
   try {
-    if (req.user.role === 'admin') return res.json(['consulta','recarga','portabilidade','boleto_combado','troca_plano']);
+    if (req.user.role === 'admin') return res.json(['consulta','recarga','portabilidade','boleto_combado','troca_plano','ativacao']);
     const { rows } = await pool.query('SELECT permissao FROM vendedor_permissoes WHERE vendedor_id=$1', [req.user.id]);
     res.json(rows.map(r => r.permissao));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── ADMINISTRADORES (admin) ─────────────────────────────────────────────────
+app.get('/api/admins', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, nome, email, telefone, ativo, criado_em
+       FROM vendedores
+       WHERE role='admin'
+       ORDER BY nome`
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/admins', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { nome, email, senha, telefone } = req.body;
+    if (!nome || !email || !senha) return res.status(400).json({ erro: 'Nome, email e senha são obrigatórios' });
+    const hash = await bcrypt.hash(senha, 10);
+    const { rows } = await pool.query(
+      `INSERT INTO vendedores (nome, email, senha_hash, telefone, role, ativo)
+       VALUES ($1,$2,$3,$4,'admin',true)
+       RETURNING id, nome, email, telefone, role, ativo`,
+      [nome, email, hash, telefone || null]
+    );
+    res.json(rows[0]);
+  } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ erro: 'Já existe usuário com este email' });
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.put('/api/admins/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { nome, telefone, ativo, senha } = req.body;
+    const adminId = req.params.id;
+    const { rows: existe } = await pool.query("SELECT id FROM vendedores WHERE id=$1 AND role='admin'", [adminId]);
+    if (!existe.length) return res.status(404).json({ erro: 'Administrador não encontrado' });
+    if (parseInt(adminId) === parseInt(req.user.id) && ativo === false) {
+      return res.status(400).json({ erro: 'Você não pode desativar seu próprio acesso' });
+    }
+    if (senha) {
+      const hash = await bcrypt.hash(senha, 10);
+      await pool.query(
+        "UPDATE vendedores SET nome=$1, telefone=$2, ativo=$3, senha_hash=$4 WHERE id=$5 AND role='admin'",
+        [nome, telefone || null, ativo, hash, adminId]
+      );
+    } else {
+      await pool.query(
+        "UPDATE vendedores SET nome=$1, telefone=$2, ativo=$3 WHERE id=$4 AND role='admin'",
+        [nome, telefone || null, ativo, adminId]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── MINHA SENHA ─────────────────────────────────────────────────────────────
+app.put('/api/minha-senha', authMiddleware, async (req, res) => {
+  try {
+    const { senhaAtual, novaSenha } = req.body;
+    if (!senhaAtual || !novaSenha) return res.status(400).json({ erro: 'Informe a senha atual e a nova senha' });
+    if (String(novaSenha).length < 6) return res.status(400).json({ erro: 'A nova senha deve ter pelo menos 6 caracteres' });
+    const { rows } = await pool.query('SELECT senha_hash FROM vendedores WHERE id=$1 AND ativo=true', [req.user.id]);
+    if (!rows.length) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    const ok = await bcrypt.compare(senhaAtual, rows[0].senha_hash);
+    if (!ok) return res.status(401).json({ erro: 'Senha atual incorreta' });
+    const hash = await bcrypt.hash(novaSenha, 10);
+    await pool.query('UPDATE vendedores SET senha_hash=$1 WHERE id=$2', [hash, req.user.id]);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -858,6 +932,77 @@ app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
   }
 });
 
+
+// ─── PROXY BORA — Recarga pelo painel web ───────────────────────────────────
+app.post('/api/bora/recarregar', authMiddleware, async (req, res) => {
+  try {
+    const { msisdn, plano_id, plano_nome, plano_valor, pagamento } = req.body;
+    if (!msisdn || !plano_id || !pagamento) throw new Error('msisdn, plano_id e pagamento são obrigatórios');
+
+    let linhaRows = [];
+    if (req.user.role !== 'admin') {
+      const { rows: perms } = await pool.query(
+        "SELECT 1 FROM vendedor_permissoes WHERE vendedor_id=$1 AND permissao='recarga'",
+        [req.user.id]
+      );
+      if (!perms.length) return res.status(403).json({ erro: 'Você não tem permissão para fazer recarga' });
+      const result = await pool.query('SELECT * FROM linhas WHERE msisdn=$1 AND vendedor_id=$2', [msisdn, req.user.id]);
+      linhaRows = result.rows;
+      if (!linhaRows.length) return res.status(403).json({ erro: 'Linha não encontrada na sua carteira' });
+    } else {
+      const result = await pool.query('SELECT * FROM linhas WHERE msisdn=$1 LIMIT 1', [msisdn]);
+      linhaRows = result.rows;
+    }
+
+    const subDetails = await boraGet(`/api/Subscription/${msisdn}/details`);
+    const clientId = subDetails?.boraIntegration?.customerId || subDetails?.boraData?.customerId || subDetails?.customerId || null;
+    const cart = await boraPost('/api/Cart/recharge', { msisdn, planId: plano_id, clientId });
+    const cartId = cart.cartId || cart.id;
+    if (!cartId) throw new Error('cartId não retornado pela Bora');
+
+    let pagamentoResp;
+    if (pagamento === 'pix') {
+      pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/pix`, {});
+    } else if (pagamento === 'billet') {
+      pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/billet`, {});
+    } else {
+      throw new Error('Forma de pagamento inválida');
+    }
+
+    // Registra comissão quando a linha estiver vinculada a um vendedor
+    const linha = linhaRows[0] || null;
+    if (linha?.id && linha?.vendedor_id) {
+      const mesRef = new Date().toISOString().substring(0, 7);
+      const { rows: existe } = await pool.query(
+        `SELECT id FROM transacoes WHERE linha_id=$1 AND tipo='recarga' AND periodo_referencia=$2`,
+        [linha.id, mesRef]
+      );
+      if (!existe.length) {
+        const { rows: planoRows } = await pool.query('SELECT comissao_recarga, plano_nome, plano_valor FROM planos_comissao WHERE plano_id=$1', [plano_id]);
+        const comissao = parseFloat(planoRows[0]?.comissao_recarga || 0);
+        await pool.query(
+          `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, periodo_referencia, fonte)
+           VALUES ($1,$2,'recarga',$3,$4,$5,$6,$7,'sistema')`,
+          [linha.id, linha.vendedor_id, plano_id, plano_nome || planoRows[0]?.plano_nome || null, plano_valor || planoRows[0]?.plano_valor || null, comissao, mesRef]
+        );
+      }
+    }
+
+    const pixData = pagamentoResp?.pix || null;
+    res.json({
+      ok: true,
+      cartId,
+      pix: pixData ? { code: pixData.code || null, qrCodeUrl: pixData.qrCodeUrl || null } : null,
+      billet: pagamentoResp?.billet ? {
+        url: pagamentoResp.billet.url || pagamentoResp.billet.digitableLine || null,
+        barcode: pagamentoResp.billet.digitableLine || pagamentoResp.billet.barCode || null
+      } : null
+    });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
 // ─── CONSULTA DE LINHA ────────────────────────────────────────────────────────
 app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
   try {
@@ -1159,8 +1304,14 @@ app.get('/api/relatorio/churn', authMiddleware, adminOnly, async (req, res) => {
 });
 
 // ─── Reenvio de boleto ────────────────────────────────────────────────────────
-app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, adminOnly, async (req, res) => {
+app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, async (req, res) => {
   try {
+    if (req.user.role !== 'admin') {
+      const msisdn = req.body?.msisdn;
+      if (!msisdn) return res.status(400).json({ erro: 'Informe o número da linha para validar a carteira do vendedor' });
+      const { rows } = await pool.query('SELECT id FROM linhas WHERE msisdn=$1 AND vendedor_id=$2', [msisdn, req.user.id]);
+      if (!rows.length) return res.status(403).json({ erro: 'Você só pode reenviar boleto de linhas da sua carteira' });
+    }
     const data = await boraPost(`/api/Subscriber/billets/${req.params.billetId}/resend`, {});
     res.json(data);
   } catch (e) {
