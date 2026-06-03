@@ -1978,6 +1978,26 @@ async function confirmarAtivacao() {
       '<div class="info-row"><span class="k">Comissão Registrada</span><span class="v currency">R$ ' + parseFloat(data.comissao||0).toFixed(2) + '</span></div>' +
     '</div>';
 
+    if (data.esim) {
+      let esimHtml = '<div class="info-card" style="margin-top:16px;border-color:var(--accent)">';
+      esimHtml += '<div class="section-title" style="color:var(--accent);margin-bottom:12px">eSIM / QR Code</div>';
+      if (data.esim.qrCodeUrl) {
+        esimHtml += '<div class="info-row"><span class="k">QR Code</span><span class="v"><span class="badge badge-green">Capturado</span></span></div>';
+      } else {
+        esimHtml += '<div class="info-row"><span class="k">QR Code</span><span class="v" style="color:var(--yellow)">Não retornado pela Bora</span></div>';
+      }
+      if (data.esim.emailEnviado) {
+        esimHtml += '<div class="info-row"><span class="k">E-mail</span><span class="v"><span class="badge badge-green">Enviado</span></span></div>';
+        if (data.esim.emailDestino) esimHtml += '<div class="info-row"><span class="k">Destino</span><span class="v">' + data.esim.emailDestino + '</span></div>';
+      } else {
+        esimHtml += '<div class="info-row"><span class="k">E-mail</span><span class="v" style="color:var(--yellow)">Não enviado</span></div>';
+        const erroEsim = data.esim.erroEmail || data.esim.erroCaptura || '';
+        if (erroEsim) esimHtml += '<div class="info-row"><span class="k">Motivo</span><span class="v" style="color:var(--yellow)">' + erroEsim + '</span></div>';
+      }
+      esimHtml += '</div>';
+      html += esimHtml;
+    }
+
     if (data.pix && data.pix.code) {
       const pixCode = data.pix.code;
       const pixQr = data.pix.qrCodeUrl || '';

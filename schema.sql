@@ -73,3 +73,11 @@ CREATE TABLE IF NOT EXISTS esims (
   usado_em TIMESTAMP,
   importado_em TIMESTAMP DEFAULT NOW()
 );
+
+
+-- Campos para captura e envio do QR Code do eSIM
+ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_url TEXT;
+ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_capturado_em TIMESTAMP;
+ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_enviado_em TIMESTAMP;
+ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_email_destino VARCHAR(200);
+ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_email_erro TEXT;

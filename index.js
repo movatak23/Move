@@ -8,6 +8,7 @@ const jwt = require('jsonwebtoken');
 const cron = require('node-cron');
 const cors = require('cors');
 const axios = require('axios');
+const nodemailer = require('nodemailer');
 const path = require('path');
 
 const app = express();
@@ -26,6 +27,16 @@ const JWT_SECRET = process.env.JWT_SECRET || 'bora-vendas-secret-2024';
 const BORA_BASE = 'https://app.boramvno.com.br/appapi';
 const BORA_EMAIL = process.env.BORA_EMAIL;
 const BORA_SENHA = process.env.BORA_SENHA;
+
+// ─── Configuração de e-mail / eSIM ───────────────────────────────────────────
+const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_FROM || 'Move <noreply@move.local>';
+const SMTP_HOST = process.env.SMTP_HOST || null;
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = process.env.SMTP_USER || null;
+const SMTP_PASS = process.env.SMTP_PASS || null;
+const SMTP_SECURE = String(process.env.SMTP_SECURE || '').toLowerCase() === 'true';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || null;
+const ESIM_EMAIL_AUTO = String(process.env.ESIM_EMAIL_AUTO || 'true').toLowerCase() !== 'false';
 
 // ─── Token Bora (cache em memória + DB) ──────────────────────────────────────
 let boraTokenCache = null;
@@ -88,6 +99,209 @@ async function boraPut(endpoint, body = {}) {
     boraTokenExpira = Date.now() + 50 * 60 * 1000;
   }
   return resp.data;
+}
+
+
+// ─── Utilitários eSIM QR Code / E-mail ───────────────────────────────────────
+function limparEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function mascararIccid(iccid) {
+  const s = String(iccid || '');
+  if (s.length <= 8) return s;
+  return `${s.slice(0, 6)}••••••${s.slice(-4)}`;
+}
+
+async function garantirColunasEsimQrCode() {
+  try {
+    await pool.query(`ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_url TEXT`);
+    await pool.query(`ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_capturado_em TIMESTAMP`);
+    await pool.query(`ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_enviado_em TIMESTAMP`);
+    await pool.query(`ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_email_destino VARCHAR(200)`);
+    await pool.query(`ALTER TABLE esims ADD COLUMN IF NOT EXISTS qr_code_email_erro TEXT`);
+  } catch (e) {
+    console.warn('[DB] Não foi possível garantir colunas de QR Code eSIM:', e.message);
+  }
+}
+
+async function consultarEsimPorIccid(iccid) {
+  if (!iccid) throw new Error('ICCID não informado para consulta do eSIM');
+  return await boraGet(`/api/Subscriber/${encodeURIComponent(iccid)}/iccid`);
+}
+
+function aguardar(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function capturarQrCodeEsim(iccid, tentativas = 5) {
+  let ultimoErro = null;
+
+  for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
+    try {
+      const esimInfo = await consultarEsimPorIccid(iccid);
+      const qrCodeUrl = esimInfo?.qrCodeUrl || esimInfo?.qrcodeUrl || esimInfo?.qr_code_url || null;
+      if (!qrCodeUrl) {
+        throw new Error('A Bora não retornou qrCodeUrl para este ICCID');
+      }
+
+      const qrResp = await axios.get(qrCodeUrl, {
+        responseType: 'arraybuffer',
+        timeout: 20000,
+        maxContentLength: 2 * 1024 * 1024
+      });
+
+      const qrBuffer = Buffer.from(qrResp.data);
+      if (!qrBuffer.length) throw new Error('Imagem do QR Code veio vazia');
+
+      return { esimInfo, qrCodeUrl, qrBuffer };
+    } catch (e) {
+      ultimoErro = e;
+      if (tentativa < tentativas) await aguardar(1500);
+    }
+  }
+
+  throw ultimoErro || new Error('Não foi possível capturar o QR Code do eSIM');
+}
+
+function montarHtmlEmailEsim({ nome, iccid, msisdn }) {
+  const nomeSeguro = escapeHtml(nome || 'cliente');
+  const iccidSeguro = escapeHtml(mascararIccid(iccid));
+  const numeroSeguro = escapeHtml(msisdn || '');
+  return `
+  <div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;color:#111827;line-height:1.5">
+    <h2 style="margin:0 0 12px;color:#111827">Seu eSIM Move está pronto</h2>
+    <p>Olá, ${nomeSeguro}.</p>
+    <p>Segue o QR Code para configurar seu eSIM. Abra a câmera do celular ou vá em <strong>Adicionar eSIM/Plano Celular</strong> nas configurações do aparelho.</p>
+    <div style="text-align:center;margin:24px 0">
+      <img src="cid:esim-qrcode" alt="QR Code do eSIM" style="width:260px;max-width:100%;border:1px solid #e5e7eb;border-radius:12px;padding:12px" />
+    </div>
+    ${numeroSeguro ? `<p><strong>Número:</strong> ${numeroSeguro}</p>` : ''}
+    <p><strong>ICCID:</strong> ${iccidSeguro}</p>
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin-top:18px">
+      <p style="margin:0 0 8px"><strong>Atenção:</strong></p>
+      <p style="margin:0">Não compartilhe este QR Code. Ele é de uso pessoal e deve ser instalado apenas no aparelho do titular.</p>
+    </div>
+    <p style="font-size:12px;color:#6b7280;margin-top:24px">Caso já tenha instalado o eSIM, desconsidere este e-mail.</p>
+  </div>`;
+}
+
+async function enviarEmailEsim({ email, nome, iccid, msisdn, qrBuffer }) {
+  const destino = limparEmail(email);
+  if (!destino) throw new Error('Cliente sem e-mail cadastrado');
+
+  const subject = 'Seu QR Code de eSIM Move';
+  const html = montarHtmlEmailEsim({ nome, iccid, msisdn });
+  const text = `Olá, ${nome || 'cliente'}. Segue em anexo o QR Code para configurar seu eSIM Move. Não compartilhe este QR Code.`;
+  const filename = `esim-${String(iccid || 'qrcode').slice(-6)}.png`;
+
+  if (RESEND_API_KEY) {
+    await axios.post('https://api.resend.com/emails', {
+      from: EMAIL_FROM,
+      to: [destino],
+      subject,
+      html,
+      text,
+      attachments: [{ filename, content: qrBuffer.toString('base64'), content_type: 'image/png', content_id: 'esim-qrcode' }]
+    }, {
+      headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      timeout: 20000
+    });
+    return { provider: 'resend', destino };
+  }
+
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) {
+    throw new Error('Envio de e-mail não configurado. Configure RESEND_API_KEY ou SMTP_HOST/SMTP_USER/SMTP_PASS.');
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    auth: { user: SMTP_USER, pass: SMTP_PASS }
+  });
+
+  await transporter.sendMail({
+    from: EMAIL_FROM,
+    to: destino,
+    subject,
+    text,
+    html,
+    attachments: [{
+      filename,
+      content: qrBuffer,
+      contentType: 'image/png',
+      cid: 'esim-qrcode'
+    }]
+  });
+
+  return { provider: 'smtp', destino };
+}
+
+async function capturarSalvarEnviarQrCodeEsim({ iccid, email, nome, msisdn }) {
+  const resultado = {
+    qrCodeUrl: null,
+    emailDestino: limparEmail(email),
+    emailEnviado: false,
+    erroEmail: null,
+    erroCaptura: null
+  };
+
+  try {
+    const { qrCodeUrl, qrBuffer } = await capturarQrCodeEsim(iccid);
+    resultado.qrCodeUrl = qrCodeUrl;
+
+    try {
+      await pool.query(
+        `UPDATE esims
+         SET qr_code_url=$1, qr_code_capturado_em=NOW(), qr_code_email_erro=NULL
+         WHERE iccid=$2`,
+        [qrCodeUrl, iccid]
+      );
+    } catch (e) {
+      console.warn('[ESIM] Não foi possível salvar URL do QR Code:', e.message);
+    }
+
+    if (!ESIM_EMAIL_AUTO) {
+      resultado.erroEmail = 'Envio automático desativado por ESIM_EMAIL_AUTO=false';
+      return resultado;
+    }
+
+    const envio = await enviarEmailEsim({ email, nome, iccid, msisdn, qrBuffer });
+    resultado.emailEnviado = true;
+    resultado.emailDestino = envio.destino;
+
+    try {
+      await pool.query(
+        `UPDATE esims
+         SET qr_code_enviado_em=NOW(), qr_code_email_destino=$1, qr_code_email_erro=NULL
+         WHERE iccid=$2`,
+        [envio.destino, iccid]
+      );
+    } catch (e) {
+      console.warn('[ESIM] Não foi possível registrar envio do QR Code:', e.message);
+    }
+
+    return resultado;
+  } catch (e) {
+    resultado.erroCaptura = e.message;
+    try {
+      await pool.query(
+        `UPDATE esims SET qr_code_email_erro=$1 WHERE iccid=$2`,
+        [e.message, iccid]
+      );
+    } catch {}
+    return resultado;
+  }
 }
 
 // ─── Middleware Auth próprio ──────────────────────────────────────────────────
@@ -389,6 +603,49 @@ app.get('/api/bora/subscriber/iccid/:iccid', authMiddleware, async (req, res) =>
   }
 });
 
+
+app.get('/api/bora/esim/:iccid/qrcode', authMiddleware, async (req, res) => {
+  try {
+    const { esimInfo, qrCodeUrl } = await capturarQrCodeEsim(req.params.iccid);
+    res.json({ ok: true, iccid: req.params.iccid, qrCodeUrl, esimInfo });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+app.post('/api/esim/:iccid/enviar-qrcode', authMiddleware, async (req, res) => {
+  try {
+    const { email, nome, msisdn } = req.body || {};
+    let destino = email;
+    let nomeCliente = nome;
+    let numero = msisdn;
+
+    if (!destino || !nomeCliente || !numero) {
+      const { rows } = await pool.query('SELECT * FROM esims WHERE iccid=$1 LIMIT 1', [req.params.iccid]);
+      if (rows.length) {
+        destino = destino || rows[0].qr_code_email_destino;
+        nomeCliente = nomeCliente || rows[0].nome_cliente;
+        numero = numero || rows[0].msisdn;
+      }
+    }
+
+    const resultado = await capturarSalvarEnviarQrCodeEsim({
+      iccid: req.params.iccid,
+      email: destino,
+      nome: nomeCliente,
+      msisdn: numero
+    });
+
+    if (!resultado.emailEnviado) {
+      return res.status(400).json({ ok: false, ...resultado });
+    }
+
+    res.json({ ok: true, ...resultado });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
 app.post('/api/bora/subscriber', authMiddleware, async (req, res) => {
   try {
     const data = await boraPost('/api/Subscriber', req.body);
@@ -500,21 +757,30 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
     );
 
     const pixData = pagamento?.pix || null;
+    const msisdnFinal = pagamento?.msisdn || pagamento?.pmsisdn || cartPayload.msisdn || null;
 
     try {
       await pool.query(
         `UPDATE esims SET status='usado', vendedor_id=$1, msisdn=$2,
          nome_cliente=$3, documento_cliente=$4, usado_em=NOW()
          WHERE iccid=$5`,
-        [vendedor_id, pagamento?.msisdn || null, subscriber.name, subscriber.document, iccid]
+        [vendedor_id, msisdnFinal, subscriber.name, subscriber.document, iccid]
       );
     } catch {}
+
+    const esim = await capturarSalvarEnviarQrCodeEsim({
+      iccid,
+      email: subscriber.email,
+      nome: subscriber.name,
+      msisdn: msisdnFinal
+    });
 
     res.json({
       ok: true,
       cartId,
       comissao,
-      msisdn: pagamento?.msisdn || pagamento?.pmsisdn || null,
+      msisdn: msisdnFinal,
+      esim,
       isPortability: pagamento?.isPortability || false,
       pix: pixData ? {
         code: pixData.code || null,
@@ -1439,6 +1705,8 @@ app.get('/', (req, res) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
+garantirColunasEsimQrCode().catch(err => console.error('[DB] Erro ao preparar colunas eSIM:', err.message));
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Bora Vendas rodando na porta ${PORT}`);
