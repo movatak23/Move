@@ -2711,7 +2711,7 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="navegarParaPortabilidade('${l.document}')">↔ Portabilidade</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>
       <button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>
-      <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,this)">📄 Encaminhar Boleto</button>
+      <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,&#39;${l.msisdn||''}&#39;,&#39;${(l.email||l.customer?.email||l.subscriber?.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||l.customer?.name||l.subscriber?.name||'').replace(/'/g,'')}&#39;,this)">📄 Encaminhar Boleto</button>
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
@@ -3005,15 +3005,44 @@ function encaminharBoleto() {
   window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
 }
 
-async function encaminharBoletoLinha(doc, emailTitular = '', nomeTitular = '', btn) {
+function extrairEmailTitularLinha(obj) {
+  const visitados = new Set();
+  function procurar(v) {
+    if (!v || visitados.has(v)) return '';
+    if (typeof v === 'string') return v.includes('@') ? v.trim() : '';
+    if (typeof v !== 'object') return '';
+    visitados.add(v);
+    const chavesEmail = ['email','eMail','mail','customerEmail','subscriberEmail','holderEmail','ownerEmail'];
+    for (const k of chavesEmail) {
+      if (v[k] && String(v[k]).includes('@')) return String(v[k]).trim();
+    }
+    for (const k of Object.keys(v)) {
+      const achado = procurar(v[k]);
+      if (achado) return achado;
+    }
+    return '';
+  }
+  return procurar(obj);
+}
+
+function extrairNomeTitularLinha(obj) {
+  if (!obj || typeof obj !== 'object') return '';
+  return obj.name || obj.nome || obj.customerName || obj.subscriberName || obj.customer?.name || obj.customer?.nome || obj.subscriber?.name || obj.subscriber?.nome || '';
+}
+
+async function encaminharBoletoLinha(doc, msisdn = '', emailTitular = '', nomeTitular = '', btn) {
   if (!doc) { toast('Documento da linha indisponível', 'error'); return; }
-  const dest = (emailTitular || '').trim();
-  if (!dest.includes('@')) { toast('E-mail do titular indisponível para esta linha', 'error'); return; }
   const original = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '⏳...'; }
   try {
-    const b = await api('GET', `/api/bora/linha/${doc}/boleto`);
-    const r = await api('POST', '/api/bora/boleto/enviar-email', { email: dest, nome: nomeTitular || '', barcode: b.barcode || '', url: b.url || '' });
+    const [b, titular] = await Promise.all([
+      api('GET', `/api/bora/linha/${doc}/boleto`),
+      api('GET', `/api/bora/subscriber/documento/${doc}`).catch(() => null)
+    ]);
+    const dest = (emailTitular || extrairEmailTitularLinha(titular) || '').trim();
+    if (!dest.includes('@')) { toast('E-mail cadastrado na linha não encontrado', 'error'); return; }
+    const nome = nomeTitular || extrairNomeTitularLinha(titular) || '';
+    const r = await api('POST', '/api/bora/boleto/enviar-email', { email: dest, nome, barcode: b.barcode || '', url: b.url || '', msisdn });
     toast('Boleto enviado para ' + (r.destino || dest));
   } catch (e) {
     toast(e.message || 'Nenhum boleto pendente para esta linha', 'error');
