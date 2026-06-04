@@ -1994,6 +1994,7 @@ async function confirmarAtivacao() {
         const erroEsim = data.esim.erroEmail || data.esim.erroCaptura || '';
         if (erroEsim) esimHtml += '<div class="info-row"><span class="k">Motivo</span><span class="v" style="color:var(--yellow)">' + erroEsim + '</span></div>';
       }
+      esimHtml += '<div style="margin-top:12px"><button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;' + (a.iccid||'') + '&#39;,&#39;' + (a.cliente.email||'') + '&#39;,&#39;' + ((a.cliente.name||'').replace(/'/g,'')) + '&#39;,&#39;' + (data.msisdn||'') + '&#39;,this)">📧 Reenviar QR Code por e-mail</button></div>';
       esimHtml += '</div>';
       html += esimHtml;
     }
@@ -2629,6 +2630,7 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-primary btn-sm" onclick="navegarParaRecarga('${l.msisdn}')">⚡ Recarregar</button>
       <button class="btn btn-secondary btn-sm" onclick="navegarParaPortabilidade('${l.document}')">↔ Portabilidade</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>
+      <button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
@@ -2642,6 +2644,32 @@ function navegarParaRecarga(msisdn) {
 function navegarParaPortabilidade(doc) {
   navegarPara('portabilidade');
   document.getElementById('port-doc').value = doc || '';
+}
+
+async function reenviarEsim(iccid, emailConhecido, nome, msisdn, btn) {
+  if (!iccid || iccid === '—') { toast('ICCID indisponível para esta linha', 'error'); return; }
+  const entrada = prompt('E-mail de destino do QR Code do eSIM:', emailConhecido || '');
+  if (entrada === null) return;
+  const dest = (entrada || '').trim();
+  if (!dest.includes('@')) { toast('Informe um e-mail válido', 'error'); return; }
+  const original = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Enviando...'; }
+  try {
+    const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: dest, nome: nome || null, msisdn: msisdn || null }) };
+    if (state.token) opts.headers['Authorization'] = 'Bearer ' + state.token;
+    const r = await fetch(`/api/esim/${encodeURIComponent(iccid)}/enviar-qrcode`, opts);
+    const data = await r.json().catch(() => ({}));
+    if (r.ok && data.ok) {
+      toast('QR Code reenviado para ' + (data.emailDestino || dest), 'success');
+    } else {
+      const motivo = data.erroEmail || data.erroCaptura || (typeof data.erro === 'string' ? data.erro : '') || ('Erro ' + r.status);
+      toast('Falha ao reenviar: ' + motivo, 'error');
+    }
+  } catch (e) {
+    toast('Falha ao reenviar: ' + e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = original; }
+  }
 }
 
 // ── PORTABILIDADE ─────────────────────────────────────────────────────────────
