@@ -1615,6 +1615,52 @@ app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, async (req, res)
   }
 });
 
+app.get('/api/bora/linha/:doc/boleto', authMiddleware, async (req, res) => {
+  try {
+    const boletos = await boraGet(`/api/Subscriber/${req.params.doc}/billets`);
+    const lista = Array.isArray(boletos) ? boletos : (boletos?.items || boletos?.billets || []);
+    const b = lista.find(x => !x.paid && !x.paymentDate) || lista[0];
+    if (!b) return res.status(404).json({ erro: 'Nenhum boleto encontrado para esta linha' });
+    res.json({
+      billetId: b.id || b.billetId || null,
+      barcode: b.digitableLine || b.barCode || b.typeableLine || '',
+      url: b.url || b.pdfUrl || b.link || '',
+      dueDate: b.dueDate || b.expiration || null
+    });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+app.post('/api/bora/boleto/enviar-email', authMiddleware, async (req, res) => {
+  try {
+    const { email, nome, barcode, url } = req.body || {};
+    const r = await enviarEmailBoleto({ email, nome, barcode, url });
+    res.json({ ok: true, destino: r.destino });
+  } catch (e) {
+    res.status(400).json({ ok: false, erro: e.message });
+  }
+});
+
+async function enviarEmailBoleto({ email, nome, barcode, url }) {
+  const destino = limparEmail(email);
+  if (!destino) throw new Error('E-mail do titular não informado');
+  if (!RESEND_API_KEY) throw new Error('Envio de e-mail não configurado (RESEND_API_KEY)');
+  const subject = 'Seu boleto Move';
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#111827">
+    <h2 style="margin:0 0 12px">Seu boleto Move</h2>
+    <p>Olá${nome ? ', ' + nome : ''}. Segue a linha digitável do seu boleto:</p>
+    <div style="background:#f3f4f6;border-radius:8px;padding:14px;font-family:monospace;font-size:14px;word-break:break-all;margin:12px 0">${barcode || ''}</div>
+    ${url ? `<p><a href="${url}" style="color:#2563eb">Abrir boleto em PDF</a></p>` : ''}
+    <p style="font-size:12px;color:#6b7280;margin-top:24px">Pague pelo app do seu banco usando a linha digitável acima.</p>
+  </div>`;
+  const text = `Olá${nome ? ', ' + nome : ''}. Linha digitável do seu boleto Move:\n${barcode || ''}${url ? '\n\nBoleto: ' + url : ''}`;
+  await axios.post('https://api.resend.com/emails', {
+    from: EMAIL_FROM, to: [destino], subject, html, text
+  }, { headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' }, timeout: 20000 });
+  return { destino };
+}
+
 // ─── CRON — Polling de recargas via /details ─────────────────────────────────
 async function checarRecargas() {
   console.log(`[CRON] Iniciando polling — ${new Date().toISOString()}`);
