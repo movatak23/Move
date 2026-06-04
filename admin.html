@@ -1987,6 +1987,7 @@ async function confirmarAtivacao() {
       esimHtml += '<div class="section-title" style="color:var(--accent);margin-bottom:12px">eSIM / QR Code</div>';
       if (data.esim.qrCodeUrl) {
         esimHtml += '<div class="info-row"><span class="k">QR Code</span><span class="v"><span class="badge badge-green">Capturado</span></span></div>';
+        esimHtml += '<div style="text-align:center;margin:12px 0"><img src="' + data.esim.qrCodeUrl + '" alt="QR Code eSIM" style="width:200px;height:200px;border-radius:8px;background:#fff;padding:8px" /><div style="color:var(--text2);font-size:12px;margin-top:6px">Escaneie para instalar o eSIM</div></div>';
       } else {
         esimHtml += '<div class="info-row"><span class="k">QR Code</span><span class="v" style="color:var(--yellow)">Não retornado pela Bora</span></div>';
       }
