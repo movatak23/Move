@@ -1808,6 +1808,15 @@ function voltarStep(n) {
   document.getElementById(`step-${n}`).style.display = 'block';
 }
 
+function detectarTipoChip(d) {
+  const raw = d?.iccidType || d?.type || d?.simType || d?.cardType || '';
+  const t = String(raw).toLowerCase();
+  if (t.includes('esim') || t.includes('e-sim') || t.includes('embedded')) return 'eSIM';
+  if (t.includes('physical') || t.includes('fisic') || t.includes('plastic') || t === 'sim') return 'Físico';
+  if (d?.qrCodeUrl || d?.qrcodeUrl || d?.qr_code_url) return 'eSIM';
+  return raw ? String(raw) : 'Físico';
+}
+
 async function verificarIccid() {
   const iccid = document.getElementById('iccid-input').value.trim();
   if (!iccid) { toast('Informe o ICCID','error'); return; }
@@ -1817,9 +1826,14 @@ async function verificarIccid() {
     const data = await api('GET', '/api/bora/subscriber/iccid/' + iccid);
     state.ativacao.iccid = iccid;
     state.ativacao.iccidData = data;
+    state.ativacao.tipoChip = detectarTipoChip(data);
+    const tipoBadge = state.ativacao.tipoChip === 'eSIM'
+      ? '<span class="badge" style="background:var(--accent-dim);color:var(--accent)">📲 eSIM</span>'
+      : '<span class="badge" style="background:var(--bg3);color:var(--text2)">📱 ' + state.ativacao.tipoChip + '</span>';
     res.innerHTML =
       '<div class="info-card" style="border-color:var(--accent)">' +
         '<div class="info-row"><span class="k">ICCID</span><span class="v mono">' + iccid + '</span></div>' +
+        '<div class="info-row"><span class="k">Tipo do chip</span><span class="v">' + tipoBadge + '</span></div>' +
         '<div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">Disponível para ativação</span></span></div>' +
       '</div>' +
       '<div style="margin-top:16px">' +
@@ -1991,6 +2005,7 @@ function irParaConfirmacao() {
   const payLabels = { pix:'PIX', billet:'Boleto', billetcombo:'Boleto Combo' };
   document.getElementById('resumo-ativacao').innerHTML = `
     <div class="info-row"><span class="k">ICCID</span><span class="v mono">${a.iccid}</span></div>
+    <div class="info-row"><span class="k">Tipo do chip</span><span class="v">${a.tipoChip === 'eSIM' ? '📲 eSIM' : '📱 ' + (a.tipoChip || 'Físico')}</span></div>
     <div class="info-row"><span class="k">Cliente</span><span class="v">${a.cliente.name}</span></div>
     <div class="info-row"><span class="k">CPF/CNPJ</span><span class="v mono">${a.cliente.document}</span></div>
     <div class="info-row"><span class="k">Tipo</span><span class="v">${a.tipoAtivacao === 'portabilidade' ? '🔄 Portabilidade' : '📱 Linha Nova'}</span></div>
@@ -2696,6 +2711,7 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="navegarParaPortabilidade('${l.document}')">↔ Portabilidade</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>
       <button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>
+      <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,this)">📄 Encaminhar Boleto</button>
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
@@ -2989,6 +3005,31 @@ function encaminharBoleto() {
   window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
 }
 
+async function encaminharBoletoLinha(doc, btn) {
+  if (!doc) { toast('Documento da linha indisponível', 'error'); return; }
+  const original = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳...'; }
+  try {
+    const b = await api('GET', `/api/bora/linha/${doc}/boleto`);
+    const msg = 'Seu boleto Move:' + (b.url ? '\n' + b.url : '') + (b.barcode ? '\n\nLinha digitável:\n' + b.barcode : '');
+    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+  } catch (e) {
+    toast(e.message || 'Nenhum boleto pendente para esta linha', 'error');
+  } finally { if (btn) { btn.disabled = false; btn.innerHTML = original; } }
+}
+
+async function enviarBoletoEmailTitular() {
+  if (!window._billetBar && !window._billetUrl) { toast('Boleto indisponível', 'error'); return; }
+  const email = prompt('E-mail do titular para envio do boleto:', state.recarga?.email || '');
+  if (email === null) return;
+  const dest = (email || '').trim();
+  if (!dest.includes('@')) { toast('Informe um e-mail válido', 'error'); return; }
+  try {
+    const r = await api('POST', '/api/bora/boleto/enviar-email', { email: dest, nome: state.recarga?.nome || '', barcode: window._billetBar || '', url: window._billetUrl || '' });
+    toast('Boleto enviado para ' + (r.destino || dest));
+  } catch (e) { toast('Falha ao enviar: ' + e.message, 'error'); }
+}
+
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 function fecharModal(id) { document.getElementById(id).classList.remove('open'); }
 
@@ -3087,6 +3128,8 @@ async function buscarPlanosRecarga() {
     ]);
     const status = detalhes.status || detalhes.lineStatus || '—';
     const nome = detalhes.subscriberName || detalhes.name || detalhes.customerName || '—';
+    state.recarga.nome = nome === '—' ? '' : nome;
+    state.recarga.email = detalhes.email || detalhes.customerEmail || detalhes.subscriberEmail || '';
     document.getElementById('rec-linha-info').innerHTML = `<div class="info-card">
       <div class="info-row"><span class="k">Número</span><span class="v mono">${msisdn}</span></div>
       <div class="info-row"><span class="k">Cliente</span><span class="v">${nome}</span></div>
@@ -3150,6 +3193,7 @@ async function confirmarRecarga() {
       html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">';
       html += '<button class="btn btn-secondary btn-sm" onclick="copiarLinhaDigitavel()">📋 Copiar linha digitável</button>';
       html += '<button class="btn btn-secondary btn-sm" onclick="encaminharBoleto()">📲 Encaminhar</button>';
+      html += '<button class="btn btn-secondary btn-sm" onclick="enviarBoletoEmailTitular()">📧 Enviar ao titular</button>';
       if (data.billet.url) html += `<a class="btn btn-secondary btn-sm" href="${data.billet.url}" target="_blank">Abrir boleto</a>`;
       html += '</div>';
     }
