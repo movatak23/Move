@@ -696,7 +696,8 @@ app.get('/api/bora/planos/ativacao', authMiddleware, async (req, res) => {
 app.get('/api/bora/planos/recarga', authMiddleware, async (req, res) => {
   try {
     const data = await boraGet('/api/Plan/Recharge', { msisdn: req.query.msisdn });
-    res.json(data);
+    const lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
+    res.json(lista.filter(p => /gb/i.test(p.name || p.nome || '')));
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
@@ -1192,7 +1193,8 @@ app.get('/api/bora/consumo/:msisdn', authMiddleware, async (req, res) => {
 app.get('/api/cliente/planos-recarga/:msisdn', authCliente, async (req, res) => {
   try {
     const data = await boraGet('/api/Plan/Recharge', { msisdn: req.params.msisdn });
-    res.json(data);
+    const lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
+    res.json(lista.filter(p => /gb/i.test(p.name || p.nome || '')));
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
