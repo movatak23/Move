@@ -10,6 +10,7 @@ const cors = require('cors');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 app.use(cors());
@@ -38,6 +39,13 @@ const SMTP_PASS = process.env.SMTP_PASS || null;
 const SMTP_SECURE = String(process.env.SMTP_SECURE || '').toLowerCase() === 'true';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || null;
 const ESIM_EMAIL_AUTO = String(process.env.ESIM_EMAIL_AUTO || 'true').toLowerCase() !== 'false';
+
+// ─── Configuração de marca / Cloudinary ─────────────────────────────────────
+const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || null;
+const CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || null;
+const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || null;
+const CLOUDINARY_FOLDER = process.env.CLOUDINARY_FOLDER || 'move/parceiros/logos';
+const MOVE_LOGO_URL = process.env.MOVE_LOGO_URL || null;
 
 // ─── Token Bora (cache em memória + DB) ──────────────────────────────────────
 let boraTokenCache = null;
@@ -141,6 +149,9 @@ async function garantirColunasEquipeVendedor() {
     await pool.query(`ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES vendedores(id)`);
     await pool.query(`ALTER TABLE linhas ADD COLUMN IF NOT EXISTS subvendedor_id INTEGER REFERENCES vendedores(id)`);
     await pool.query(`ALTER TABLE transacoes ADD COLUMN IF NOT EXISTS subvendedor_id INTEGER REFERENCES vendedores(id)`);
+    await pool.query(`ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS logo_url TEXT`);
+    await pool.query(`ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS logo_public_id TEXT`);
+    await pool.query(`ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS nome_exibicao VARCHAR(150)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_vendedores_parent_id ON vendedores(parent_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_vendedores_role_parent ON vendedores(role, parent_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_linhas_subvendedor_id ON linhas(subvendedor_id)`);
@@ -336,6 +347,93 @@ function authMiddleware(req, res, next) {
 function adminOnly(req, res, next) {
   if (req.user.role !== 'admin') return res.status(403).json({ erro: 'Acesso negado' });
   next();
+}
+
+function vendedorPrincipalOnly(req, res, next) {
+  if (req.user.role !== 'vendedor') return res.status(403).json({ erro: 'Acesso permitido apenas ao vendedor principal' });
+  next();
+}
+
+function cloudinaryConfigurado() {
+  return Boolean(CLOUDINARY_CLOUD_NAME && CLOUDINARY_API_KEY && CLOUDINARY_API_SECRET);
+}
+
+function assinarCloudinary(params) {
+  const base = Object.keys(params)
+    .filter(k => params[k] !== undefined && params[k] !== null && params[k] !== '')
+    .sort()
+    .map(k => `${k}=${params[k]}`)
+    .join('&');
+  return crypto.createHash('sha1').update(base + CLOUDINARY_API_SECRET).digest('hex');
+}
+
+function validarArquivoLogo(file) {
+  if (!file) throw new Error('Nenhum logo enviado');
+  const tiposPermitidos = ['image/png', 'image/jpeg', 'image/webp'];
+  if (!tiposPermitidos.includes(file.mimetype)) {
+    throw new Error('Formato inválido. Envie PNG, JPG ou WEBP. Recomendado: PNG transparente 300 x 120 px.');
+  }
+  if (file.size > 500 * 1024) {
+    throw new Error('Logo acima de 500 KB. Comprima a imagem e envie novamente.');
+  }
+}
+
+async function uploadLogoCloudinary({ file, vendedorId }) {
+  if (!cloudinaryConfigurado()) {
+    throw new Error('Cloudinary não configurado. Configure CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY e CLOUDINARY_API_SECRET.');
+  }
+  validarArquivoLogo(file);
+
+  const timestamp = Math.floor(Date.now() / 1000);
+  const publicId = `vendedor-${vendedorId}-${Date.now()}`;
+  const paramsAssinatura = {
+    folder: CLOUDINARY_FOLDER,
+    public_id: publicId,
+    timestamp,
+    overwrite: 'true'
+  };
+  const signature = assinarCloudinary(paramsAssinatura);
+  const dataUri = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+  const form = new URLSearchParams();
+  form.append('file', dataUri);
+  form.append('api_key', CLOUDINARY_API_KEY);
+  form.append('timestamp', String(timestamp));
+  form.append('folder', CLOUDINARY_FOLDER);
+  form.append('public_id', publicId);
+  form.append('overwrite', 'true');
+  form.append('signature', signature);
+
+  const resp = await axios.post(
+    `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`,
+    form.toString(),
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
+  );
+
+  return {
+    logo_url: resp.data.secure_url,
+    logo_public_id: resp.data.public_id
+  };
+}
+
+async function removerLogoCloudinary(publicId) {
+  if (!publicId || !cloudinaryConfigurado()) return;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const paramsAssinatura = { public_id: publicId, timestamp };
+  const signature = assinarCloudinary(paramsAssinatura);
+  const form = new URLSearchParams();
+  form.append('public_id', publicId);
+  form.append('api_key', CLOUDINARY_API_KEY);
+  form.append('timestamp', String(timestamp));
+  form.append('signature', signature);
+  try {
+    await axios.post(
+      `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/destroy`,
+      form.toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }
+    );
+  } catch (e) {
+    console.warn('[Cloudinary] Não foi possível remover logo antigo:', e.message);
+  }
 }
 
 function adminOuVendedorPrincipal(req, res, next) {
@@ -1070,6 +1168,122 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
 const multer = require('multer');
 const XLSX = require('xlsx');
 const uploadMem = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024 } });
+
+
+// ─── MARCA DO VENDEDOR PRINCIPAL / APP ──────────────────────────────────────
+app.get('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, nome, nome_exibicao, logo_url, logo_public_id
+       FROM vendedores
+       WHERE id=$1 AND role='vendedor' AND parent_id IS NULL`,
+      [req.user.id]
+    );
+    if (!rows.length) return res.status(404).json({ erro: 'Vendedor principal não encontrado' });
+    res.json({
+      nome: rows[0].nome,
+      nome_exibicao: rows[0].nome_exibicao || rows[0].nome,
+      logo_url: rows[0].logo_url || null,
+      cloudinaryConfigurado: cloudinaryConfigurado()
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, uploadMem.single('logo'), async (req, res) => {
+  try {
+    const nomeExibicao = String(req.body.nome_exibicao || '').trim().slice(0, 150) || null;
+    let novoLogo = null;
+
+    const { rows: atualRows } = await pool.query(
+      `SELECT logo_public_id FROM vendedores WHERE id=$1 AND role='vendedor' AND parent_id IS NULL`,
+      [req.user.id]
+    );
+    if (!atualRows.length) return res.status(404).json({ erro: 'Vendedor principal não encontrado' });
+
+    if (req.file) {
+      novoLogo = await uploadLogoCloudinary({ file: req.file, vendedorId: req.user.id });
+      if (atualRows[0].logo_public_id) await removerLogoCloudinary(atualRows[0].logo_public_id);
+      await pool.query(
+        `UPDATE vendedores
+         SET nome_exibicao=$1, logo_url=$2, logo_public_id=$3
+         WHERE id=$4 AND role='vendedor' AND parent_id IS NULL`,
+        [nomeExibicao, novoLogo.logo_url, novoLogo.logo_public_id, req.user.id]
+      );
+    } else {
+      await pool.query(
+        `UPDATE vendedores SET nome_exibicao=$1 WHERE id=$2 AND role='vendedor' AND parent_id IS NULL`,
+        [nomeExibicao, req.user.id]
+      );
+    }
+
+    const { rows } = await pool.query(
+      `SELECT nome, nome_exibicao, logo_url FROM vendedores WHERE id=$1`,
+      [req.user.id]
+    );
+    res.json({ ok: true, nome_exibicao: rows[0].nome_exibicao || rows[0].nome, logo_url: rows[0].logo_url || null });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/minha-marca/logo', authMiddleware, vendedorPrincipalOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT logo_public_id FROM vendedores WHERE id=$1 AND role='vendedor' AND parent_id IS NULL`,
+      [req.user.id]
+    );
+    if (!rows.length) return res.status(404).json({ erro: 'Vendedor principal não encontrado' });
+    if (rows[0].logo_public_id) await removerLogoCloudinary(rows[0].logo_public_id);
+    await pool.query(
+      `UPDATE vendedores SET logo_url=NULL, logo_public_id=NULL WHERE id=$1 AND role='vendedor' AND parent_id IS NULL`,
+      [req.user.id]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+async function buscarBrandingPorFiltro(filtroSql, valor) {
+  const { rows } = await pool.query(
+    `SELECT v.nome, v.nome_exibicao, v.logo_url
+     FROM linhas l
+     JOIN vendedores v ON v.id = l.vendedor_id
+     WHERE ${filtroSql}
+       AND v.role='vendedor'
+       AND v.parent_id IS NULL
+     ORDER BY l.data_ativacao DESC NULLS LAST, l.id DESC
+     LIMIT 1`,
+    [valor]
+  );
+  const parceiro = rows[0] || null;
+  return {
+    moveLogoUrl: MOVE_LOGO_URL,
+    parceiroNome: parceiro ? (parceiro.nome_exibicao || parceiro.nome) : null,
+    parceiroLogoUrl: parceiro?.logo_url || null,
+    temParceiro: Boolean(parceiro && parceiro.logo_url)
+  };
+}
+
+app.get('/api/app/linha/:msisdn/branding', async (req, res) => {
+  try {
+    const digits = String(req.params.msisdn || '').replace(/\D/g, '');
+    if (!digits || digits.length < 8) return res.status(400).json({ erro: 'Número inválido' });
+    const data = await buscarBrandingPorFiltro(
+      `RIGHT(regexp_replace(COALESCE(l.msisdn,''), '\\D', '', 'g'), 11) = RIGHT($1, 11)`,
+      digits
+    );
+    res.json(data);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.get('/api/app/cliente/:documento/branding', async (req, res) => {
+  try {
+    const doc = String(req.params.documento || '').replace(/\D/g, '');
+    if (!doc || doc.length < 11) return res.status(400).json({ erro: 'Documento inválido' });
+    const data = await buscarBrandingPorFiltro(
+      `regexp_replace(COALESCE(l.documento_cliente,''), '\\D', '', 'g') = $1`,
+      doc
+    );
+    res.json(data);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
 
 app.post('/api/esim/importar', authMiddleware, adminOnly, uploadMem.single('planilha'), async (req, res) => {
   try {

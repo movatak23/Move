@@ -831,6 +831,56 @@ select option { background: var(--bg3); }
     </div>
 
 
+
+    <!-- ── MINHA MARCA NO APP ─────────────────── -->
+    <div class="page" id="page-minha-marca">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Minha Marca no App</div>
+          <div class="page-sub">Logo exibido no app dos seus clientes junto à marca Move</div>
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-title">Logo do parceiro</div>
+        <div style="background:var(--accent-dim);border:1px solid var(--accent);border-radius:var(--r);padding:14px;margin-bottom:18px;color:var(--text);font-size:13px;line-height:1.55">
+          Envie o logo da sua empresa para aparecer no app dos seus clientes junto à marca Move.<br>
+          <strong>Formato recomendado:</strong> PNG com fundo transparente.<br>
+          <strong>Tamanho recomendado:</strong> 300 x 120 px.<br>
+          <strong>Peso máximo:</strong> 500 KB.<br>
+          Evite imagens com fundo colorido, textos pequenos ou logo muito vertical.
+        </div>
+
+        <div class="form-row">
+          <div class="field">
+            <label>Nome de exibição</label>
+            <input type="text" id="marca-nome" maxlength="150" placeholder="Nome da empresa/parceiro">
+          </div>
+          <div class="field">
+            <label>Arquivo do logo</label>
+            <input type="file" id="marca-logo" accept="image/png,image/jpeg,image/webp" onchange="previewLogoParceiro()">
+          </div>
+        </div>
+
+        <div class="info-card" style="margin-top:12px">
+          <div class="info-row"><span class="k">Prévia no app</span><span class="v">Move + Parceiro</span></div>
+          <div id="marca-preview" style="display:flex;align-items:center;gap:16px;justify-content:center;padding:18px 10px;min-height:104px">
+            <div style="font-family:Arial Black,sans-serif;font-size:34px;font-weight:900;color:var(--accent);letter-spacing:-2px">move</div>
+            <div style="font-size:12px;color:var(--text3);text-transform:uppercase;letter-spacing:1px">em parceria com</div>
+            <div id="marca-preview-logo" style="width:150px;height:60px;border:1px dashed var(--border2);border-radius:var(--r);display:flex;align-items:center;justify-content:center;color:var(--text3);font-size:12px;text-align:center;padding:8px">
+              Sem logo cadastrado
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;margin-top:18px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="salvarMinhaMarca()">Salvar marca</button>
+          <button class="btn btn-secondary" onclick="loadMinhaMarca()">Recarregar</button>
+          <button class="btn btn-danger" onclick="removerLogoMinhaMarca()">Remover logo</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ── CALCULADORA DE COMISSÃO ──────────────── -->
     <div class="page" id="page-calculadora">
       <div class="page-header">
@@ -1396,6 +1446,18 @@ async function api(method, endpoint, body, opts = {}) {
   return data;
 }
 
+async function apiForm(method, endpoint, formData) {
+  const o = { method, body: formData };
+  if (state.token) o.headers = { 'Authorization': `Bearer ${state.token}` };
+  const r = await fetch(endpoint, o);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const msg = typeof data.erro === 'string' ? data.erro : (data.erro?.detail || data.erro?.title || JSON.stringify(data.erro) || `Erro ${r.status}`);
+    throw new Error(msg);
+  }
+  return data;
+}
+
 // ── TOAST ──────────────────────────────────────────────────────────────────────
 function toast(msg, type = 'success') {
   const t = document.createElement('div');
@@ -1488,7 +1550,10 @@ function construirNav() {
     { page: 'portabilidade', icon: '↔', label: 'Portabilidade' },
   ] : [
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
-    ...(isVendedorPrincipal ? [{ page: 'vendedores', icon: '◉', label: 'Meus Vendedores' }] : []),
+    ...(isVendedorPrincipal ? [
+      { page: 'vendedores', icon: '◉', label: 'Meus Vendedores' },
+      { page: 'minha-marca', icon: '▣', label: 'Minha Marca no App' }
+    ] : []),
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
     { page: 'recarga', icon: '📦', label: 'Pacotes Adicionais', perm: 'recarga' },
@@ -1517,6 +1582,7 @@ function navegarPara(page) {
   if (page === 'ativar') { resetAtivacao(); carregarEsimsDisponiveis(); }
   if (page === 'admins') loadAdmins();
   if (page === 'vendedores') loadVendedores();
+  if (page === 'minha-marca') loadMinhaMarca();
   if (page === 'recarga') resetRecarga();
   if (page === 'calculadora') initCalculadora();
   if (page === 'esim') loadEsim();
@@ -1613,6 +1679,74 @@ async function salvarVendedor() {
     fecharModal('modal-vendedor');
     loadVendedores();
   } catch(e) { toast(e.message,'error'); }
+}
+
+
+// ── MINHA MARCA NO APP ───────────────────────────────────────────────────────
+function setPreviewLogo(url) {
+  const box = document.getElementById('marca-preview-logo');
+  if (!box) return;
+  if (url) {
+    box.innerHTML = `<img src="${url}" alt="Logo do parceiro" style="max-width:150px;max-height:60px;object-fit:contain">`;
+  } else {
+    box.innerHTML = 'Sem logo cadastrado';
+  }
+}
+
+async function loadMinhaMarca() {
+  if (state.user?.role !== 'vendedor') return;
+  try {
+    const dados = await api('GET', '/api/minha-marca');
+    document.getElementById('marca-nome').value = dados.nome_exibicao || dados.nome || '';
+    document.getElementById('marca-logo').value = '';
+    setPreviewLogo(dados.logo_url || null);
+    if (!dados.cloudinaryConfigurado) {
+      toast('Cloudinary ainda não configurado no Railway. Configure as variáveis antes de enviar logo.', 'info');
+    }
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function previewLogoParceiro() {
+  const input = document.getElementById('marca-logo');
+  const file = input?.files?.[0];
+  if (!file) return;
+  if (!['image/png','image/jpeg','image/webp'].includes(file.type)) {
+    toast('Formato inválido. Envie PNG, JPG ou WEBP.', 'error');
+    input.value = '';
+    return;
+  }
+  if (file.size > 500 * 1024) {
+    toast('Logo acima de 500 KB. Comprima a imagem antes de enviar.', 'error');
+    input.value = '';
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  setPreviewLogo(url);
+}
+
+async function salvarMinhaMarca() {
+  if (state.user?.role !== 'vendedor') return;
+  const fd = new FormData();
+  fd.append('nome_exibicao', document.getElementById('marca-nome').value.trim());
+  const file = document.getElementById('marca-logo').files[0];
+  if (file) fd.append('logo', file);
+  try {
+    const data = await apiForm('POST', '/api/minha-marca', fd);
+    toast('Marca salva com sucesso');
+    document.getElementById('marca-logo').value = '';
+    setPreviewLogo(data.logo_url || null);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function removerLogoMinhaMarca() {
+  if (state.user?.role !== 'vendedor') return;
+  if (!confirm('Remover o logo do parceiro exibido no app?')) return;
+  try {
+    await api('DELETE', '/api/minha-marca/logo');
+    toast('Logo removido');
+    document.getElementById('marca-logo').value = '';
+    setPreviewLogo(null);
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ── ADMINISTRADORES ──────────────────────────────────────────────────────────
