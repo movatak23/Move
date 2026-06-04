@@ -27,6 +27,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'bora-vendas-secret-2024';
 const BORA_BASE = 'https://app.boramvno.com.br/appapi';
 const BORA_EMAIL = process.env.BORA_EMAIL;
 const BORA_SENHA = process.env.BORA_SENHA;
+const MOVE_BUILD_TAG_QRCODE_ESIM = 'move-qrcode-esim-route-confirmed-2026-06-03';
 
 // ─── Configuração de e-mail / eSIM ───────────────────────────────────────────
 const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_FROM || 'Move <noreply@move.local>';
@@ -322,6 +323,22 @@ function adminOnly(req, res, next) {
   next();
 }
 
+
+// ─── Diagnóstico de deploy ───────────────────────────────────────────────────
+// Use esta rota para confirmar se o Railway está rodando esta versão do backend.
+// Não retorna credenciais nem dados sensíveis.
+app.get('/api/deploy/check', (req, res) => {
+  res.json({
+    ok: true,
+    app: 'Move Bora Vendas',
+    build: MOVE_BUILD_TAG_QRCODE_ESIM,
+    qrcodeEsimRoute: '/api/bora/esim/:iccid/qrcode',
+    resendConfigured: Boolean(RESEND_API_KEY),
+    emailAuto: ESIM_EMAIL_AUTO,
+    timestamp: new Date().toISOString()
+  });
+});
+
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 app.post('/api/login', async (req, res) => {
   try {
@@ -605,6 +622,17 @@ app.get('/api/bora/subscriber/iccid/:iccid', authMiddleware, async (req, res) =>
 
 
 app.get('/api/bora/esim/:iccid/qrcode', authMiddleware, async (req, res) => {
+  try {
+    const { esimInfo, qrCodeUrl } = await capturarQrCodeEsim(req.params.iccid);
+    res.json({ ok: true, iccid: req.params.iccid, qrCodeUrl, esimInfo });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
+
+// Alias administrativo para o mesmo endpoint de QR Code, mantendo compatibilidade com o padrão Subscriber.
+app.get('/api/bora/subscriber/:iccid/qrcode', authMiddleware, async (req, res) => {
   try {
     const { esimInfo, qrCodeUrl } = await capturarQrCodeEsim(req.params.iccid);
     res.json({ ok: true, iccid: req.params.iccid, qrCodeUrl, esimInfo });
