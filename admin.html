@@ -560,6 +560,8 @@ select option { background: var(--bg3); }
     </div>
     <nav class="sidebar-nav" id="sidebar-nav"></nav>
     <div class="sidebar-bottom">
+      <div id="cache-ts" style="font-size:11px;color:var(--text3);text-align:center;margin-bottom:6px;min-height:16px"></div>
+      <button class="btn-logout" onclick="atualizarPagina()" style="margin-bottom:8px;color:var(--accent)">🔄 Atualizar</button>
       <button class="btn-logout" onclick="alternarTema()" id="btn-theme" style="margin-bottom:8px">☀ Modo claro</button>
       <button class="btn-logout" onclick="abrirModalMinhaSenha()" style="margin-bottom:8px">🔐 Alterar senha</button>
       <button class="btn-logout" onclick="doLogout()">↩ Sair</button>
@@ -1332,13 +1334,65 @@ function alternarTema() {
 }
 
 // ── API ────────────────────────────────────────────────────────────────────────
-async function api(method, endpoint, body) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (state.token) opts.headers['Authorization'] = `Bearer ${state.token}`;
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(endpoint, opts);
+// ── APP CACHE ──────────────────────────────────────────────────────────────────
+const AppCache = {
+  TTL: 5 * 60 * 1000,
+  set(key, data) {
+    try { localStorage.setItem('mc_' + key, JSON.stringify({ d: data, ts: Date.now() })); } catch(e) {}
+  },
+  get(key, ttl) {
+    try {
+      const raw = localStorage.getItem('mc_' + key);
+      if (!raw) return null;
+      const { d, ts } = JSON.parse(raw);
+      return (Date.now() - ts) > (ttl || AppCache.TTL) ? null : d;
+    } catch(e) { return null; }
+  },
+  clear() {
+    Object.keys(localStorage).filter(k => k.startsWith('mc_')).forEach(k => localStorage.removeItem(k));
+  }
+};
+
+function updateCacheTimestamp() {
+  const el = document.getElementById('cache-ts');
+  if (!el) return;
+  const ts = localStorage.getItem('mc__last');
+  if (!ts) { el.textContent = ''; return; }
+  const mins = Math.floor((Date.now() - Number(ts)) / 60000);
+  el.textContent = mins < 1 ? '✓ atualizado agora' : `✓ ${mins}min atrás`;
+}
+
+function atualizarPagina() {
+  AppCache.clear();
+  const el = document.getElementById('cache-ts');
+  if (el) el.textContent = '↻ atualizando...';
+  const p = state.currentPage;
+  if (!p || p === 'dashboard') loadDashboard();
+  else if (p === 'meu-painel') loadMeuPainel();
+  else if (p === 'ranking') loadRanking('mes');
+  else if (p === 'inadimplencia') loadInadimplencia();
+  else if (p === 'churn') loadChurn(60);
+  else if (p === 'esim') loadEsim();
+  else if (p === 'admins') loadAdmins();
+  else if (p === 'promocoes-admin') loadPromocoesAdmin();
+  else if (p === 'portabilidade') loadPortabilidade();
+  else toast('Use os controles da página para recarregar', 'info');
+}
+
+// ── API ────────────────────────────────────────────────────────────────────────
+async function api(method, endpoint, body, opts = {}) {
+  const cKey = (opts.cache && method === 'GET') ? endpoint : null;
+  if (cKey) {
+    const hit = AppCache.get(cKey, opts.cache);
+    if (hit !== null) return hit;
+  }
+  const o = { method, headers: { 'Content-Type': 'application/json' } };
+  if (state.token) o.headers['Authorization'] = `Bearer ${state.token}`;
+  if (body) o.body = JSON.stringify(body);
+  const r = await fetch(endpoint, o);
   const data = await r.json().catch(() => ({}));
   if (!r.ok) { const msg = typeof data.erro === 'string' ? data.erro : (data.erro?.detail || data.erro?.title || JSON.stringify(data.erro) || `Erro ${r.status}`); throw new Error(msg); }
+  if (cKey) { AppCache.set(cKey, data); localStorage.setItem('mc__last', String(Date.now())); updateCacheTimestamp(); }
   return data;
 }
 
@@ -1456,6 +1510,8 @@ function navegarPara(page) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById(`page-${page}`)?.classList.add('active');
   document.getElementById(`nav-${page}`)?.classList.add('active');
+  state.currentPage = page;
+  updateCacheTimestamp();
   if (page === 'ativar') { resetAtivacao(); carregarEsimsDisponiveis(); }
   if (page === 'admins') loadAdmins();
   if (page === 'recarga') resetRecarga();
@@ -1473,7 +1529,7 @@ async function loadDashboard() {
   const ini = document.getElementById('dash-inicio').value;
   const fim = document.getElementById('dash-fim').value;
   try {
-    const dados = await api('GET', `/api/relatorio/geral?data_inicio=${ini}&data_fim=${fim}`);
+    const dados = await api('GET', `/api/relatorio/geral?data_inicio=${ini}&data_fim=${fim}`, null, {cache: 5*60*1000});
     const totAtiv = dados.reduce((a,r)=>a+(parseInt(r.ativacoes)||0),0);
     const totRec = dados.reduce((a,r)=>a+(parseInt(r.recargas)||0),0);
     const totCom = dados.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
@@ -2041,7 +2097,7 @@ async function loadMeuPainel() {
   const ini = document.getElementById('mp-inicio')?.value || '';
   const fim = document.getElementById('mp-fim')?.value || '';
   try {
-    const dados = await api('GET', `/api/relatorio/vendedor/${state.user.id}?data_inicio=${ini}&data_fim=${fim}`);
+    const dados = await api('GET', `/api/relatorio/vendedor/${state.user.id}?data_inicio=${ini}&data_fim=${fim}`, null, {cache: 5*60*1000});
     const ativ = dados.resumo.find(r=>r.tipo==='ativacao');
     const rec = dados.resumo.find(r=>r.tipo==='recarga');
     const totCom = dados.resumo.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
@@ -2845,7 +2901,7 @@ async function loadRanking(periodo = 'mes') {
   document.getElementById('rank-'+periodo)?.classList.remove('btn-secondary');
 
   try {
-    const dados = await api('GET', `/api/ranking?periodo=${periodo}`);
+    const dados = await api('GET', `/api/ranking?periodo=${periodo}`, null, {cache: 5*60*1000});
     const lista = document.getElementById('ranking-lista');
     if (!dados.length) {
       lista.innerHTML = '<div class="empty-state"><div class="ico">🏆</div><p>Nenhuma transação no período</p></div>';
@@ -2879,7 +2935,7 @@ async function loadRanking(periodo = 'mes') {
 // ── INADIMPLÊNCIA ─────────────────────────────────────────────────────────────
 async function loadInadimplencia() {
   try {
-    const dados = await api('GET', '/api/inadimplencia');
+    const dados = await api('GET', '/api/inadimplencia', null, {cache: 5*60*1000});
     const tbody = document.getElementById('tbl-inadimplencia');
     const lista = Array.isArray(dados) ? dados : [];
     if (!lista.length) {
@@ -2929,8 +2985,8 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 async function loadEsim() {
   try {
     const [disp, hist] = await Promise.all([
-      api('GET', '/api/esim/disponiveis'),
-      api('GET', '/api/esim/historico')
+      api('GET', '/api/esim/disponiveis', null, {cache: 5*60*1000}),
+      api('GET', '/api/esim/historico', null, {cache: 5*60*1000})
     ]);
 
     const usados = hist.filter(e => e.status === 'usado');
@@ -3243,7 +3299,7 @@ async function loadChurn(dias = 60) {
 
   document.getElementById('tbl-churn').innerHTML = '<tr><td colspan="7" class="loading">Carregando...</td></tr>';
   try {
-    const data = await api('GET', `/api/relatorio/churn?periodo=${dias}`);
+    const data = await api('GET', `/api/relatorio/churn?periodo=${dias}`, null, {cache: 5*60*1000});
     const linhas = data.linhas || [];
 
     document.getElementById('churn-stats').innerHTML =
