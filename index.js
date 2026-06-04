@@ -135,6 +135,21 @@ async function garantirColunasEsimQrCode() {
   }
 }
 
+
+async function garantirColunasEquipeVendedor() {
+  try {
+    await pool.query(`ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES vendedores(id)`);
+    await pool.query(`ALTER TABLE linhas ADD COLUMN IF NOT EXISTS subvendedor_id INTEGER REFERENCES vendedores(id)`);
+    await pool.query(`ALTER TABLE transacoes ADD COLUMN IF NOT EXISTS subvendedor_id INTEGER REFERENCES vendedores(id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_vendedores_parent_id ON vendedores(parent_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_vendedores_role_parent ON vendedores(role, parent_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_linhas_subvendedor_id ON linhas(subvendedor_id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_transacoes_subvendedor_id ON transacoes(subvendedor_id)`);
+  } catch (e) {
+    console.warn('[DB] Não foi possível garantir colunas de equipe do vendedor:', e.message);
+  }
+}
+
 async function consultarEsimPorIccid(iccid) {
   if (!iccid) throw new Error('ICCID não informado para consulta do eSIM');
   return await boraGet(`/api/Subscriber/${encodeURIComponent(iccid)}/iccid`);
@@ -323,6 +338,29 @@ function adminOnly(req, res, next) {
   next();
 }
 
+function adminOuVendedorPrincipal(req, res, next) {
+  if (!['admin', 'vendedor'].includes(req.user.role)) {
+    return res.status(403).json({ erro: 'Acesso negado' });
+  }
+  next();
+}
+
+async function resolverEscopoVenda(req, vendedorIdInformado = null) {
+  if (req.user.role === 'subvendedor') {
+    let parentId = req.user.parent_id || null;
+    if (!parentId) {
+      const { rows } = await pool.query('SELECT parent_id FROM vendedores WHERE id=$1 AND role=$2', [req.user.id, 'subvendedor']);
+      parentId = rows[0]?.parent_id || null;
+    }
+    if (!parentId) throw new Error('Subvendedor sem vendedor principal vinculado');
+    return { vendedor_id: parentId, subvendedor_id: req.user.id };
+  }
+  if (req.user.role === 'vendedor') {
+    return { vendedor_id: req.user.id, subvendedor_id: null };
+  }
+  return { vendedor_id: vendedorIdInformado || req.user.id, subvendedor_id: null };
+}
+
 
 // ─── Diagnóstico de deploy ───────────────────────────────────────────────────
 // Use esta rota para confirmar se o Railway está rodando esta versão do backend.
@@ -348,25 +386,34 @@ app.post('/api/login', async (req, res) => {
     const v = rows[0];
     const ok = await bcrypt.compare(senha, v.senha_hash);
     if (!ok) return res.status(401).json({ erro: 'Credenciais inválidas' });
-    const token = jwt.sign({ id: v.id, nome: v.nome, email: v.email, role: v.role }, JWT_SECRET, { expiresIn: '8h' });
-    res.json({ token, id: v.id, nome: v.nome, role: v.role });
+    const token = jwt.sign({ id: v.id, nome: v.nome, email: v.email, role: v.role, parent_id: v.parent_id || null }, JWT_SECRET, { expiresIn: '8h' });
+    res.json({ token, id: v.id, nome: v.nome, role: v.role, parent_id: v.parent_id || null });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
 });
 
-// ─── VENDEDORES (admin) ───────────────────────────────────────────────────────
-app.get('/api/vendedores', authMiddleware, adminOnly, async (req, res) => {
+// ─── VENDEDORES / SUBVENDEDORES ──────────────────────────────────────────────
+app.get('/api/vendedores', authMiddleware, adminOuVendedorPrincipal, async (req, res) => {
   try {
+    const isAdmin = req.user.role === 'admin';
+    const params = isAdmin ? [] : [req.user.id];
+    const filtro = isAdmin
+      ? "v.role = 'vendedor' AND v.parent_id IS NULL"
+      : "v.role = 'subvendedor' AND v.parent_id = $1";
+    const joinLinhas = isAdmin ? 'l.vendedor_id = v.id' : 'l.subvendedor_id = v.id';
+    const joinTransacoes = isAdmin ? 't.vendedor_id = v.id' : 't.subvendedor_id = v.id';
+
     const { rows } = await pool.query(
-      `SELECT v.id, v.nome, v.email, v.telefone, v.ativo, v.criado_em,
+      `SELECT v.id, v.nome, v.email, v.telefone, v.ativo, v.criado_em, v.role, v.parent_id,
         COUNT(DISTINCT l.id) AS total_linhas,
         COALESCE(SUM(t.comissao),0) AS total_comissao
        FROM vendedores v
-       LEFT JOIN linhas l ON l.vendedor_id = v.id
-       LEFT JOIN transacoes t ON t.vendedor_id = v.id
-       WHERE v.role = 'vendedor'
-       GROUP BY v.id ORDER BY v.nome`
+       LEFT JOIN linhas l ON ${joinLinhas}
+       LEFT JOIN transacoes t ON ${joinTransacoes}
+       WHERE ${filtro}
+       GROUP BY v.id ORDER BY v.nome`,
+      params
     );
     res.json(rows);
   } catch (e) {
@@ -374,37 +421,56 @@ app.get('/api/vendedores', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
-app.post('/api/vendedores', authMiddleware, adminOnly, async (req, res) => {
+app.post('/api/vendedores', authMiddleware, adminOuVendedorPrincipal, async (req, res) => {
   try {
-    const { nome, email, senha, telefone } = req.body;
+    const { nome, email, senha, telefone, permissoes } = req.body;
+    if (!nome || !email || !senha) return res.status(400).json({ erro: 'Nome, email e senha são obrigatórios' });
     const hash = await bcrypt.hash(senha, 10);
+    const roleNovo = req.user.role === 'admin' ? 'vendedor' : 'subvendedor';
+    const parentId = req.user.role === 'admin' ? null : req.user.id;
     const { rows } = await pool.query(
-      `INSERT INTO vendedores (nome, email, senha_hash, telefone, role, ativo)
-       VALUES ($1,$2,$3,$4,'vendedor',true)
-       RETURNING id, nome, email`,
-      [nome, email, hash, telefone]
+      `INSERT INTO vendedores (nome, email, senha_hash, telefone, role, ativo, parent_id)
+       VALUES ($1,$2,$3,$4,$5,true,$6)
+       RETURNING id, nome, email, role, parent_id`,
+      [nome, email, hash, telefone || null, roleNovo, parentId]
     );
+    if (Array.isArray(permissoes)) {
+      for (const perm of permissoes) {
+        await pool.query('INSERT INTO vendedor_permissoes (vendedor_id, permissao) VALUES ($1,$2) ON CONFLICT DO NOTHING', [rows[0].id, perm]);
+      }
+    }
     res.json(rows[0]);
   } catch (e) {
+    if (e.code === '23505') return res.status(400).json({ erro: 'Já existe usuário com este email' });
     res.status(500).json({ erro: e.message });
   }
 });
 
-app.put('/api/vendedores/:id', authMiddleware, adminOnly, async (req, res) => {
+app.put('/api/vendedores/:id', authMiddleware, adminOuVendedorPrincipal, async (req, res) => {
   try {
+    const alvoId = req.params.id;
+    const paramsAlvo = req.user.role === 'admin'
+      ? [alvoId]
+      : [alvoId, req.user.id];
+    const sqlAlvo = req.user.role === 'admin'
+      ? "SELECT id FROM vendedores WHERE id=$1 AND role='vendedor' AND parent_id IS NULL"
+      : "SELECT id FROM vendedores WHERE id=$1 AND role='subvendedor' AND parent_id=$2";
+    const { rows: alvo } = await pool.query(sqlAlvo, paramsAlvo);
+    if (!alvo.length) return res.status(403).json({ erro: 'Vendedor fora do seu escopo' });
+
     const { nome, telefone, ativo, senha, permissoes } = req.body;
     if (senha) {
       const hash = await bcrypt.hash(senha, 10);
       await pool.query('UPDATE vendedores SET nome=$1, telefone=$2, ativo=$3, senha_hash=$4 WHERE id=$5',
-        [nome, telefone, ativo, hash, req.params.id]);
+        [nome, telefone || null, ativo, hash, alvoId]);
     } else {
       await pool.query('UPDATE vendedores SET nome=$1, telefone=$2, ativo=$3 WHERE id=$4',
-        [nome, telefone, ativo, req.params.id]);
+        [nome, telefone || null, ativo, alvoId]);
     }
     if (permissoes) {
-      await pool.query('DELETE FROM vendedor_permissoes WHERE vendedor_id=$1', [req.params.id]);
+      await pool.query('DELETE FROM vendedor_permissoes WHERE vendedor_id=$1', [alvoId]);
       for (const perm of permissoes) {
-        await pool.query('INSERT INTO vendedor_permissoes (vendedor_id, permissao) VALUES ($1,$2)', [req.params.id, perm]);
+        await pool.query('INSERT INTO vendedor_permissoes (vendedor_id, permissao) VALUES ($1,$2) ON CONFLICT DO NOTHING', [alvoId, perm]);
       }
     }
     res.json({ ok: true });
@@ -415,7 +481,14 @@ app.put('/api/vendedores/:id', authMiddleware, adminOnly, async (req, res) => {
 
 app.get('/api/vendedores/:id/permissoes', authMiddleware, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT permissao FROM vendedor_permissoes WHERE vendedor_id=$1', [req.params.id]);
+    const alvoId = parseInt(req.params.id);
+    if (req.user.role === 'vendedor') {
+      const { rows: alvo } = await pool.query("SELECT id FROM vendedores WHERE id=$1 AND role='subvendedor' AND parent_id=$2", [alvoId, req.user.id]);
+      if (!alvo.length && alvoId !== parseInt(req.user.id)) return res.status(403).json({ erro: 'Acesso negado' });
+    } else if (req.user.role === 'subvendedor' && alvoId !== parseInt(req.user.id)) {
+      return res.status(403).json({ erro: 'Acesso negado' });
+    }
+    const { rows } = await pool.query('SELECT permissao FROM vendedor_permissoes WHERE vendedor_id=$1', [alvoId]);
     res.json(rows.map(r => r.permissao));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -530,6 +603,7 @@ app.post('/api/planos-comissao', authMiddleware, adminOnly, async (req, res) => 
 app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
   try {
     const vendedorId = req.params.id;
+    const isSubvendedorProprio = req.user.role === 'subvendedor' && parseInt(req.user.id) === parseInt(vendedorId);
     if (req.user.role !== 'admin' && parseInt(req.user.id) !== parseInt(vendedorId)) {
       return res.status(403).json({ erro: 'Acesso negado' });
     }
@@ -549,19 +623,19 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
       `SELECT t.*, l.msisdn, l.nome_cliente, l.iccid
        FROM transacoes t
        LEFT JOIN linhas l ON l.id = t.linha_id
-       WHERE t.vendedor_id = $1${filtro}
+       WHERE ${isSubvendedorProprio ? 't.subvendedor_id' : 't.vendedor_id'} = $1${filtro}
        ORDER BY COALESCE(t.periodo_referencia, t.data_transacao::date::text) DESC`,
       params
     );
     const filtroResumo = filtro.replace(/t\./g, '');
     const { rows: resumo } = await pool.query(
       `SELECT tipo, COUNT(*) as quantidade, COALESCE(SUM(comissao),0) as total_comissao
-       FROM transacoes WHERE vendedor_id=$1${filtroResumo}
+       FROM transacoes WHERE ${isSubvendedorProprio ? 'subvendedor_id' : 'vendedor_id'}=$1${filtroResumo}
        GROUP BY tipo`,
       params
     );
     const { rows: linhas } = await pool.query(
-      'SELECT * FROM linhas WHERE vendedor_id=$1 ORDER BY data_ativacao DESC',
+      `SELECT * FROM linhas WHERE ${isSubvendedorProprio ? 'subvendedor_id' : 'vendedor_id'}=$1 ORDER BY data_ativacao DESC`,
       [vendedorId]
     );
     res.json({ transacoes, resumo, linhas });
@@ -590,7 +664,7 @@ app.get('/api/relatorio/geral', authMiddleware, adminOnly, async (req, res) => {
        FROM vendedores v
        LEFT JOIN transacoes t ON t.vendedor_id = v.id
        ${filtro}
-       AND v.role='vendedor'
+       AND v.role='vendedor' AND v.parent_id IS NULL
        GROUP BY v.id, v.nome, v.email
        ORDER BY total_comissao DESC`,
       params
@@ -768,21 +842,22 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
     );
     const comissao = planoRows[0]?.comissao_ativacao || 0;
 
+    const { vendedor_id: vendedorPrincipalId, subvendedor_id: subvendedorId } = await resolverEscopoVenda(req, vendedor_id);
     const iccid = cartPayload.iccid || subscriber.iccid;
     const msisdn = pagamento.msisdn || cartPayload.msisdn || null;
     const { rows: linhaRows } = await pool.query(
-      `INSERT INTO linhas (iccid, msisdn, vendedor_id, plano_id, plano_nome, documento_cliente, nome_cliente)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (iccid) DO UPDATE SET msisdn=$2, vendedor_id=$3, plano_id=$4, plano_nome=$5
+      `INSERT INTO linhas (iccid, msisdn, vendedor_id, subvendedor_id, plano_id, plano_nome, documento_cliente, nome_cliente)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (iccid) DO UPDATE SET msisdn=$2, vendedor_id=$3, subvendedor_id=$4, plano_id=$5, plano_nome=$6
        RETURNING id`,
-      [iccid, msisdn, vendedor_id, plano_id, plano_nome, subscriber.document, subscriber.name]
+      [iccid, msisdn, vendedorPrincipalId, subvendedorId, plano_id, plano_nome, subscriber.document, subscriber.name]
     );
     const linhaId = linhaRows[0].id;
 
     await pool.query(
-      `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
-       VALUES ($1,$2,'ativacao',$3,$4,$5,$6,'sistema')`,
-      [linhaId, vendedor_id, plano_id, plano_nome, plano_valor, comissao]
+      `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
+       VALUES ($1,$2,$3,'ativacao',$4,$5,$6,$7,'sistema')`,
+      [linhaId, vendedorPrincipalId, subvendedorId, plano_id, plano_nome, plano_valor, comissao]
     );
 
     const pixData = pagamento?.pix || null;
@@ -793,7 +868,7 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
         `UPDATE esims SET status='usado', vendedor_id=$1, msisdn=$2,
          nome_cliente=$3, documento_cliente=$4, usado_em=NOW()
          WHERE iccid=$5`,
-        [vendedor_id, msisdnFinal, subscriber.name, subscriber.document, iccid]
+        [vendedorPrincipalId, msisdnFinal, subscriber.name, subscriber.document, iccid]
       );
     } catch {}
 
@@ -945,6 +1020,7 @@ app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
 app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) => {
   try {
     const { msisdn, vendedor_id, plano_id, plano_nome, recargas } = req.body;
+    const escopo = await resolverEscopoVenda(req, vendedor_id);
 
     let { rows: linhaRows } = await pool.query(
       'SELECT id FROM linhas WHERE msisdn=$1', [msisdn]
@@ -953,21 +1029,21 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
     let linhaId;
     if (!linhaRows.length) {
       const ins = await pool.query(
-        `INSERT INTO linhas (iccid, msisdn, vendedor_id, plano_id, plano_nome, status)
-         VALUES ($1,$2,$3,$4,$5,'ativa') RETURNING id`,
-        [`retroativo-${msisdn}`, msisdn, vendedor_id, plano_id, plano_nome]
+        `INSERT INTO linhas (iccid, msisdn, vendedor_id, subvendedor_id, plano_id, plano_nome, status)
+         VALUES ($1,$2,$3,$4,$5,$6,'ativa') RETURNING id`,
+        [`retroativo-${msisdn}`, msisdn, escopo.vendedor_id, escopo.subvendedor_id, plano_id, plano_nome]
       );
       linhaId = ins.rows[0].id;
     } else {
       linhaId = linhaRows[0].id;
       await pool.query(
-        'UPDATE linhas SET vendedor_id=$1, plano_id=$2, plano_nome=$3 WHERE id=$4',
-        [vendedor_id, plano_id, plano_nome, linhaId]
+        'UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2, plano_id=$3, plano_nome=$4 WHERE id=$5',
+        [escopo.vendedor_id, escopo.subvendedor_id, plano_id, plano_nome, linhaId]
       );
     }
 
     let inseridas = 0;
-    for (const r of recargas) {
+    for (const r of recargas || []) {
       const periodoCheck = String(r.periodo || '').substring(0, 7);
       const { rows: existe } = await pool.query(
         "SELECT id FROM transacoes WHERE linha_id=$1 AND tipo='recarga' AND LEFT(periodo_referencia,7)=$2",
@@ -976,10 +1052,10 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
       if (existe.length) continue;
       const periodoNorm = String(r.periodo || '').substring(0, 7);
       await pool.query(
-        `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
-         VALUES ($1,$2,'recarga',$3,$4,$5,$6,'retroativo')
+        `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
+         VALUES ($1,$2,$3,'recarga',$4,$5,$6,$7,'retroativo')
          ON CONFLICT DO NOTHING`,
-        [linhaId, vendedor_id, plano_id, plano_nome, r.comissao, periodoNorm]
+        [linhaId, escopo.vendedor_id, escopo.subvendedor_id, plano_id, plano_nome, r.comissao, periodoNorm]
       );
       inseridas++;
     }
@@ -1236,13 +1312,14 @@ app.post('/api/bora/recarregar', authMiddleware, async (req, res) => {
     if (!msisdn || !plano_id || !pagamento) throw new Error('msisdn, plano_id e pagamento são obrigatórios');
 
     let linhaRows = [];
+    const escopo = await resolverEscopoVenda(req, req.body.vendedor_id || null);
     if (req.user.role !== 'admin') {
       const { rows: perms } = await pool.query(
         "SELECT 1 FROM vendedor_permissoes WHERE vendedor_id=$1 AND permissao='recarga'",
         [req.user.id]
       );
       if (!perms.length) return res.status(403).json({ erro: 'Você não tem permissão para fazer recarga' });
-      const result = await pool.query('SELECT * FROM linhas WHERE msisdn=$1 AND vendedor_id=$2', [msisdn, req.user.id]);
+      const result = await pool.query('SELECT * FROM linhas WHERE msisdn=$1 AND vendedor_id=$2', [msisdn, escopo.vendedor_id]);
       linhaRows = result.rows;
       if (!linhaRows.length) return res.status(403).json({ erro: 'Linha não encontrada na sua carteira' });
     } else {
@@ -1277,9 +1354,9 @@ app.post('/api/bora/recarregar', authMiddleware, async (req, res) => {
         const { rows: planoRows } = await pool.query('SELECT comissao_recarga, plano_nome, plano_valor FROM planos_comissao WHERE plano_id=$1', [plano_id]);
         const comissao = parseFloat(planoRows[0]?.comissao_recarga || 0);
         await pool.query(
-          `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, periodo_referencia, fonte)
-           VALUES ($1,$2,'recarga',$3,$4,$5,$6,$7,'sistema')`,
-          [linha.id, linha.vendedor_id, plano_id, plano_nome || planoRows[0]?.plano_nome || null, plano_valor || planoRows[0]?.plano_valor || null, comissao, mesRef]
+          `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, periodo_referencia, fonte)
+           VALUES ($1,$2,$3,'recarga',$4,$5,$6,$7,$8,'sistema')`,
+          [linha.id, linha.vendedor_id, escopo.subvendedor_id, plano_id, plano_nome || planoRows[0]?.plano_nome || null, plano_valor || planoRows[0]?.plano_valor || null, comissao, mesRef]
         );
       }
     }
@@ -1782,6 +1859,7 @@ app.get('/', (req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 garantirColunasEsimQrCode().catch(err => console.error('[DB] Erro ao preparar colunas eSIM:', err.message));
+garantirColunasEquipeVendedor().catch(err => console.error('[DB] Erro ao preparar equipe de vendedores:', err.message));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

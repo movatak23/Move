@@ -1414,7 +1414,7 @@ async function doLogin() {
   try {
     const data = await api('POST', '/api/login', { email, senha });
     state.token = data.token;
-    state.user = { id: data.id, nome: data.nome, role: data.role };
+    state.user = { id: data.id, nome: data.nome, role: data.role, parent_id: data.parent_id || null };
     localStorage.setItem('bv_token', data.token);
     localStorage.setItem('bv_user', JSON.stringify(state.user));
     iniciarApp();
@@ -1438,7 +1438,7 @@ async function iniciarApp() {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app-screen').style.display = 'block';
   document.getElementById('sb-nome').textContent = state.user.nome;
-  document.getElementById('sb-role').textContent = state.user.role === 'admin' ? 'Administrador' : 'Vendedor';
+  document.getElementById('sb-role').textContent = state.user.role === 'admin' ? 'Administrador' : (state.user.role === 'subvendedor' ? 'Subvendedor' : 'Vendedor');
   // Carrega permissões
   try {
     state.permissoes = await api('GET', '/api/minhas-permissoes');
@@ -1468,6 +1468,7 @@ async function iniciarApp() {
 function construirNav() {
   const nav = document.getElementById('sidebar-nav');
   const isAdmin = state.user.role === 'admin';
+  const isVendedorPrincipal = state.user.role === 'vendedor';
   const items = isAdmin ? [
     { page: 'dashboard', icon: '◈', label: 'Dashboard' },
     { page: 'vendedores', icon: '◉', label: 'Vendedores' },
@@ -1487,10 +1488,11 @@ function construirNav() {
     { page: 'portabilidade', icon: '↔', label: 'Portabilidade' },
   ] : [
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
+    ...(isVendedorPrincipal ? [{ page: 'vendedores', icon: '◉', label: 'Meus Vendedores' }] : []),
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
     { page: 'recarga', icon: '📦', label: 'Pacotes Adicionais', perm: 'recarga' },
-    { page: 'calculadora', icon: '◎', label: 'Calculadora' },
+    ...(isVendedorPrincipal ? [{ page: 'calculadora', icon: '◎', label: 'Calculadora' }] : []),
     { section: 'Ferramentas' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
     { page: 'consulta', icon: '🔍', label: 'Consultar Linha', perm: 'consulta' },
@@ -1514,6 +1516,7 @@ function navegarPara(page) {
   updateCacheTimestamp();
   if (page === 'ativar') { resetAtivacao(); carregarEsimsDisponiveis(); }
   if (page === 'admins') loadAdmins();
+  if (page === 'vendedores') loadVendedores();
   if (page === 'recarga') resetRecarga();
   if (page === 'calculadora') initCalculadora();
   if (page === 'esim') loadEsim();
@@ -1555,7 +1558,14 @@ async function loadVendedores() {
   try {
     const dados = await api('GET', '/api/vendedores');
     const tbody = document.getElementById('tbl-vendedores');
-    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="ico">👤</div><p>Nenhum vendedor cadastrado</p></td></tr>`; return; }
+    const isInterno = state.user?.role === 'vendedor';
+    const titulo = document.querySelector('#page-vendedores .page-title');
+    const sub = document.querySelector('#page-vendedores .page-sub');
+    const btnNovo = document.querySelector('#page-vendedores .page-header .btn-primary');
+    if (titulo) titulo.textContent = isInterno ? 'Meus Vendedores' : 'Vendedores';
+    if (sub) sub.textContent = isInterno ? 'Cadastro e gestão da sua equipe interna' : 'Cadastro e gestão de equipe';
+    if (btnNovo) btnNovo.textContent = isInterno ? '+ Novo Vendedor Interno' : '+ Novo Vendedor';
+    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="ico">👤</div><p>${isInterno ? 'Nenhum vendedor interno cadastrado' : 'Nenhum vendedor cadastrado'}</p></td></tr>`; return; }
     tbody.innerHTML = dados.map(v => `<tr>
       <td><strong>${v.nome}</strong></td>
       <td class="text-muted">${v.email}</td>
@@ -1570,7 +1580,7 @@ async function loadVendedores() {
 
 function abrirModalVendedor() {
   state.editVendedorId = null;
-  document.getElementById('modal-vendedor-title').textContent = 'Novo Vendedor';
+  document.getElementById('modal-vendedor-title').textContent = state.user?.role === 'vendedor' ? 'Novo Vendedor Interno' : 'Novo Vendedor';
   ['mv-nome','mv-tel','mv-email','mv-senha'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('mv-ativo').value = 'true';
   document.getElementById('modal-vendedor').classList.add('open');
@@ -2177,6 +2187,7 @@ async function initCalculadora() {
         vendedores.map(v => '<option value="' + v.id + '">' + v.nome + '</option>').join('');
     } else {
       selV.innerHTML = '<option value="' + state.user.id + '">' + state.user.nome + '</option>';
+      selV.value = String(state.user.id);
     }
     // Plano é detectado automaticamente via /details — select vira apenas override
     const planos = await api('GET', '/api/planos-comissao');
@@ -2200,7 +2211,7 @@ function gerarMeses(inicio, fim) {
 async function calcularComissao(modo) {
   const msisdn = document.getElementById('calc-msisdn').value.trim();
   if (!msisdn) { toast('Informe o número', 'error'); return; }
-  calcVendedorSelecionado = document.getElementById('calc-vendedor').value;
+  calcVendedorSelecionado = document.getElementById('calc-vendedor').value || (state.user.role !== 'admin' ? String(state.user.id) : '');
   const planoOverride = document.getElementById('calc-plano').value || null;
   calcMsisdn = msisdn;
 
@@ -2486,6 +2497,7 @@ async function abrirModalAtribuir(linha) {
         vendedores.map(v => '<option value="' + v.id + '">' + v.nome + '</option>').join('');
     } else {
       selV.innerHTML = '<option value="' + state.user.id + '">' + state.user.nome + '</option>';
+      selV.value = String(state.user.id);
     }
   } catch(e) { toast('Erro ao carregar vendedores','error'); return; }
 
@@ -2711,7 +2723,7 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="navegarParaPortabilidade('${l.document}')">↔ Portabilidade</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>
       <button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>
-      <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,&#39;${l.msisdn||''}&#39;,&#39;${(l.email||l.customer?.email||l.subscriber?.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||l.customer?.name||l.subscriber?.name||'').replace(/'/g,'')}&#39;,this)">📄 Encaminhar Boleto</button>
+      <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,this)">📄 Encaminhar Boleto</button>
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
@@ -3005,45 +3017,14 @@ function encaminharBoleto() {
   window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
 }
 
-function extrairEmailTitularLinha(obj) {
-  const visitados = new Set();
-  function procurar(v) {
-    if (!v || visitados.has(v)) return '';
-    if (typeof v === 'string') return v.includes('@') ? v.trim() : '';
-    if (typeof v !== 'object') return '';
-    visitados.add(v);
-    const chavesEmail = ['email','eMail','mail','customerEmail','subscriberEmail','holderEmail','ownerEmail'];
-    for (const k of chavesEmail) {
-      if (v[k] && String(v[k]).includes('@')) return String(v[k]).trim();
-    }
-    for (const k of Object.keys(v)) {
-      const achado = procurar(v[k]);
-      if (achado) return achado;
-    }
-    return '';
-  }
-  return procurar(obj);
-}
-
-function extrairNomeTitularLinha(obj) {
-  if (!obj || typeof obj !== 'object') return '';
-  return obj.name || obj.nome || obj.customerName || obj.subscriberName || obj.customer?.name || obj.customer?.nome || obj.subscriber?.name || obj.subscriber?.nome || '';
-}
-
-async function encaminharBoletoLinha(doc, msisdn = '', emailTitular = '', nomeTitular = '', btn) {
+async function encaminharBoletoLinha(doc, btn) {
   if (!doc) { toast('Documento da linha indisponível', 'error'); return; }
   const original = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '⏳...'; }
   try {
-    const [b, titular] = await Promise.all([
-      api('GET', `/api/bora/linha/${doc}/boleto`),
-      api('GET', `/api/bora/subscriber/documento/${doc}`).catch(() => null)
-    ]);
-    const dest = (emailTitular || extrairEmailTitularLinha(titular) || '').trim();
-    if (!dest.includes('@')) { toast('E-mail cadastrado na linha não encontrado', 'error'); return; }
-    const nome = nomeTitular || extrairNomeTitularLinha(titular) || '';
-    const r = await api('POST', '/api/bora/boleto/enviar-email', { email: dest, nome, barcode: b.barcode || '', url: b.url || '', msisdn });
-    toast('Boleto enviado para ' + (r.destino || dest));
+    const b = await api('GET', `/api/bora/linha/${doc}/boleto`);
+    const msg = 'Seu boleto Move:' + (b.url ? '\n' + b.url : '') + (b.barcode ? '\n\nLinha digitável:\n' + b.barcode : '');
+    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
   } catch (e) {
     toast(e.message || 'Nenhum boleto pendente para esta linha', 'error');
   } finally { if (btn) { btn.disabled = false; btn.innerHTML = original; } }
