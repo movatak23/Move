@@ -1953,6 +1953,10 @@ function irParaConfirmacao() {
 async function confirmarAtivacao() {
   const a = state.ativacao;
   const res = document.getElementById('ativacao-result');
+  if (!['pix','billet','billetcombo'].includes(a.pagamento)) {
+    toast('Selecione uma forma de pagamento (PIX, Boleto ou Boleto Combo) antes de ativar', 'error');
+    return;
+  }
   res.innerHTML = '<div class="loading">Ativando linha na Bora...</div>';
   try {
     const vendedorId = state.user.role === 'admin' ? null : state.user.id;
