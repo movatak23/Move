@@ -2073,14 +2073,18 @@ async function confirmarAtivacao() {
       window._pixCode = pixCode;
     }
 
-    if (data.billet && data.billet.url) {
-      const billetUrl = data.billet.url;
+    if (data.billet && (data.billet.url || data.billet.barcode)) {
+      const billetUrl = data.billet.url || '';
       const billetBar = data.billet.barcode || '';
+      window._billetBar = billetBar; window._billetUrl = billetUrl;
       let bilHtml = '<div class="info-card" style="margin-top:16px;border-color:var(--yellow)">';
       bilHtml += '<div class="section-title" style="color:var(--yellow);margin-bottom:12px">&#128196; Boleto Gerado</div>';
       if (billetBar) bilHtml += '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--text2);margin-bottom:10px">' + billetBar + '</div>';
-      bilHtml += '<a href="' + billetUrl + '" target="_blank" class="btn btn-secondary btn-sm">&#128279; Abrir Boleto</a>';
-      bilHtml += '</div>';
+      bilHtml += '<div style="display:flex;gap:8px;flex-wrap:wrap">';
+      bilHtml += '<button class="btn btn-secondary btn-sm" onclick="copiarLinhaDigitavel()">&#128203; Copiar linha digitável</button>';
+      bilHtml += '<button class="btn btn-secondary btn-sm" onclick="encaminharBoleto()">&#128241; Encaminhar</button>';
+      if (billetUrl) bilHtml += '<a href="' + billetUrl + '" target="_blank" class="btn btn-secondary btn-sm">&#128279; Abrir Boleto</a>';
+      bilHtml += '</div></div>';
       html += bilHtml;
     }
 
@@ -2973,6 +2977,18 @@ function copiarPix() {
   }
 }
 
+function copiarLinhaDigitavel() {
+  if (!window._billetBar) { toast('Linha digitável indisponível', 'error'); return; }
+  navigator.clipboard.writeText(window._billetBar)
+    .then(() => toast('Linha digitável copiada!'))
+    .catch(() => toast('Não foi possível copiar', 'error'));
+}
+
+function encaminharBoleto() {
+  const msg = 'Seu boleto Move:' + (window._billetUrl ? '\n' + window._billetUrl : '') + (window._billetBar ? '\n\nLinha digitável:\n' + window._billetBar : '');
+  window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+}
+
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 function fecharModal(id) { document.getElementById(id).classList.remove('open'); }
 
@@ -3129,8 +3145,13 @@ async function confirmarRecarga() {
         <button class="btn btn-secondary btn-sm" onclick="copiarPix()">Copiar PIX</button>`;
     }
     if (data.billet?.url || data.billet?.barcode) {
+      window._billetBar = data.billet.barcode || ''; window._billetUrl = data.billet.url || '';
       html += `<div class="field" style="margin-top:14px"><label>Boleto / Linha digitável</label><textarea readonly rows="3">${data.billet.barcode || data.billet.url}</textarea></div>`;
-      if (data.billet.url) html += `<a class="btn btn-secondary btn-sm" href="${data.billet.url}" target="_blank" style="margin-top:10px">Abrir boleto</a>`;
+      html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">';
+      html += '<button class="btn btn-secondary btn-sm" onclick="copiarLinhaDigitavel()">📋 Copiar linha digitável</button>';
+      html += '<button class="btn btn-secondary btn-sm" onclick="encaminharBoleto()">📲 Encaminhar</button>';
+      if (data.billet.url) html += `<a class="btn btn-secondary btn-sm" href="${data.billet.url}" target="_blank">Abrir boleto</a>`;
+      html += '</div>';
     }
     html += '</div>';
     document.getElementById('rec-resultado').innerHTML = html;
