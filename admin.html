@@ -2711,7 +2711,7 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="navegarParaPortabilidade('${l.document}')">↔ Portabilidade</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>
       <button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>
-      <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,this)">📄 Encaminhar Boleto</button>
+      <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,this)">📄 Encaminhar Boleto</button>
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
@@ -3005,14 +3005,16 @@ function encaminharBoleto() {
   window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
 }
 
-async function encaminharBoletoLinha(doc, btn) {
+async function encaminharBoletoLinha(doc, emailTitular = '', nomeTitular = '', btn) {
   if (!doc) { toast('Documento da linha indisponível', 'error'); return; }
+  const dest = (emailTitular || '').trim();
+  if (!dest.includes('@')) { toast('E-mail do titular indisponível para esta linha', 'error'); return; }
   const original = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '⏳...'; }
   try {
     const b = await api('GET', `/api/bora/linha/${doc}/boleto`);
-    const msg = 'Seu boleto Move:' + (b.url ? '\n' + b.url : '') + (b.barcode ? '\n\nLinha digitável:\n' + b.barcode : '');
-    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+    const r = await api('POST', '/api/bora/boleto/enviar-email', { email: dest, nome: nomeTitular || '', barcode: b.barcode || '', url: b.url || '' });
+    toast('Boleto enviado para ' + (r.destino || dest));
   } catch (e) {
     toast(e.message || 'Nenhum boleto pendente para esta linha', 'error');
   } finally { if (btn) { btn.disabled = false; btn.innerHTML = original; } }
