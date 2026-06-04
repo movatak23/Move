@@ -941,7 +941,7 @@ select option { background: var(--bg3); }
     <!-- ── RECARGA ─────────────────────────── -->
     <div class="page" id="page-recarga">
       <div class="page-header">
-        <div><div class="page-title">Recarga</div><div class="page-sub">Gerar PIX ou boleto de recarga para uma linha</div></div>
+        <div><div class="page-title">Pacotes Adicionais</div><div class="page-sub">Adicionar pacote de dados para uma linha</div></div>
       </div>
       <div class="section-card">
         <div class="form-row">
@@ -1421,7 +1421,7 @@ function construirNav() {
     { page: 'planos', icon: '◇', label: 'Planos & Comissões' },
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
-    { page: 'recarga', icon: '↻', label: 'Recarga' },
+    { page: 'recarga', icon: '📦', label: 'Pacotes Adicionais' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { page: 'esim', icon: '◈', label: 'E-SIM' },
     { section: 'Ferramentas' },
@@ -1435,7 +1435,7 @@ function construirNav() {
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
-    { page: 'recarga', icon: '↻', label: 'Recarga', perm: 'recarga' },
+    { page: 'recarga', icon: '📦', label: 'Pacotes Adicionais', perm: 'recarga' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { section: 'Ferramentas' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
@@ -2632,7 +2632,7 @@ function renderLinhaConsulta(l, cons) {
       ${renderGraficoConsumo(cons, l.msisdn)}
     </div>
     <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap" id="acoes-linha">
-      <button class="btn btn-primary btn-sm" onclick="navegarParaRecarga('${l.msisdn}')">⚡ Recarregar</button>
+      <button class="btn btn-primary btn-sm" onclick="navegarParaRecarga('${l.msisdn}')">📦 Pac. Adicionais</button>
       <button class="btn btn-secondary btn-sm" onclick="navegarParaPortabilidade('${l.document}')">↔ Portabilidade</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>
       <button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>
