@@ -391,8 +391,12 @@ function montarUrlPublicaSupabase(objectPath) {
   return `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(SUPABASE_BUCKET)}/${encodedPath}`;
 }
 
+function pareceUrlImagemDireta(url) {
+  return /^https?:\/\/.+\.(png|jpe?g|webp|svg)(\?.*)?$/i.test(String(url || '').trim());
+}
+
 function obterMoveLogoUrl() {
-  if (MOVE_LOGO_URL) return MOVE_LOGO_URL;
+  if (MOVE_LOGO_URL && pareceUrlImagemDireta(MOVE_LOGO_URL)) return MOVE_LOGO_URL;
   if (!SUPABASE_URL || !SUPABASE_BUCKET || !SUPABASE_MOVE_LOGO_PATH) return null;
   return montarUrlPublicaSupabase(SUPABASE_MOVE_LOGO_PATH);
 }
