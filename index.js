@@ -45,6 +45,9 @@ const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPAB
 const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || 'move-logos';
 const SUPABASE_FOLDER = process.env.SUPABASE_FOLDER || 'parceiros/logos';
 const MOVE_LOGO_URL = process.env.MOVE_LOGO_URL || null;
+// Caminho padrão do logo da Move dentro do Supabase Storage.
+// Se MOVE_LOGO_URL estiver configurado, ele tem prioridade.
+const SUPABASE_MOVE_LOGO_PATH = process.env.SUPABASE_MOVE_LOGO_PATH || `${String(SUPABASE_FOLDER || 'parceiros/logos').replace(/^\/+|\/+$/g, '')}/move5g.png`;
 
 // ─── Token Bora (cache em memória + DB) ──────────────────────────────────────
 let boraTokenCache = null;
@@ -386,6 +389,12 @@ function montarUrlPublicaSupabase(objectPath) {
     .map(part => encodeURIComponent(part))
     .join('/');
   return `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(SUPABASE_BUCKET)}/${encodedPath}`;
+}
+
+function obterMoveLogoUrl() {
+  if (MOVE_LOGO_URL) return MOVE_LOGO_URL;
+  if (!SUPABASE_URL || !SUPABASE_BUCKET || !SUPABASE_MOVE_LOGO_PATH) return null;
+  return montarUrlPublicaSupabase(SUPABASE_MOVE_LOGO_PATH);
 }
 
 async function uploadLogoSupabase({ file, vendedorId }) {
@@ -1250,12 +1259,19 @@ async function buscarBrandingPorFiltro(filtroSql, valor) {
   );
   const parceiro = rows[0] || null;
   return {
-    moveLogoUrl: MOVE_LOGO_URL,
+    moveLogoUrl: obterMoveLogoUrl(),
     parceiroNome: parceiro ? (parceiro.nome_exibicao || parceiro.nome) : null,
     parceiroLogoUrl: parceiro?.logo_url || null,
     temParceiro: Boolean(parceiro && parceiro.logo_url)
   };
 }
+
+
+app.get('/api/app/branding/move', (req, res) => {
+  res.json({
+    moveLogoUrl: obterMoveLogoUrl()
+  });
+});
 
 app.get('/api/app/linha/:msisdn/branding', async (req, res) => {
   try {

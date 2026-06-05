@@ -106,6 +106,21 @@ body {
   text-transform: uppercase;
 }
 
+.move-logo-img {
+  display: none;
+  object-fit: contain;
+}
+.login-logo .move-logo-img {
+  width: 140px;
+  max-height: 52px;
+  margin: 0 auto 8px;
+}
+.sidebar-logo .move-logo-img {
+  width: 100px;
+  max-height: 34px;
+  margin-bottom: 2px;
+}
+
 /* ── APP SHELL ─────────────────────────────────── */
 #app-screen { display: none; min-height: 100vh; }
 
@@ -526,7 +541,8 @@ select option { background: var(--bg3); }
 <div id="login-screen">
   <div class="login-box">
     <div class="login-logo">
-      <div class="brand">MOVE VENDAS</div>
+      <img id="move-logo-login" class="move-logo-img" alt="Move">
+      <div class="brand" id="move-logo-login-fallback">MOVE VENDAS</div>
       <div class="sub">Gestão de Vendedores</div>
     </div>
     <div class="field" style="margin-bottom:14px">
@@ -549,7 +565,8 @@ select option { background: var(--bg3); }
   <!-- Sidebar -->
   <div class="sidebar">
     <div class="sidebar-logo">
-      <svg viewBox="0 0 200 55" xmlns="http://www.w3.org/2000/svg" style="width:100px;display:block">
+      <img id="move-logo-sidebar" class="move-logo-img" alt="Move">
+      <svg id="move-logo-sidebar-fallback" viewBox="0 0 200 55" xmlns="http://www.w3.org/2000/svg" style="width:100px;display:block">
         <text x="4" y="46" font-family="Arial Black, sans-serif" font-size="50" font-weight="900" fill="#00bfff" letter-spacing="-2">move</text>
       </svg>
       <div class="version" style="margin-top:2px">Gestão de Vendedores</div>
@@ -1370,6 +1387,41 @@ const state = {
   recarga: { msisdn: null, plano: null }
 };
 
+let moveLogoUrlCache = null;
+
+function aplicarLogoMove(url) {
+  if (!url) return;
+  moveLogoUrlCache = url;
+  const pares = [
+    { img: 'move-logo-login', fallback: 'move-logo-login-fallback' },
+    { img: 'move-logo-sidebar', fallback: 'move-logo-sidebar-fallback' }
+  ];
+  pares.forEach(({ img, fallback }) => {
+    const imgEl = document.getElementById(img);
+    const fallbackEl = document.getElementById(fallback);
+    if (!imgEl) return;
+    imgEl.onload = () => {
+      imgEl.style.display = 'block';
+      if (fallbackEl) fallbackEl.style.display = 'none';
+    };
+    imgEl.onerror = () => {
+      imgEl.style.display = 'none';
+      if (fallbackEl) fallbackEl.style.display = '';
+    };
+    if (imgEl.src !== url) imgEl.src = url;
+  });
+}
+
+async function carregarLogoMove() {
+  try {
+    const r = await fetch('/api/app/branding/move');
+    const data = await r.json().catch(() => ({}));
+    if (data.moveLogoUrl) aplicarLogoMove(data.moveLogoUrl);
+  } catch (e) {
+    // Mantém o SVG/texto padrão se a imagem do Supabase não carregar.
+  }
+}
+
 function aplicarTema() {
   const tema = localStorage.getItem('move_theme') || 'dark';
   document.body.classList.toggle('light-theme', tema === 'light');
@@ -1497,6 +1549,7 @@ function doLogout() {
 // ── APP INIT ───────────────────────────────────────────────────────────────────
 async function iniciarApp() {
   aplicarTema();
+  if (moveLogoUrlCache) aplicarLogoMove(moveLogoUrlCache);
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app-screen').style.display = 'block';
   document.getElementById('sb-nome').textContent = state.user.nome;
@@ -3536,6 +3589,7 @@ async function loadChurn(dias = 60) {
 
 // ── AUTO LOGIN ────────────────────────────────────────────────────────────────
 (function() {
+  carregarLogoMove();
   const t = localStorage.getItem('bv_token');
   const u = localStorage.getItem('bv_user');
   if (t && u) {
