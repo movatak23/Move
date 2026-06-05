@@ -10,7 +10,6 @@ const cors = require('cors');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const path = require('path');
-const crypto = require('crypto');
 
 const app = express();
 app.use(cors());
@@ -40,11 +39,11 @@ const SMTP_SECURE = String(process.env.SMTP_SECURE || '').toLowerCase() === 'tru
 const RESEND_API_KEY = process.env.RESEND_API_KEY || null;
 const ESIM_EMAIL_AUTO = String(process.env.ESIM_EMAIL_AUTO || 'true').toLowerCase() !== 'false';
 
-// ─── Configuração de marca / Cloudinary ─────────────────────────────────────
-const CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || null;
-const CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || null;
-const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || null;
-const CLOUDINARY_FOLDER = process.env.CLOUDINARY_FOLDER || 'move/parceiros/logos';
+// ─── Configuração de marca / Supabase Storage ───────────────────────────────
+const SUPABASE_URL = String(process.env.SUPABASE_URL || '').replace(/\/$/, '');
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || null;
+const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || 'move-logos';
+const SUPABASE_FOLDER = process.env.SUPABASE_FOLDER || 'parceiros/logos';
 const MOVE_LOGO_URL = process.env.MOVE_LOGO_URL || null;
 
 // ─── Token Bora (cache em memória + DB) ──────────────────────────────────────
@@ -354,17 +353,8 @@ function vendedorPrincipalOnly(req, res, next) {
   next();
 }
 
-function cloudinaryConfigurado() {
-  return Boolean(CLOUDINARY_CLOUD_NAME && CLOUDINARY_API_KEY && CLOUDINARY_API_SECRET);
-}
-
-function assinarCloudinary(params) {
-  const base = Object.keys(params)
-    .filter(k => params[k] !== undefined && params[k] !== null && params[k] !== '')
-    .sort()
-    .map(k => `${k}=${params[k]}`)
-    .join('&');
-  return crypto.createHash('sha1').update(base + CLOUDINARY_API_SECRET).digest('hex');
+function supabaseStorageConfigurado() {
+  return Boolean(SUPABASE_URL && SUPABASE_SECRET_KEY && SUPABASE_BUCKET);
 }
 
 function validarArquivoLogo(file) {
@@ -378,61 +368,67 @@ function validarArquivoLogo(file) {
   }
 }
 
-async function uploadLogoCloudinary({ file, vendedorId }) {
-  if (!cloudinaryConfigurado()) {
-    throw new Error('Cloudinary não configurado. Configure CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY e CLOUDINARY_API_SECRET.');
+function extensaoLogoPorMime(mimetype) {
+  if (mimetype === 'image/jpeg') return 'jpg';
+  if (mimetype === 'image/webp') return 'webp';
+  return 'png';
+}
+
+function montarCaminhoLogoSupabase({ file, vendedorId }) {
+  const pasta = String(SUPABASE_FOLDER || 'parceiros/logos').replace(/^\/+|\/+$/g, '');
+  const ext = extensaoLogoPorMime(file.mimetype);
+  return `${pasta}/vendedor-${vendedorId}-${Date.now()}.${ext}`;
+}
+
+function montarUrlPublicaSupabase(objectPath) {
+  const encodedPath = String(objectPath || '')
+    .split('/')
+    .map(part => encodeURIComponent(part))
+    .join('/');
+  return `${SUPABASE_URL}/storage/v1/object/public/${encodeURIComponent(SUPABASE_BUCKET)}/${encodedPath}`;
+}
+
+async function uploadLogoSupabase({ file, vendedorId }) {
+  if (!supabaseStorageConfigurado()) {
+    throw new Error('Supabase Storage não configurado. Configure SUPABASE_URL, SUPABASE_SECRET_KEY e SUPABASE_BUCKET.');
   }
   validarArquivoLogo(file);
 
-  const timestamp = Math.floor(Date.now() / 1000);
-  const publicId = `vendedor-${vendedorId}-${Date.now()}`;
-  const paramsAssinatura = {
-    folder: CLOUDINARY_FOLDER,
-    public_id: publicId,
-    timestamp,
-    overwrite: 'true'
-  };
-  const signature = assinarCloudinary(paramsAssinatura);
-  const dataUri = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-  const form = new URLSearchParams();
-  form.append('file', dataUri);
-  form.append('api_key', CLOUDINARY_API_KEY);
-  form.append('timestamp', String(timestamp));
-  form.append('folder', CLOUDINARY_FOLDER);
-  form.append('public_id', publicId);
-  form.append('overwrite', 'true');
-  form.append('signature', signature);
+  const objectPath = montarCaminhoLogoSupabase({ file, vendedorId });
+  const uploadUrl = `${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(SUPABASE_BUCKET)}/${objectPath}`;
 
-  const resp = await axios.post(
-    `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`,
-    form.toString(),
-    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
-  );
+  await axios.post(uploadUrl, file.buffer, {
+    headers: {
+      Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+      apikey: SUPABASE_SECRET_KEY,
+      'Content-Type': file.mimetype,
+      'x-upsert': 'true',
+      'Cache-Control': '3600'
+    },
+    maxContentLength: 2 * 1024 * 1024,
+    timeout: 30000
+  });
 
   return {
-    logo_url: resp.data.secure_url,
-    logo_public_id: resp.data.public_id
+    logo_url: montarUrlPublicaSupabase(objectPath),
+    logo_public_id: objectPath
   };
 }
 
-async function removerLogoCloudinary(publicId) {
-  if (!publicId || !cloudinaryConfigurado()) return;
-  const timestamp = Math.floor(Date.now() / 1000);
-  const paramsAssinatura = { public_id: publicId, timestamp };
-  const signature = assinarCloudinary(paramsAssinatura);
-  const form = new URLSearchParams();
-  form.append('public_id', publicId);
-  form.append('api_key', CLOUDINARY_API_KEY);
-  form.append('timestamp', String(timestamp));
-  form.append('signature', signature);
+async function removerLogoSupabase(objectPath) {
+  if (!objectPath || !supabaseStorageConfigurado()) return;
   try {
-    await axios.post(
-      `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/destroy`,
-      form.toString(),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 15000 }
-    );
+    await axios.delete(`${SUPABASE_URL}/storage/v1/object/${encodeURIComponent(SUPABASE_BUCKET)}`, {
+      headers: {
+        Authorization: `Bearer ${SUPABASE_SECRET_KEY}`,
+        apikey: SUPABASE_SECRET_KEY,
+        'Content-Type': 'application/json'
+      },
+      data: { prefixes: [objectPath] },
+      timeout: 15000
+    });
   } catch (e) {
-    console.warn('[Cloudinary] Não foi possível remover logo antigo:', e.message);
+    console.warn('[Supabase Storage] Não foi possível remover logo antigo:', e.response?.data || e.message);
   }
 }
 
@@ -1184,7 +1180,7 @@ app.get('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, async (req, r
       nome: rows[0].nome,
       nome_exibicao: rows[0].nome_exibicao || rows[0].nome,
       logo_url: rows[0].logo_url || null,
-      cloudinaryConfigurado: cloudinaryConfigurado()
+      supabaseStorageConfigurado: supabaseStorageConfigurado()
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -1201,8 +1197,8 @@ app.post('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, uploadMem.si
     if (!atualRows.length) return res.status(404).json({ erro: 'Vendedor principal não encontrado' });
 
     if (req.file) {
-      novoLogo = await uploadLogoCloudinary({ file: req.file, vendedorId: req.user.id });
-      if (atualRows[0].logo_public_id) await removerLogoCloudinary(atualRows[0].logo_public_id);
+      novoLogo = await uploadLogoSupabase({ file: req.file, vendedorId: req.user.id });
+      if (atualRows[0].logo_public_id) await removerLogoSupabase(atualRows[0].logo_public_id);
       await pool.query(
         `UPDATE vendedores
          SET nome_exibicao=$1, logo_url=$2, logo_public_id=$3
@@ -1231,7 +1227,7 @@ app.delete('/api/minha-marca/logo', authMiddleware, vendedorPrincipalOnly, async
       [req.user.id]
     );
     if (!rows.length) return res.status(404).json({ erro: 'Vendedor principal não encontrado' });
-    if (rows[0].logo_public_id) await removerLogoCloudinary(rows[0].logo_public_id);
+    if (rows[0].logo_public_id) await removerLogoSupabase(rows[0].logo_public_id);
     await pool.query(
       `UPDATE vendedores SET logo_url=NULL, logo_public_id=NULL WHERE id=$1 AND role='vendedor' AND parent_id IS NULL`,
       [req.user.id]

@@ -1700,8 +1700,8 @@ async function loadMinhaMarca() {
     document.getElementById('marca-nome').value = dados.nome_exibicao || dados.nome || '';
     document.getElementById('marca-logo').value = '';
     setPreviewLogo(dados.logo_url || null);
-    if (!dados.cloudinaryConfigurado) {
-      toast('Cloudinary ainda não configurado no Railway. Configure as variáveis antes de enviar logo.', 'info');
+    if (!dados.supabaseStorageConfigurado) {
+      toast('Supabase Storage ainda não configurado no Railway. Configure as variáveis antes de enviar logo.', 'info');
     }
   } catch(e) { toast(e.message, 'error'); }
 }
