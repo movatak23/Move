@@ -40,7 +40,8 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || null;
 const ESIM_EMAIL_AUTO = String(process.env.ESIM_EMAIL_AUTO || 'true').toLowerCase() !== 'false';
 
 // ─── Configuração de marca / Supabase Storage ───────────────────────────────
-const SUPABASE_URL = String(process.env.SUPABASE_URL || '').replace(/\/$/, '');
+// Sanitiza SUPABASE_URL: extrai só o https:// mesmo se alguém colar conteúdo de .env completo na variável
+const SUPABASE_URL = (String(process.env.SUPABASE_URL || '').match(/https?:\/\/[^\s\n,;]+/) || [''])[0].replace(/\/$/, '');
 const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || null;
 const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET || 'move-logos';
 const SUPABASE_FOLDER = process.env.SUPABASE_FOLDER || 'parceiros/logos';
