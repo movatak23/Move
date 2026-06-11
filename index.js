@@ -1851,38 +1851,127 @@ app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
 });
 
 // ─── REATIVAÇÃO DE LINHA ──────────────────────────────────────────────────────
+// Passo 1 — Busca dados da linha para exibir no modal de confirmação
 app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
   try {
-    const data = await boraGet(`/api/Subscription/reactivation/${req.params.msisdn}`);
-    // Tenta resolver o planId pelo nome do plano nos planos de ativação
-    if (data && data.planName && !data.planId) {
+    const msisdn = req.params.msisdn;
+
+    // Busca detalhes atuais da linha (plano, status, accountId)
+    const details = await boraGet(`/api/Subscription/${msisdn}/details`);
+    const accountId = details?.accountId || null;
+    const planName = details?.planData?.name || details?.plan?.name || details?.planName || null;
+    const planId   = details?.planData?.id   || details?.plan?.id   || details?.planId   || null;
+    const recurrenceType = details?.recurrenceType || details?.paymentMethod || 'BILLET';
+
+    // Se não tiver planId, tenta resolver pelo nome
+    let planIdFinal = planId;
+    if (!planIdFinal && planName) {
       try {
         const planos = await boraGet('/api/Plan/Activation');
         const lista = Array.isArray(planos) ? planos : (planos.plans || planos.items || []);
         const match = lista.find(p =>
-          String(p.name || p.nome || '').toUpperCase().trim() === String(data.planName).toUpperCase().trim()
+          String(p.name || p.nome || '').toUpperCase().trim() === String(planName).toUpperCase().trim()
         );
-        if (match) {
-          data.planId = match.idPlanExternal || match.id || match.planId || null;
-        }
+        if (match) planIdFinal = match.idPlanExternal || match.id || match.planId || null;
       } catch {}
     }
-    res.json(data);
+
+    res.json({ accountId, planName, planId: planIdFinal, recurrenceType, details });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
 });
 
+// Passo 2 — Suspende a linha (cancela recorrência automaticamente na Bora)
+app.post('/api/bora/linha/:msisdn/suspender-recorrencia', authMiddleware, async (req, res) => {
+  try {
+    const msisdn = req.params.msisdn;
+    const details = await boraGet(`/api/Subscription/${msisdn}/details`);
+    const accountId = details?.accountId;
+    if (!accountId) throw new Error('accountId não encontrado para esta linha');
+
+    const data = await boraPut(`/api/Subscription/suspend/${accountId}`, {});
+    await pool.query("UPDATE linhas SET status='suspensa' WHERE msisdn=$1", [msisdn]);
+    res.json({ ok: true, accountId, data });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// Passo 3 — Gera cart de reativação e processa primeiro pagamento
+app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
+  try {
+    const { msisdn, planId, paymentTypePrimeiro, paymentTypeRecorrencia } = req.body;
+    if (!msisdn) throw new Error('msisdn obrigatório');
+    if (!planId) throw new Error('planId obrigatório');
+    if (!paymentTypePrimeiro) throw new Error('paymentTypePrimeiro obrigatório');
+
+    // Busca clientId do subscriber pelo msisdn
+    const details = await boraGet(`/api/Subscription/${msisdn}/details`);
+    const documento = details?.document || details?.cpf || details?.subscriber?.document || null;
+    if (!documento) throw new Error('Documento do assinante não encontrado');
+
+    const subscriber = await boraGet(`/api/Subscriber/${documento}/document`);
+    const clientId = subscriber?.idSubscriberExternal || subscriber?.id || null;
+    if (!clientId) throw new Error('clientId não encontrado para este assinante');
+
+    // Cria cart de reativação
+    const cart = await boraPost('/api/Cart/reactivation', { msisdn, planId, clientId });
+    const cartId = cart?.cartId || cart?.id;
+    if (!cartId) throw new Error('cartId não retornado pela Bora na reativação');
+
+    // Processa primeiro pagamento conforme escolha do usuário
+    const tipoNorm = String(paymentTypePrimeiro).toLowerCase();
+    let pagamento;
+    if (tipoNorm === 'pix') {
+      pagamento = await boraPost(`/api/Cart/reactivation/${cartId}/pix`, {});
+    } else if (tipoNorm === 'billetcombo') {
+      pagamento = await boraPost(`/api/Cart/reactivation/${cartId}/BilletCombo`, {});
+    } else {
+      // boleto padrão
+      pagamento = await boraPost(`/api/Cart/reactivation/${cartId}/billet`, {});
+    }
+
+    const pixData   = pagamento?.pix    || null;
+    const billetData = pagamento?.billet || null;
+
+    res.json({
+      ok: true,
+      cartId,
+      msisdn,
+      pix: pixData ? {
+        code:      pixData.code      || null,
+        qrCodeUrl: pixData.qrCodeUrl || null,
+        protocol:  pixData.protocol  || null
+      } : null,
+      billet: billetData ? {
+        url:     billetData.url            || billetData.digitableLine || null,
+        barcode: billetData.barCode        || billetData.digitableLine || null
+      } : null,
+      // devolve o tipo de recorrência pra usar no passo seguinte
+      paymentTypeRecorrencia: paymentTypeRecorrencia || 'billet'
+    });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// Passo 4 — Confirma reativação com recorrência futura
 app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
   try {
-    const { msisdn, planId, paymentType } = req.body;
+    const { msisdn, planId, paymentTypeRecorrencia } = req.body;
     if (!msisdn) throw new Error('msisdn obrigatório');
-    const body = { msisdn };
-    if (planId) body.planId = planId;
-    if (paymentType) body.paymentType = paymentType;
-    const data = await boraPost('/api/Subscription/reactivation', body);
+    if (!planId) throw new Error('planId obrigatório');
+
+    const recType = String(paymentTypeRecorrencia || 'billet').toUpperCase();
+    const data = await boraPost('/api/Subscription/reactivation', {
+      msisdn,
+      planId,
+      paymentType: recType
+    });
+
     await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [msisdn]);
-    res.json(data);
+    res.json({ ok: true, data });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
