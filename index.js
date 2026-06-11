@@ -58,12 +58,26 @@ async function getBoraToken() {
   if (boraTokenCache && boraTokenExpira && Date.now() < boraTokenExpira) {
     return boraTokenCache;
   }
+  if (!BORA_EMAIL || !BORA_SENHA) {
+    console.error('[BORA AUTH] BORA_EMAIL ou BORA_SENHA ausentes nas variáveis de ambiente');
+    throw new Error('Credenciais Bora não configuradas');
+  }
   const credencial = Buffer.from(`${BORA_EMAIL}:${BORA_SENHA}`).toString('base64');
-  const resp = await axios.post(`${BORA_BASE}/api/Authentication/basic`, {}, {
-    headers: { Authorization: `Basic ${credencial}` }
-  });
+  let resp;
+  try {
+    resp = await axios.post(`${BORA_BASE}/api/Authentication/basic`, {}, {
+      headers: { Authorization: `Basic ${credencial}` }
+    });
+  } catch (e) {
+    console.error('[BORA AUTH] Falha na autenticação:', e.response?.status, JSON.stringify(e.response?.data || e.message));
+    throw e;
+  }
   const token = resp.data?.token || resp.data?.accessToken || resp.headers['x-access-token'];
-  if (!token) throw new Error('Token Bora não retornado');
+  if (!token) {
+    console.error('[BORA AUTH] Token não retornado. Resposta:', JSON.stringify(resp.data), 'Headers:', JSON.stringify(resp.headers));
+    throw new Error('Token Bora não retornado');
+  }
+  console.log('[BORA AUTH] Token obtido com sucesso');
   boraTokenCache = token;
   boraTokenExpira = Date.now() + 50 * 60 * 1000;
   await pool.query(
@@ -2162,7 +2176,7 @@ async function checarRecargas() {
           await pool.query("UPDATE linhas SET status='cancelada' WHERE id=$1", [linha.id]);
           console.log(`[CRON] Linha ${linha.msisdn} não encontrada na Bora (404) — marcada como cancelada`);
         } else {
-          console.error(`[CRON] Erro na linha ${linha.msisdn}: ${err.message}`);
+          console.error(`[CRON] Erro na linha ${linha.msisdn}: ${err.message} | Bora respondeu:`, JSON.stringify(err.response?.data || 'sem corpo'));
         }
       }
     }
