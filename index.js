@@ -1623,18 +1623,28 @@ app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
       const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
       return res.json({ linhas: [details] });
     }
-    let endpoint;
-    if (tipo === 'cpf') endpoint = `/api/Subscription/${valor.replace(/\D/g,'')}`;
-    else endpoint = `/api/Subscription/${valor}/details`;
-    const data = await boraGet(endpoint);
-    const lista = Array.isArray(data) ? data : [data];
-    const detalhes = await Promise.all(lista.slice(0,10).map(async s => {
-      try {
-        const ms = s.msisdn || s.phoneNumber || s.number;
-        if (!ms || s.activationDate) return s;
-        return await boraGet(`/api/Subscription/${ms}/details`);
-      } catch { return s; }
-    }));
+
+    let detalhes = [];
+
+    if (tipo === 'cpf') {
+      // Busca todas as assinaturas do CPF e depois busca details de cada uma
+      const cpf = valor.replace(/\D/g, '');
+      const subs = await boraGet(`/api/Subscription/${cpf}`);
+      const lista = Array.isArray(subs) ? subs : (subs?.subscriptions || subs?.items || [subs]);
+      detalhes = await Promise.all(lista.slice(0, 10).map(async s => {
+        try {
+          const ms = s.msisdn || s.phoneNumber || s.number;
+          if (!ms) return s;
+          if (s.activationDate) return s; // já é details
+          return await boraGet(`/api/Subscription/${ms}/details`);
+        } catch { return s; }
+      }));
+    } else {
+      // numero, iccid ou imsi — busca details diretamente
+      const data = await boraGet(`/api/Subscription/${valor}/details`);
+      detalhes = [data];
+    }
+
     res.json({ linhas: detalhes });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
