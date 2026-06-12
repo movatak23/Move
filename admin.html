@@ -3630,23 +3630,36 @@ async function confirmarReativacao() {
     });
 
     // Monta resultado do pagamento
-    let htmlResultado = `<div style="color:var(--green);font-weight:500;margin-bottom:12px">✔ Linha ${msisdn} reativada com sucesso!</div>`;
+    let htmlResultado = `<div style="color:var(--green);font-weight:500;margin-bottom:16px">✔ Linha ${msisdn} reativada com sucesso!</div>`;
+
+    htmlResultado += `
+      <div style="background:rgba(0,191,255,0.08);border:1px solid var(--accent);border-radius:var(--r);padding:12px 14px;font-size:13px;color:var(--accent);margin-bottom:16px">
+        📧 O link de pagamento foi enviado para o e-mail de cadastro do titular.
+      </div>`;
 
     if (pag.pix?.code) {
+      const qrHtml = pag.pix.qrCodeUrl
+        ? `<div style="text-align:center;margin:12px 0"><img src="${pag.pix.qrCodeUrl}" style="width:180px;height:180px;border-radius:8px" alt="QR Code PIX"></div>`
+        : '';
       htmlResultado += `
         <div class="info-card" style="margin-top:8px">
-          <div class="info-row"><span class="k">Pix Copia e Cola</span></div>
-          <div style="background:var(--bg2);border-radius:var(--r);padding:8px 10px;font-size:11px;font-family:monospace;word-break:break-all;margin-top:6px">${pag.pix.code}</div>
-          <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="navigator.clipboard.writeText('${pag.pix.code}');toast('Código copiado!')">Copiar código Pix</button>
+          <div class="info-row"><span class="k">⚡ Pagamento PIX</span></div>
+          ${qrHtml}
+          <div style="margin:8px 0 4px;font-size:11px;color:var(--text3);font-weight:700;letter-spacing:1px">CÓDIGO PIX (COPIA E COLA)</div>
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-size:11px;font-family:var(--mono);word-break:break-all;color:var(--text2);margin-bottom:10px;user-select:all">${pag.pix.code}</div>
+          <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${pag.pix.code}');toast('Código PIX copiado!')">📋 Copiar código PIX</button>
         </div>`;
     }
 
     if (pag.billet?.barcode) {
       htmlResultado += `
         <div class="info-card" style="margin-top:8px">
-          <div class="info-row"><span class="k">Linha digitável do boleto</span></div>
-          <div style="background:var(--bg2);border-radius:var(--r);padding:8px 10px;font-size:11px;font-family:monospace;word-break:break-all;margin-top:6px">${pag.billet.barcode}</div>
-          ${pag.billet.url ? `<a href="${pag.billet.url}" target="_blank" class="btn btn-secondary btn-sm" style="margin-top:8px">Abrir boleto PDF</a>` : ''}
+          <div class="info-row"><span class="k">📄 Boleto — Linha digitável</span></div>
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--r);padding:10px 12px;font-size:11px;font-family:var(--mono);word-break:break-all;color:var(--text2);margin-bottom:10px;user-select:all">${pag.billet.barcode}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${pag.billet.barcode}');toast('Linha digitável copiada!')">📋 Copiar linha digitável</button>
+            ${pag.billet.url ? `<a class="btn btn-secondary btn-sm" href="${pag.billet.url}" target="_blank">Abrir boleto PDF</a>` : ''}
+          </div>
         </div>`;
     }
 
