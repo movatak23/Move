@@ -1295,6 +1295,41 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- Modal Ver PIX Pendente -->
+<div class="modal-overlay" id="modal-ver-pix">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-title">⚡ PIX Pendente</div>
+    <div id="pix-modal-plano-wrap" style="color:var(--accent);font-weight:700;font-size:15px;margin-bottom:4px"></div>
+    <div style="display:flex;gap:24px;align-items:flex-start;margin:16px 0">
+      <div style="flex:1">
+        <p style="font-size:14px;font-weight:700;color:var(--text);margin:0 0 12px">Como fazer o pagamento via PIX:</p>
+        <ol style="padding-left:18px;margin:0;display:flex;flex-direction:column;gap:8px">
+          <li style="font-size:13px;color:var(--text2)">Abra o aplicativo do seu banco</li>
+          <li style="font-size:13px;color:var(--text2)">Procure e acesse a opção de pagamento via PIX</li>
+          <li style="font-size:13px;color:var(--text2)">Selecione copiar e colar o código ou pague pelo QR Code</li>
+          <li style="font-size:13px;color:var(--text2)">Confira o valor e confirme o pagamento</li>
+          <li style="font-size:13px;color:var(--text2)">Pronto! Sua linha será atualizada em instantes</li>
+        </ol>
+      </div>
+      <div style="text-align:center;flex-shrink:0">
+        <img id="pix-modal-qr" src="" style="width:160px;height:160px;border-radius:8px;display:none;margin-bottom:8px">
+        <div style="font-size:12px;color:var(--text2)" id="pix-modal-numero-wrap"></div>
+        <div style="font-size:13px;font-weight:700;color:var(--text)" id="pix-modal-valor-wrap"></div>
+      </div>
+    </div>
+    <div style="margin-bottom:10px">
+      <div style="font-size:10px;font-weight:700;letter-spacing:1px;color:var(--text3);margin-bottom:6px">CÓDIGO PIX (COPIA E COLA)</div>
+      <div id="pix-modal-code" style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-family:var(--mono);font-size:11px;word-break:break-all;color:var(--text2);user-select:all;margin-bottom:10px"></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button class="btn btn-primary" onclick="copiarPixPendente()">📋 Copiar Código PIX</button>
+      <button class="btn btn-secondary" onclick="enviarPixEmail()">📧 Receber por e-mail</button>
+      <button class="btn btn-secondary" onclick="enviarPixWhatsapp()">💬 Enviar por WhatsApp</button>
+      <button class="btn btn-secondary" onclick="fecharModal('modal-ver-pix')">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal Reativar Linha -->
 <div class="modal-overlay" id="modal-reativar">
   <div class="modal" style="width:520px">
@@ -3030,9 +3065,68 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>
       <button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>
       <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,this)">📄 Encaminhar Boleto</button>
+      <button class="btn btn-secondary btn-sm" id="btn-ver-pix-${l.msisdn?.replace(/\D/g,'')}" onclick="abrirPixPendente('${l.msisdn||''}',this)">⚡ Ver PIX</button>
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
+}
+
+// ── PIX PENDENTE ──────────────────────────────────────────────────────────────
+async function abrirPixPendente(msisdn, btn) {
+  if (!msisdn) { toast('MSISDN não disponível','error'); return; }
+  const orig = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳...'; }
+  try {
+    const data = await api('GET', `/api/bora/linha/${msisdn}/pix-pendente`);
+    if (!data.tem_pix) { toast('Nenhum PIX pendente encontrado para esta linha','error'); return; }
+    window._pixPendente = data;
+    const valorFmt = data.valor > 0 ? `R$ ${parseFloat(data.valor).toFixed(2).replace('.', ',')}` : '';
+    const foneFmt  = msisdn.replace('55','').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+    document.getElementById('pix-modal-plano-wrap').textContent = data.plano || 'Cobrança pendente';
+    document.getElementById('pix-modal-code').textContent = data.code || '';
+    document.getElementById('pix-modal-numero-wrap').textContent = 'Número: ' + foneFmt;
+    document.getElementById('pix-modal-valor-wrap').textContent = valorFmt ? 'Valor: ' + valorFmt : '';
+    const qrEl = document.getElementById('pix-modal-qr');
+    if (data.qrCodeUrl) { qrEl.src = data.qrCodeUrl; qrEl.style.display = 'block'; }
+    else { qrEl.style.display = 'none'; }
+    document.getElementById('modal-ver-pix').classList.add('open');
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
+}
+
+function copiarPixPendente() {
+  const code = window._pixPendente?.code;
+  if (!code) { toast('Código PIX não disponível','error'); return; }
+  navigator.clipboard.writeText(code).then(() => toast('Código PIX copiado!'));
+}
+
+async function enviarPixEmail() {
+  const d = window._pixPendente;
+  if (!d?.code) { toast('Código PIX não disponível','error'); return; }
+  const email = prompt('E-mail do titular:');
+  if (!email?.includes('@')) { toast('E-mail inválido','error'); return; }
+  try {
+    await api('POST', '/api/bora/boleto/enviar-email', {
+      email, barcode: null, url: null, pixCode: d.code,
+    });
+    toast('PIX enviado para ' + email);
+    fecharModal('modal-ver-pix');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function enviarPixWhatsapp() {
+  const d = window._pixPendente;
+  if (!d?.code || !d?.msisdn) { toast('Dados insuficientes','error'); return; }
+  try {
+    await api('POST', `/api/bora/linha/${d.msisdn}/pix/enviar-whatsapp`, {
+      code: d.code, valor: d.valor, plano: d.plano,
+    });
+    toast('PIX enviado por WhatsApp para ' + d.msisdn.replace('55','').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3'));
+    fecharModal('modal-ver-pix');
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function navegarParaRecarga(msisdn) {

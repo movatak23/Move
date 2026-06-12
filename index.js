@@ -2543,8 +2543,58 @@ app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, async (req, res)
   }
 });
 
-app.get('/api/bora/linha/:doc/boleto', authMiddleware, async (req, res) => {
+// PIX pendente de uma linha (por MSISDN)
+app.get('/api/bora/linha/:msisdn/pix-pendente', authMiddleware, async (req, res) => {
   try {
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    const doc = details?.document || details?.cpf || null;
+    if (!doc) return res.json({ tem_pix: false });
+
+    const boletos = await boraGet(`/api/Subscriber/${doc}/billets`);
+    const lista   = Array.isArray(boletos) ? boletos : (boletos?.items || boletos?.billets || []);
+    const b       = lista.find(x => !x.paid && !x.paymentDate && (x.pix?.code || x.pixCode));
+
+    if (!b) return res.json({ tem_pix: false });
+
+    const planArray = Array.isArray(details?.plan) ? details.plan : [];
+    const plano = planArray[planArray.length-1]?.name || details?.planName || '';
+
+    res.json({
+      tem_pix:   true,
+      code:      b.pix?.code || b.pixCode || null,
+      qrCodeUrl: b.pix?.qrCodeUrl || b.pixQrUrl || null,
+      valor:     parseFloat(b.value || b.amount || 0),
+      plano,
+      msisdn:    req.params.msisdn,
+      vencimento:b.dueDate || b.expiration || null,
+    });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.message });
+  }
+});
+
+// Envia o código PIX por WhatsApp para o MSISDN da linha
+app.post('/api/bora/linha/:msisdn/pix/enviar-whatsapp', authMiddleware, async (req, res) => {
+  try {
+    const { code, valor, plano } = req.body;
+    const msisdn   = req.params.msisdn;
+    const valorFmt = parseFloat(valor || 0) > 0
+      ? `R$ ${parseFloat(valor).toFixed(2).replace('.', ',')}` : '';
+    const foneFmt  = msisdn.replace('55','').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+
+    let msg  = `⚡ *PIX Move${plano ? ' — ' + plano : ''}*\n\n`;
+    msg     += `📱 Linha: ${foneFmt}\n`;
+    if (valorFmt) msg += `💰 Valor: *${valorFmt}*\n`;
+    msg     += `\n*Código PIX — Copia e Cola:*\n${code}`;
+
+    await enviarWhatsAppMove(msisdn, msg);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.get('/api/bora/linha/:doc/boleto', authMiddleware, async (req, res) => {  try {
     const boletos = await boraGet(`/api/Subscriber/${req.params.doc}/billets`);
     const lista = Array.isArray(boletos) ? boletos : (boletos?.items || boletos?.billets || []);
     const b = lista.find(x => !x.paid && !x.paymentDate) || lista[0];
