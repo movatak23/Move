@@ -2896,7 +2896,7 @@ function renderBotoesBloqueio(l) {
 function traduzirStatus(st) {
   const s = (st || '').toUpperCase();
   if (s.includes('ACTIVE') || s.includes('ATIVA')) return { label: 'ATIVO', cor: 'badge-green' };
-  if (s.includes('GRACE') || s.includes('SUSPEND') || s.includes('TEMPORAR')) return { label: 'BLOQUEADO', cor: 'badge-red' };
+  if (s.includes('GRACE') || s.includes('SUSPEND') || s.includes('TEMPORAR') || s.includes('BLOCK')) return { label: 'BLOQUEADO', cor: 'badge-red' };
   if (s.includes('CANCEL') || s.includes('INATIV') || s.includes('TERMINAT')) return { label: 'CANCELADO', cor: 'badge-red' };
   if (s.includes('PEND')) return { label: 'PENDENTE', cor: 'badge-yellow' };
   return { label: st || '—', cor: 'badge-yellow' };
