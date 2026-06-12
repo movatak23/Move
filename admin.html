@@ -183,8 +183,28 @@ body {
   font-family: var(--mono);
 }
 
-/* ── INPUT COM PREFIXO +55 ─────────────────────── */
-.field-prefix {
+/* ── TOGGLE SWITCH (visibilidade de planos) ─────── */
+.toggle-switch { display: inline-flex; align-items: center; cursor: pointer; }
+.toggle-switch input { display: none; }
+.toggle-track {
+  width: 36px; height: 20px;
+  background: var(--border);
+  border-radius: 20px;
+  position: relative;
+  transition: background 0.2s;
+}
+.toggle-switch input:checked + .toggle-track { background: var(--accent); }
+.toggle-thumb {
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 14px; height: 14px;
+  background: #fff;
+  border-radius: 50%;
+  transition: left 0.2s;
+}
+.toggle-switch input:checked + .toggle-track .toggle-thumb { left: 19px; }
+
+/* ── INPUT COM PREFIXO +55 ─────────────────────── */.field-prefix {
   display: flex;
   align-items: stretch;
   background: var(--bg3);
@@ -698,7 +718,7 @@ select option { background: var(--bg3); }
       </div>
       <div class="table-card">
         <table>
-          <thead><tr><th>Plano</th><th>Valor</th><th>Comissão Ativação</th><th>Comissão Recarga</th><th>Status</th><th>Ações</th></tr></thead>
+          <thead><tr><th>Plano</th><th>Valor</th><th>Comissão Ativação</th><th>Comissão Recarga</th><th>Status</th><th style="text-align:center">Visível</th><th>Ações</th></tr></thead>
           <tbody id="tbl-planos"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
         </table>
       </div>
@@ -1957,16 +1977,32 @@ async function loadPlanosComissao() {
   try {
     const dados = await api('GET', '/api/planos-comissao');
     const tbody = document.getElementById('tbl-planos');
-    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">📋</div><p>Nenhum plano configurado</p></td></tr>`; return; }
+    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="ico">📋</div><p>Nenhum plano configurado</p></td></tr>`; return; }
     tbody.innerHTML = dados.map(p => `<tr>
       <td><strong>${p.plano_nome}</strong><br><span class="mono">${p.plano_id}</span></td>
       <td class="currency">R$ ${parseFloat(p.plano_valor).toFixed(2)}</td>
       <td class="currency">R$ ${parseFloat(p.comissao_ativacao).toFixed(2)}</td>
       <td class="currency">R$ ${parseFloat(p.comissao_recarga).toFixed(2)}</td>
       <td><span class="badge ${p.ativo?'badge-green':'badge-red'}">${p.ativo?'Ativo':'Inativo'}</span></td>
+      <td style="text-align:center">
+        <label class="toggle-switch" title="${p.habilitado ? 'Visível para vendedores' : 'Oculto para vendedores'}">
+          <input type="checkbox" ${p.habilitado ? 'checked' : ''} onchange="toggleHabilitadoPlano('${p.plano_id}', this.checked)">
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        </label>
+      </td>
       <td><button class="btn btn-secondary btn-sm" onclick="editarPlano('${p.plano_id}','${p.plano_nome}',${p.plano_valor},${p.comissao_ativacao},${p.comissao_recarga})">Editar</button></td>
     </tr>`).join('');
   } catch(e) { toast(e.message,'error'); }
+}
+
+async function toggleHabilitadoPlano(planoId, habilitado) {
+  try {
+    await api('PATCH', `/api/planos-comissao/${planoId}/habilitado`, { habilitado });
+    toast(habilitado ? 'Plano visível para vendedores' : 'Plano ocultado dos vendedores');
+  } catch(e) {
+    toast(e.message, 'error');
+    loadPlanosComissao(); // reverte visual em caso de erro
+  }
 }
 
 async function abrirModalPlano() {

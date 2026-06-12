@@ -161,8 +161,21 @@ async function garantirColunasEsimQrCode() {
 }
 
 
-async function garantirColunasEquipeVendedor() {
+async function garantirColunaHabilitadoPlanos() {
   try {
+    await pool.query(`ALTER TABLE planos_comissao ADD COLUMN IF NOT EXISTS habilitado BOOLEAN DEFAULT false`);
+  } catch (e) {
+    console.warn('[DB] Não foi possível garantir coluna habilitado em planos_comissao:', e.message);
+  }
+}
+
+// Retorna Set com plano_ids habilitados para exibição aos vendedores
+async function getIdsHabilitados() {
+  const { rows } = await pool.query('SELECT plano_id FROM planos_comissao WHERE habilitado = true');
+  return new Set(rows.map(r => String(r.plano_id)));
+}
+
+async function garantirColunasEquipeVendedor() {  try {
     await pool.query(`ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES vendedores(id)`);
     await pool.query(`ALTER TABLE linhas ADD COLUMN IF NOT EXISTS subvendedor_id INTEGER REFERENCES vendedores(id)`);
     await pool.query(`ALTER TABLE transacoes ADD COLUMN IF NOT EXISTS subvendedor_id INTEGER REFERENCES vendedores(id)`);
@@ -721,6 +734,20 @@ app.post('/api/planos-comissao', authMiddleware, adminOnly, async (req, res) => 
   }
 });
 
+app.patch('/api/planos-comissao/:id/habilitado', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { habilitado } = req.body;
+    const { rows } = await pool.query(
+      `UPDATE planos_comissao SET habilitado = $1 WHERE plano_id = $2 RETURNING *`,
+      [!!habilitado, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ erro: 'Plano não encontrado' });
+    res.json(rows[0]);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 // ─── RELATÓRIOS ───────────────────────────────────────────────────────────────
 app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
   try {
@@ -883,7 +910,13 @@ app.post('/api/bora/subscriber', authMiddleware, async (req, res) => {
 app.get('/api/bora/planos/ativacao', authMiddleware, async (req, res) => {
   try {
     const data = await boraGet('/api/Plan/Activation');
-    res.json(data);
+    const lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
+    const habilitados = await getIdsHabilitados();
+    // Admin vê todos; vendedor vê apenas habilitados (se houver algum configurado)
+    if (req.user.role !== 'admin' && habilitados.size > 0) {
+      return res.json(lista.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || ''))));
+    }
+    res.json(lista);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
@@ -892,8 +925,13 @@ app.get('/api/bora/planos/ativacao', authMiddleware, async (req, res) => {
 app.get('/api/bora/planos/recarga', authMiddleware, async (req, res) => {
   try {
     const data = await boraGet('/api/Plan/Recharge', { msisdn: req.query.msisdn });
-    const lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
-    res.json(lista.filter(p => /gb/i.test(p.name || p.nome || '')));
+    let lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
+    lista = lista.filter(p => /gb/i.test(p.name || p.nome || ''));
+    const habilitados = await getIdsHabilitados();
+    if (req.user.role !== 'admin' && habilitados.size > 0) {
+      lista = lista.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || '')));
+    }
+    res.json(lista);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
@@ -1853,7 +1891,12 @@ app.post('/api/bora/linha/:msisdn/desbloquear', authMiddleware, async (req, res)
 app.get('/api/bora/trocar-plano/:msisdn', authMiddleware, async (req, res) => {
   try {
     const data = await boraGet(`/api/Subscription/changeplan/${req.params.msisdn}`);
-    res.json(data);
+    let lista = Array.isArray(data) ? data : (data?.plans || data?.items || data || []);
+    const habilitados = await getIdsHabilitados();
+    if (req.user.role !== 'admin' && habilitados.size > 0) {
+      lista = lista.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || '')));
+    }
+    res.json(lista);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
@@ -2204,6 +2247,7 @@ app.get('/', (req, res) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 garantirColunasEsimQrCode().catch(err => console.error('[DB] Erro ao preparar colunas eSIM:', err.message));
 garantirColunasEquipeVendedor().catch(err => console.error('[DB] Erro ao preparar equipe de vendedores:', err.message));
+garantirColunaHabilitadoPlanos().catch(err => console.error('[DB] Erro ao preparar habilitado em planos:', err.message));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
