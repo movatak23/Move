@@ -183,6 +183,37 @@ body {
   font-family: var(--mono);
 }
 
+/* ── INPUT COM PREFIXO +55 ─────────────────────── */
+.field-prefix {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.field-prefix:focus-within { border-color: var(--accent); }
+.field-prefix .prefix-tag {
+  padding: 10px 12px;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  user-select: none;
+}
+.field-prefix input {
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  flex: 1;
+  width: auto !important;
+}
+
 .nav-item {
   display: flex;
   align-items: center;
@@ -1016,7 +1047,10 @@ select option { background: var(--bg3); }
         <div class="form-row">
           <div class="field">
             <label>Número da linha / MSISDN</label>
-            <input type="text" id="rec-msisdn" placeholder="Ex: 5581999999999">
+            <div class="field-prefix">
+              <span class="prefix-tag">55</span>
+              <input type="text" id="rec-msisdn" placeholder="81999999999" maxlength="11">
+            </div>
           </div>
           <div class="field" style="display:flex;align-items:flex-end">
             <button class="btn btn-primary" onclick="buscarPlanosRecarga()">Buscar planos</button>
@@ -1052,7 +1086,7 @@ select option { background: var(--bg3); }
         <div class="form-row">
           <div class="field">
             <label>Tipo de Consulta</label>
-            <select id="consulta-tipo">
+            <select id="consulta-tipo" onchange="atualizarCampoConsulta()">
               <option value="cpf">CPF/CNPJ</option>
               <option value="numero">Número</option>
               <option value="iccid">ICCID</option>
@@ -1061,7 +1095,11 @@ select option { background: var(--bg3); }
           </div>
           <div class="field">
             <label>Valor</label>
-            <input type="text" id="consulta-valor" placeholder="Digite o valor...">
+            <div id="consulta-valor-wrap-prefix" class="field-prefix" style="display:none">
+              <span class="prefix-tag">55</span>
+              <input type="text" id="consulta-valor" placeholder="81999999999" maxlength="11">
+            </div>
+            <input type="text" id="consulta-valor-plain" placeholder="Digite o valor..." style="display:block">
           </div>
           <div class="field" style="display:flex;align-items:flex-end">
             <button class="btn btn-primary" onclick="realizarConsulta()">🔍 Consultar</button>
@@ -1292,7 +1330,12 @@ select option { background: var(--bg3); }
   <div class="modal" style="width:500px">
     <div class="modal-title">Nova Portabilidade</div>
     <div class="form-row">
-      <div class="field"><label>Número a Portar (com DDI)</label><input type="text" id="port-msisdn" placeholder="5581999990000"></div>
+      <div class="field"><label>Número a Portar (com DDI)</label>
+        <div class="field-prefix">
+          <span class="prefix-tag">55</span>
+          <input type="text" id="port-msisdn" placeholder="81999990000" maxlength="11">
+        </div>
+      </div>
       <div class="field"><label>CPF/CNPJ do Titular</label><input type="text" id="port-doc" placeholder="000.000.000-00"></div>
     </div>
     <div class="form-row">
@@ -1615,6 +1658,8 @@ function construirNav() {
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
     { page: 'recarga', icon: '📦', label: 'Pacotes Adicionais' },
+    { page: 'consulta', icon: '🔍', label: 'Consultar Linha' },
+    { page: 'portabilidade', icon: '↔', label: 'Portabilidade' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { page: 'esim', icon: '◈', label: 'E-SIM' },
     { section: 'Ferramentas' },
@@ -1622,8 +1667,6 @@ function construirNav() {
     { page: 'inadimplencia', icon: '⚠', label: 'Inadimplência' },
     { page: 'churn', icon: '📉', label: 'Churn' },
     { page: 'promocoes-admin', icon: '🎯', label: 'Promoções' },
-    { page: 'consulta', icon: '🔍', label: 'Consultar Linha' },
-    { page: 'portabilidade', icon: '↔', label: 'Portabilidade' },
   ] : [
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
     ...(isVendedorPrincipal ? [
@@ -1633,11 +1676,11 @@ function construirNav() {
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
     { page: 'recarga', icon: '📦', label: 'Pacotes Adicionais', perm: 'recarga' },
+    { page: 'consulta', icon: '🔍', label: 'Consultar Linha', perm: 'consulta' },
+    { page: 'portabilidade', icon: '↔', label: 'Portabilidade', perm: 'portabilidade' },
     ...(isVendedorPrincipal ? [{ page: 'calculadora', icon: '◎', label: 'Calculadora' }] : []),
     { section: 'Ferramentas' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
-    { page: 'consulta', icon: '🔍', label: 'Consultar Linha', perm: 'consulta' },
-    { page: 'portabilidade', icon: '↔', label: 'Portabilidade', perm: 'portabilidade' },
   ];
   nav.innerHTML = items.filter(i => {
     if (!i.perm) return true;
@@ -2073,7 +2116,10 @@ async function verificarIccid() {
         '<div id="port-numero-wrap" style="display:none;margin-bottom:16px">' +
           '<div class="field">' +
             '<label>Número a Portar (com DDD)</label>' +
-            '<input type="text" id="port-numero" placeholder="Ex: 5581999990000" maxlength="13">' +
+            '<div class="field-prefix">' +
+              '<span class="prefix-tag">55</span>' +
+              '<input type="text" id="port-numero" placeholder="81999990000" maxlength="11">' +
+            '</div>' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -2092,8 +2138,8 @@ function selecionarTipoAtivacao(tipo) {
 
 function irParaCliente() {
   if (state.ativacao.tipoAtivacao === 'portabilidade') {
-    const num = document.getElementById('port-numero').value.trim().replace(/\D/g,'');
-    if (!num || num.length < 10) { toast('Informe o número a portar com DDD','error'); return; }
+    const num = '55' + document.getElementById('port-numero').value.trim().replace(/\D/g,'');
+    if (!num || num.length < 12) { toast('Informe o número a portar com DDD','error'); return; }
     state.ativacao.msisdnPortabilidade = num;
   } else {
     state.ativacao.msisdnPortabilidade = null;
@@ -2854,10 +2900,24 @@ function renderGraficoConsumo(cons, msisdn) {
     </div>`;
 }
 
+function atualizarCampoConsulta() {
+  const tipo = document.getElementById('consulta-tipo').value;
+  const isNumero = tipo === 'numero';
+  document.getElementById('consulta-valor-wrap-prefix').style.display = isNumero ? 'flex' : 'none';
+  document.getElementById('consulta-valor-plain').style.display = isNumero ? 'none' : 'block';
+  // limpa ambos ao trocar tipo
+  document.getElementById('consulta-valor').value = '';
+  document.getElementById('consulta-valor-plain').value = '';
+}
+
 async function realizarConsulta() {
   const tipo = document.getElementById('consulta-tipo').value;
-  const valor = document.getElementById('consulta-valor').value.trim();
-  if (!valor) { toast('Informe o valor para consulta','error'); return; }
+  const isNumero = tipo === 'numero';
+  const rawValor = isNumero
+    ? document.getElementById('consulta-valor').value.trim()
+    : document.getElementById('consulta-valor-plain').value.trim();
+  const valor = isNumero ? ('55' + rawValor.replace(/\D/g,'')) : rawValor;
+  if (!rawValor) { toast('Informe o valor para consulta','error'); return; }
   const res = document.getElementById('consulta-resultado');
   res.innerHTML = '<div class="loading">Consultando...</div>';
   try {
@@ -3008,11 +3068,11 @@ function abrirModalPortabilidade() {
 }
 
 async function realizarPortabilidade() {
-  const msisdn = document.getElementById('port-msisdn').value.trim();
+  const msisdn = '55' + document.getElementById('port-msisdn').value.trim().replace(/\D/g,'');
   const doc = document.getElementById('port-doc').value.replace(/\D/g,'');
   const nome = document.getElementById('port-nome').value.trim();
   const doadora = document.getElementById('port-doadora').value.trim();
-  if (!msisdn || !doc) { toast('Preencha número e CPF','error'); return; }
+  if (!msisdn || msisdn.length < 12 || !doc) { toast('Preencha número e CPF','error'); return; }
   try {
     await api('POST', '/api/portabilidade/realizar', { msisdn, document: doc, name: nome, donor: doadora });
     toast('Portabilidade solicitada com sucesso');
@@ -3335,8 +3395,8 @@ function resetRecarga() {
 }
 
 async function buscarPlanosRecarga() {
-  const msisdn = document.getElementById('rec-msisdn').value.replace(/\D/g,'');
-  if (!msisdn || msisdn.length < 10) { toast('Informe um número válido','error'); return; }
+  const msisdn = '55' + document.getElementById('rec-msisdn').value.replace(/\D/g,'');
+  if (!msisdn || msisdn.length < 12) { toast('Informe um número válido com DDD','error'); return; }
   state.recarga = { msisdn, plano: null };
   document.getElementById('rec-linha-info').innerHTML = '<div class="loading">Consultando linha...</div>';
   document.getElementById('rec-planos-grid').innerHTML = '';
