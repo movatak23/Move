@@ -24,6 +24,7 @@ const pool = new Pool({
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET || 'bora-vendas-secret-2024';
+const MOVE_APP_KEY = process.env.MOVE_APP_KEY || 'move-app-2026';
 const BORA_BASE = 'https://app.boramvno.com.br/appapi';
 const BORA_EMAIL = process.env.BORA_EMAIL;
 const BORA_SENHA = process.env.BORA_SENHA;
@@ -161,21 +162,8 @@ async function garantirColunasEsimQrCode() {
 }
 
 
-async function garantirColunaHabilitadoPlanos() {
+async function garantirColunasEquipeVendedor() {
   try {
-    await pool.query(`ALTER TABLE planos_comissao ADD COLUMN IF NOT EXISTS habilitado BOOLEAN DEFAULT false`);
-  } catch (e) {
-    console.warn('[DB] Não foi possível garantir coluna habilitado em planos_comissao:', e.message);
-  }
-}
-
-// Retorna Set com plano_ids habilitados para exibição aos vendedores
-async function getIdsHabilitados() {
-  const { rows } = await pool.query('SELECT plano_id FROM planos_comissao WHERE habilitado = true');
-  return new Set(rows.map(r => String(r.plano_id)));
-}
-
-async function garantirColunasEquipeVendedor() {  try {
     await pool.query(`ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES vendedores(id)`);
     await pool.query(`ALTER TABLE linhas ADD COLUMN IF NOT EXISTS subvendedor_id INTEGER REFERENCES vendedores(id)`);
     await pool.query(`ALTER TABLE transacoes ADD COLUMN IF NOT EXISTS subvendedor_id INTEGER REFERENCES vendedores(id)`);
@@ -371,6 +359,48 @@ function authMiddleware(req, res, next) {
     next();
   } catch {
     res.status(401).json({ erro: 'Token inválido' });
+  }
+}
+
+// Middleware para requisições do app mobile (sem login de vendedor)
+function authApp(req, res, next) {
+  const key = req.headers['x-move-app-key'];
+  if (!key || key !== MOVE_APP_KEY) return res.status(401).json({ erro: 'Chave do app inválida' });
+  next();
+}
+
+// Email de PIX enviado ao cliente após ativação
+async function enviarEmailPix({ email, nome, pixCode, planoNome, planoValor }) {
+  const destino = limparEmail(email);
+  if (!destino || !pixCode) return { skipped: true };
+  if (!RESEND_API_KEY) return { skipped: true, motivo: 'RESEND_API_KEY não configurado' };
+  const valor = parseFloat(planoValor || 0).toFixed(2).replace('.', ',');
+  const codeCurto = String(pixCode).slice(0, 60);
+  const html = `
+  <div style="font-family:Arial,sans-serif;max-width:620px;margin:0 auto;color:#111827;line-height:1.6">
+    <h2 style="color:#00bfff;margin:0 0 16px">⚡ Seu código PIX para ativação Move</h2>
+    <p>Olá, ${escapeHtml(nome || 'cliente')}.</p>
+    <p>Seu chip foi ativado com sucesso! Realize o pagamento via PIX para liberar sua linha.</p>
+    <div style="background:#f0f9ff;border:2px solid #00bfff;border-radius:12px;padding:20px;margin:24px 0">
+      <p style="margin:0 0 8px;font-weight:700;color:#0369a1">Código PIX (Copia e Cola)</p>
+      <p style="margin:0;font-family:monospace;font-size:12px;word-break:break-all;color:#111">${escapeHtml(pixCode)}</p>
+    </div>
+    <p><strong>Plano:</strong> ${escapeHtml(planoNome || '')}</p>
+    <p><strong>Valor:</strong> R$ ${valor}/mês</p>
+    <p style="font-size:12px;color:#6b7280;margin-top:24px">Após o pagamento sua linha será ativada automaticamente em até 5 minutos.</p>
+  </div>`;
+  try {
+    await axios.post('https://api.resend.com/emails', {
+      from: EMAIL_FROM,
+      to: [destino],
+      subject: '⚡ Código PIX para ativar sua linha Move',
+      html,
+      text: `Olá ${nome || 'cliente'}, seu código PIX: ${codeCurto}...`,
+    }, { headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' }, timeout: 15000 });
+    return { enviado: true, destino };
+  } catch (e) {
+    console.error('[email-pix] erro:', e.message);
+    return { erro: e.message };
   }
 }
 
@@ -734,20 +764,6 @@ app.post('/api/planos-comissao', authMiddleware, adminOnly, async (req, res) => 
   }
 });
 
-app.patch('/api/planos-comissao/:id/habilitado', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { habilitado } = req.body;
-    const { rows } = await pool.query(
-      `UPDATE planos_comissao SET habilitado = $1 WHERE plano_id = $2 RETURNING *`,
-      [!!habilitado, req.params.id]
-    );
-    if (!rows.length) return res.status(404).json({ erro: 'Plano não encontrado' });
-    res.json(rows[0]);
-  } catch (e) {
-    res.status(500).json({ erro: e.message });
-  }
-});
-
 // ─── RELATÓRIOS ───────────────────────────────────────────────────────────────
 app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
   try {
@@ -910,13 +926,7 @@ app.post('/api/bora/subscriber', authMiddleware, async (req, res) => {
 app.get('/api/bora/planos/ativacao', authMiddleware, async (req, res) => {
   try {
     const data = await boraGet('/api/Plan/Activation');
-    const lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
-    const habilitados = await getIdsHabilitados();
-    // Admin vê todos; vendedor vê apenas habilitados (se houver algum configurado)
-    if (req.user.role !== 'admin' && habilitados.size > 0) {
-      return res.json(lista.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || ''))));
-    }
-    res.json(lista);
+    res.json(data);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
@@ -925,13 +935,8 @@ app.get('/api/bora/planos/ativacao', authMiddleware, async (req, res) => {
 app.get('/api/bora/planos/recarga', authMiddleware, async (req, res) => {
   try {
     const data = await boraGet('/api/Plan/Recharge', { msisdn: req.query.msisdn });
-    let lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
-    lista = lista.filter(p => /gb/i.test(p.name || p.nome || ''));
-    const habilitados = await getIdsHabilitados();
-    if (req.user.role !== 'admin' && habilitados.size > 0) {
-      lista = lista.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || '')));
-    }
-    res.json(lista);
+    const lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
+    res.json(lista.filter(p => /gb/i.test(p.name || p.nome || '')));
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
@@ -947,6 +952,172 @@ app.get('/api/bora/ddds', authMiddleware, async (req, res) => {
 });
 
 // ─── PROXY BORA — Ativação completa ──────────────────────────────────────────
+// ─── ROTAS PÚBLICAS DO APP MOBILE ────────────────────────────────────────────
+// Usam authApp (x-move-app-key) em vez de JWT de vendedor
+
+// Próximo eSIM disponível no estoque
+app.get('/api/app/esim/proximo', authApp, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT iccid FROM esims
+       WHERE (status IS NULL OR status = 'disponivel')
+         AND iccid IS NOT NULL
+       ORDER BY id ASC LIMIT 1`
+    );
+    if (!rows.length) return res.status(404).json({ erro: 'Nenhum eSIM disponível no estoque. Entre em contato com o suporte.' });
+    res.json({ iccid: rows[0].iccid });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Planos habilitados para ativação (respeita filtro do admin)
+app.get('/api/app/planos/ativacao', authApp, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Plan/Activation');
+    const lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
+    const { rows } = await pool.query('SELECT plano_id FROM planos_comissao WHERE habilitado = true');
+    const habilitados = new Set(rows.map(r => String(r.plano_id)));
+    const filtrado = habilitados.size > 0
+      ? lista.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || '')))
+      : lista;
+    res.json(filtrado);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// DDDs disponíveis
+app.get('/api/app/ddds', authApp, async (req, res) => {
+  try {
+    const data = await boraGet('/api/Cart/DDD');
+    res.json(data);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Verificar ICCID (chip físico)
+app.get('/api/app/iccid/:iccid', authApp, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Card/${req.params.iccid}`);
+    res.json(data);
+  } catch (e) { res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message }); }
+});
+
+// Ativação completa pelo app (eSIM ou físico) com emails automáticos
+app.post('/api/app/ativar', authApp, async (req, res) => {
+  try {
+    const { subscriber, tipoChip, ddd, planId, planType, paymentType, recorrencia, plano_id, plano_nome, plano_valor } = req.body;
+
+    // Cria ou busca subscriber na Bora antes do loop (evita criar duplicado a cada tentativa)
+    let clientId = null;
+    try {
+      const existing = await boraGet(`/api/Subscriber/${subscriber.document}/document`);
+      clientId = existing?.idSubscriberExternal || existing?.id || null;
+    } catch {}
+    if (!clientId) {
+      const subResp = await boraPost('/api/Subscriber', subscriber);
+      clientId = subResp?.idSubscriberExternal || subResp?.id || null;
+    }
+    if (!clientId) throw new Error('Não foi possível registrar o cliente');
+
+    // Determina ICCID e cria carrinho
+    // Para eSIM: tenta até 5 chips do estoque; rejeição da Bora marca como inválido e passa para o próximo
+    let iccid = req.body.iccid || null;
+    let cart   = null;
+    let cartId = null;
+
+    if (tipoChip === 'esim') {
+      const MAX = 5;
+      for (let t = 1; t <= MAX; t++) {
+        const { rows } = await pool.query(
+          `SELECT iccid FROM esims WHERE (status IS NULL OR status = 'disponivel') AND iccid IS NOT NULL ORDER BY id ASC LIMIT 1`
+        );
+        if (!rows.length) {
+          return res.status(409).json({ erro: 'Estoque de eSIM esgotado. Entre em contato com o suporte.' });
+        }
+        iccid = rows[0].iccid;
+        try {
+          cart = await boraPost('/api/Cart/subscription', { iccid, ddd, planId, planType: planType || 'Controle', clientId });
+          cartId = cart.cartId || cart.id;
+          if (!cartId) throw new Error('cartId não retornado');
+          break; // sucesso — sai do loop
+        } catch (cartErr) {
+          // ICCID rejeitado pela Bora — descarta do estoque e tenta o próximo
+          console.error(`[app-ativar] eSIM ${iccid} rejeitado (tentativa ${t}/${MAX}):`, cartErr.message);
+          await pool.query(
+            `UPDATE esims SET status='invalido', usado_em=NOW() WHERE iccid=$1`, [iccid]
+          ).catch(() => null);
+          iccid = null; cart = null; cartId = null;
+          if (t === MAX) return res.status(409).json({ erro: `Nenhum eSIM válido disponível após ${MAX} tentativas. Contate o suporte.` });
+        }
+      }
+    } else {
+      if (!iccid) return res.status(400).json({ erro: 'ICCID não informado' });
+      cart = await boraPost('/api/Cart/subscription', { iccid, ddd, planId, planType: planType || 'Controle', clientId });
+      cartId = cart.cartId || cart.id;
+      if (!cartId) throw new Error('Erro ao criar carrinho');
+    }
+
+    // Processa pagamento
+    const recType = recorrencia || 'BILLET';
+    let pagamento;
+    if (paymentType === 'pix') {
+      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/pix`, { isRecurrence: true, recurrenceType: recType });
+    } else if (paymentType === 'billet') {
+      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/billet`, { isRecurrence: true, recurrenceType: recType });
+    } else if (paymentType === 'billetcombo') {
+      pagamento = await boraPost(`/api/Cart/subscription/${cartId}/BilletCombo`, {});
+    } else {
+      throw new Error('Forma de pagamento inválida');
+    }
+
+    const msisdnFinal = pagamento?.msisdn || pagamento?.pmsisdn || null;
+    const pixData = pagamento?.pix || null;
+
+    // Salva no banco (vendedor_id = 1 = operação própria Move)
+    const { rows: planoRows } = await pool.query('SELECT comissao_ativacao FROM planos_comissao WHERE plano_id=$1', [plano_id]);
+    const comissao = planoRows[0]?.comissao_ativacao || 0;
+
+    const { rows: linhaRows } = await pool.query(
+      `INSERT INTO linhas (iccid, msisdn, vendedor_id, plano_id, plano_nome, documento_cliente, nome_cliente)
+       VALUES ($1,$2,1,$3,$4,$5,$6)
+       ON CONFLICT (iccid) DO UPDATE SET msisdn=$2, plano_id=$3, plano_nome=$4
+       RETURNING id`,
+      [iccid, msisdnFinal, plano_id, plano_nome, subscriber.document, subscriber.name]
+    );
+    await pool.query(
+      `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
+       VALUES ($1,1,'ativacao',$2,$3,$4,$5,'app')`,
+      [linhaRows[0].id, plano_id, plano_nome, plano_valor, comissao]
+    );
+
+    // Marca eSIM como usado
+    await pool.query(
+      `UPDATE esims SET status='usado', msisdn=$1, nome_cliente=$2, documento_cliente=$3, usado_em=NOW() WHERE iccid=$4`,
+      [msisdnFinal, subscriber.name, subscriber.document, iccid]
+    ).catch(() => null);
+
+    // Email de PIX (não bloqueia a resposta)
+    if (pixData?.code) {
+      enviarEmailPix({ email: subscriber.email, nome: subscriber.name, pixCode: pixData.code, planoNome: plano_nome, planoValor: plano_valor })
+        .catch(e => console.error('[app-ativar] email pix erro:', e.message));
+    }
+
+    // Email de QR Code eSIM (já existente, não bloqueia)
+    capturarSalvarEnviarQrCodeEsim({ iccid, email: subscriber.email, nome: subscriber.name, msisdn: msisdnFinal })
+      .catch(e => console.error('[app-ativar] esim qr erro:', e.message));
+
+    res.json({
+      ok: true,
+      iccid,
+      msisdn: msisdnFinal,
+      tipoChip,
+      emailEnviado: subscriber.email,
+      pix: pixData ? { code: pixData.code, qrCodeUrl: pixData.qrCodeUrl } : null,
+      billet: pagamento?.billet ? { url: pagamento.billet.url || pagamento.billet.digitableLine } : null,
+    });
+  } catch (e) {
+    console.error('[app-ativar] erro:', e.message);
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.response?.data || e.message });
+  }
+});
+
 app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
   try {
     const { subscriber, cartPayload, paymentType, recorrencia, vendedor_id, plano_id, plano_nome, plano_valor } = req.body;
@@ -974,7 +1145,17 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
     if (cartPayload.msisdnPortabilidade) {
       cartBody.msisdn = cartPayload.msisdnPortabilidade;
     }
-    const cart = await boraPost('/api/Cart/subscription', cartBody);
+    let cart;
+    try {
+      cart = await boraPost('/api/Cart/subscription', cartBody);
+    } catch (cartErr) {
+      // Se a Bora rejeitou o ICCID, retira do estoque para não bloquear futuras ativações
+      await pool.query(
+        `UPDATE esims SET status='invalido', usado_em=NOW() WHERE iccid=$1 AND (status IS NULL OR status='disponivel')`,
+        [cartPayload.iccid]
+      ).catch(() => null);
+      throw cartErr;
+    }
     const cartId = cart.cartId || cart.id;
     if (!cartId) throw new Error('cartId não retornado pela Bora');
 
@@ -1891,12 +2072,7 @@ app.post('/api/bora/linha/:msisdn/desbloquear', authMiddleware, async (req, res)
 app.get('/api/bora/trocar-plano/:msisdn', authMiddleware, async (req, res) => {
   try {
     const data = await boraGet(`/api/Subscription/changeplan/${req.params.msisdn}`);
-    let lista = Array.isArray(data) ? data : (data?.plans || data?.items || data || []);
-    const habilitados = await getIdsHabilitados();
-    if (req.user.role !== 'admin' && habilitados.size > 0) {
-      lista = lista.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || '')));
-    }
-    res.json(lista);
+    res.json(data);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
@@ -2247,7 +2423,6 @@ app.get('/', (req, res) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 garantirColunasEsimQrCode().catch(err => console.error('[DB] Erro ao preparar colunas eSIM:', err.message));
 garantirColunasEquipeVendedor().catch(err => console.error('[DB] Erro ao preparar equipe de vendedores:', err.message));
-garantirColunaHabilitadoPlanos().catch(err => console.error('[DB] Erro ao preparar habilitado em planos:', err.message));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
