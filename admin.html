@@ -2294,7 +2294,7 @@ async function confirmarAtivacao() {
     toast('Selecione uma forma de pagamento (PIX, Boleto ou Boleto Combo) antes de ativar', 'error');
     return;
   }
-  res.innerHTML = '<div class="loading">Ativando linha na Bora...</div>';
+  res.innerHTML = '<div class="loading">Ativando linha na Move...</div>';
   try {
     const vendedorId = state.user.role === 'admin' ? null : state.user.id;
     const data = await api('POST', '/api/bora/ativar', {
@@ -3649,7 +3649,8 @@ async function abrirTrocarPlano(msisdn) {
       planos.map(p => {
         const pid = p.idPlanExternal || p.id || p.planId || '';
         const pnome = p.name || p.nome || pid;
-        const pval = parseFloat(p.value || p.price || p.valor || 0).toFixed(2);
+        const rawVal = parseFloat(p.value || p.price || p.valor || 0);
+        const pval = (rawVal / 100).toFixed(2).replace('.', ',');
         return `<div class="plano-card" id="tp-${pid}" onclick="selecionarPlanoTroca('${pid}','${pnome}')">
           <div class="pnome">${pnome}</div>
           <div class="pval">R$ ${pval}</div>
