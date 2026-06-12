@@ -2543,31 +2543,77 @@ app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, async (req, res)
   }
 });
 
-// PIX pendente de uma linha (por MSISDN)
+// PIX pendente de uma linha (por MSISDN) — busca em boletos de assinatura E de recarga
 app.get('/api/bora/linha/:msisdn/pix-pendente', authMiddleware, async (req, res) => {
   try {
-    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    const msisdn = req.params.msisdn;
+    const details = await boraGet(`/api/Subscription/${msisdn}/details`);
     const doc = details?.document || details?.cpf || null;
-    if (!doc) return res.json({ tem_pix: false });
-
-    const boletos = await boraGet(`/api/Subscriber/${doc}/billets`);
-    const lista   = Array.isArray(boletos) ? boletos : (boletos?.items || boletos?.billets || []);
-    const b       = lista.find(x => !x.paid && !x.paymentDate && (x.pix?.code || x.pixCode));
-
-    if (!b) return res.json({ tem_pix: false });
 
     const planArray = Array.isArray(details?.plan) ? details.plan : [];
-    const plano = planArray[planArray.length-1]?.name || details?.planName || '';
+    const planoNome = planArray[planArray.length-1]?.name || details?.planName || '';
 
-    res.json({
-      tem_pix:   true,
-      code:      b.pix?.code || b.pixCode || null,
-      qrCodeUrl: b.pix?.qrCodeUrl || b.pixQrUrl || null,
-      valor:     parseFloat(b.value || b.amount || 0),
-      plano,
-      msisdn:    req.params.msisdn,
-      vencimento:b.dueDate || b.expiration || null,
-    });
+    // Helper: encontra boleto pendente com PIX numa lista
+    function acharPixPendente(lista) {
+      const arr = Array.isArray(lista) ? lista : (lista?.items || lista?.billets || lista?.data || []);
+      return arr.find(b => {
+        if (b.paid || b.paymentDate) return false;
+        // aceita qualquer campo que pareça código PIX (string longa)
+        const code = b.pix?.code || b.pixCode || b.pixCopyPaste || b.qrCode?.code || null;
+        return !!code;
+      }) || null;
+    }
+
+    function extrairPix(b) {
+      return {
+        tem_pix:   true,
+        code:      b.pix?.code || b.pixCode || b.pixCopyPaste || b.qrCode?.code || null,
+        qrCodeUrl: b.pix?.qrCodeUrl || b.pixQrUrl || b.qrCode?.url || b.qrCodeUrl || null,
+        valor:     parseFloat(b.value || b.amount || b.price || 0),
+        plano:     planoNome,
+        msisdn,
+        vencimento:b.dueDate || b.expiration || null,
+      };
+    }
+
+    // 1) Boletos do subscriber (assinatura)
+    if (doc) {
+      try {
+        const boletos = await boraGet(`/api/Subscriber/${doc}/billets`);
+        const b = acharPixPendente(boletos);
+        if (b) return res.json(extrairPix(b));
+      } catch {}
+    }
+
+    // 2) Pool global de pendentes filtrado pelo msisdn desta linha
+    try {
+      const pendentes = await boraGet('/api/Subscriber/billets/pending');
+      const arr = Array.isArray(pendentes) ? pendentes : (pendentes?.items || pendentes?.billets || pendentes?.data || []);
+      const b = arr.find(x => {
+        if (x.paid || x.paymentDate) return false;
+        const ms = x.msisdn || x.phoneNumber || x.subscriber?.msisdn || '';
+        if (ms && ms !== msisdn) return false; // se tem msisdn e é diferente, pula
+        const code = x.pix?.code || x.pixCode || x.pixCopyPaste || x.qrCode?.code || null;
+        return !!code;
+      });
+      if (b) return res.json(extrairPix(b));
+    } catch {}
+
+    // 3) Carrinhos pendentes do subscriber (recargas)
+    if (doc) {
+      try {
+        const carts = await boraGet(`/api/Subscriber/${doc}/carts`);
+        const arr = Array.isArray(carts) ? carts : (carts?.items || carts?.carts || carts?.data || []);
+        const b = arr.find(x => {
+          if (x.paid || x.paymentDate || x.status === 'paid') return false;
+          const code = x.pix?.code || x.pixCode || x.pixCopyPaste || null;
+          return !!code;
+        });
+        if (b) return res.json(extrairPix(b));
+      } catch {}
+    }
+
+    res.json({ tem_pix: false });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.message });
   }
