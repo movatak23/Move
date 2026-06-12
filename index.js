@@ -24,7 +24,10 @@ const pool = new Pool({
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET || 'bora-vendas-secret-2024';
-const MOVE_APP_KEY = process.env.MOVE_APP_KEY || 'move-app-2026';
+const MOVE_APP_KEY        = process.env.MOVE_APP_KEY        || 'move-app-2026';
+const MOVE_ZAPI_INSTANCE  = process.env.MOVE_ZAPI_INSTANCE  || '3F3A6D855AFBB2BDF16E7E7503EF1C64';
+const MOVE_ZAPI_TOKEN     = process.env.MOVE_ZAPI_TOKEN     || 'ABDF61CE9B2A8A340C5FF549';
+const MOVE_ZAPI_CLIENT_TOKEN = process.env.MOVE_ZAPI_CLIENT_TOKEN || '';
 const BORA_BASE = 'https://app.boramvno.com.br/appapi';
 const BORA_EMAIL = process.env.BORA_EMAIL;
 const BORA_SENHA = process.env.BORA_SENHA;
@@ -367,6 +370,39 @@ function authApp(req, res, next) {
   const key = req.headers['x-move-app-key'];
   if (!key || key !== MOVE_APP_KEY) return res.status(401).json({ erro: 'Chave do app inválida' });
   next();
+}
+
+// Envia mensagem via Z-API (instância Move)
+async function enviarWhatsAppMove(telefone, mensagem) {
+  const fone = String(telefone).replace(/\D/g, '');
+  if (!fone || fone.length < 10) throw new Error('Telefone inválido: ' + telefone);
+  await axios.post(
+    `https://api.z-api.io/instances/${MOVE_ZAPI_INSTANCE}/token/${MOVE_ZAPI_TOKEN}/send-text`,
+    { phone: fone, message: mensagem },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(MOVE_ZAPI_CLIENT_TOKEN ? { 'Client-Token': MOVE_ZAPI_CLIENT_TOKEN } : {})
+      },
+      timeout: 15000
+    }
+  );
+}
+
+// Migration: tabela de controle de notificações WhatsApp (evita duplicata no mesmo dia)
+async function garantirTabelaNotifWhatsapp() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS move_notif_whatsapp (
+      id SERIAL PRIMARY KEY,
+      msisdn VARCHAR(25) NOT NULL,
+      tipo VARCHAR(50) NOT NULL DEFAULT 'vencimento_24h',
+      enviado_em TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS move_notif_wpp_dia
+    ON move_notif_whatsapp (msisdn, tipo, DATE(enviado_em AT TIME ZONE 'America/Recife'))
+  `).catch(() => null);
 }
 
 // Email de PIX enviado ao cliente após ativação
@@ -959,6 +995,89 @@ app.get('/api/bora/ddds', authMiddleware, async (req, res) => {
 app.get('/api/app/logo', (req, res) => {
   const url = obterMoveLogoUrl();
   res.json({ url });
+});
+
+// Cobranças mensais do cliente (por CPF)
+app.get('/api/app/cobrancas/:cpf', authApp, async (req, res) => {
+  try {
+    const cpf = req.params.cpf.replace(/\D/g, '');
+    // Busca linhas ativas do cliente no banco
+    const { rows: linhas } = await pool.query(
+      `SELECT msisdn, plano_nome, documento_cliente FROM linhas WHERE documento_cliente = $1 AND msisdn IS NOT NULL`,
+      [cpf]
+    );
+    if (!linhas.length) return res.json({ cobracas: [] });
+
+    const todas = [];
+    for (const linha of linhas) {
+      try {
+        const boletos = await boraGet(`/api/Subscriber/${linha.documento_cliente}/billets`);
+        const lista = Array.isArray(boletos) ? boletos : (boletos?.items || boletos?.billets || []);
+        for (const b of lista) {
+          todas.push({
+            id:        b.id || b.billetId || null,
+            msisdn:    linha.msisdn,
+            plano:     linha.plano_nome || '—',
+            barcode:   b.digitableLine || b.barCode || b.typeableLine || null,
+            url:       b.url || b.pdfUrl || b.link || null,
+            pixCode:   b.pix?.code || b.pixCode || null,
+            pixQrUrl:  b.pix?.qrCodeUrl || b.pixQrUrl || null,
+            valor:     parseFloat(b.value || b.amount || b.price || 0),
+            vencimento:b.dueDate || b.expiration || null,
+            pago:      !!(b.paid || b.paymentDate),
+          });
+        }
+      } catch {}
+    }
+
+    // Ordena: pendentes primeiro, depois por vencimento
+    todas.sort((a, b) => {
+      if (a.pago !== b.pago) return a.pago ? 1 : -1;
+      return new Date(a.vencimento || 0) - new Date(b.vencimento || 0);
+    });
+
+    res.json({ cobrancas: todas });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// Envia cobrança por email
+app.post('/api/app/cobrancas/enviar-email', authApp, async (req, res) => {
+  try {
+    const { cpf, msisdn, barcode, pixCode, url, email, nome, plano, vencimento } = req.body;
+
+    // Tenta buscar email do titular na Bora se não vier no payload
+    let emailFinal = email || null;
+    let nomeFinal  = nome  || null;
+    if (!emailFinal && msisdn) {
+      try {
+        const details = await boraGet(`/api/Subscription/${msisdn}/details`);
+        const doc = details?.document || cpf;
+        if (doc) {
+          const sub = await boraGet(`/api/Subscriber/${doc}/document`);
+          emailFinal = sub?.email || null;
+          nomeFinal  = nomeFinal || sub?.name || null;
+        }
+      } catch {}
+    }
+    if (!emailFinal) return res.status(400).json({ erro: 'E-mail não encontrado para esta linha.' });
+
+    const vencStr = vencimento ? new Date(vencimento).toLocaleDateString('pt-BR') : null;
+    const titulo  = `Sua fatura Move${plano ? ' — ' + plano : ''}${vencStr ? ' — Venc. ' + vencStr : ''}`;
+
+    if (pixCode) {
+      await enviarEmailPix({ email: emailFinal, nome: nomeFinal, pixCode, planoNome: plano || 'Mensalidade Move', planoValor: 0 });
+    } else if (barcode || url) {
+      await enviarEmailBoleto({ email: emailFinal, nome: nomeFinal, barcode, url });
+    } else {
+      return res.status(400).json({ erro: 'Nenhum código de pagamento disponível para enviar.' });
+    }
+
+    res.json({ ok: true, destino: emailFinal });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 // Próximo eSIM disponível no estoque
@@ -2004,7 +2123,103 @@ app.get('/api/inadimplencia', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
-// ─── ALERTAS DE VENCIMENTO (cron diário) ─────────────────────────────────────
+// ─── NOTIFICAÇÃO WHATSAPP — vencimento em 24h ────────────────────────────────
+async function executarNotifVencimento() {
+  console.log('[NOTIF-WPP] Iniciando verificação de vencimentos...');
+  const { rows: linhas } = await pool.query(`
+    SELECT id, msisdn, plano_nome, documento_cliente, nome_cliente
+    FROM linhas
+    WHERE status = 'ativa' AND msisdn IS NOT NULL AND documento_cliente IS NOT NULL
+  `);
+
+  const agora    = new Date();
+  const limite24 = new Date(agora.getTime() + 24 * 60 * 60 * 1000);
+  let enviados = 0, pulados = 0, erros = 0;
+
+  for (const linha of linhas) {
+    try {
+      // Busca boletos pendentes do subscriber na Bora
+      const boletos = await boraGet(`/api/Subscriber/${linha.documento_cliente}/billets`);
+      const lista   = Array.isArray(boletos) ? boletos : (boletos?.items || boletos?.billets || []);
+
+      const bPendente = lista.find(b => {
+        if (b.paid || b.paymentDate) return false;
+        const venc = new Date(b.dueDate || b.expiration || 0);
+        return venc > agora && venc <= limite24;
+      });
+
+      if (!bPendente) { pulados++; continue; }
+
+      // Verifica se já notificou hoje (constraint única por dia)
+      const jaEnviou = await pool.query(
+        `SELECT 1 FROM move_notif_whatsapp
+         WHERE msisdn=$1 AND tipo='vencimento_24h'
+         AND DATE(enviado_em AT TIME ZONE 'America/Recife') = CURRENT_DATE`,
+        [linha.msisdn]
+      );
+      if (jaEnviou.rows.length) { pulados++; continue; }
+
+      const pixCode  = bPendente.pix?.code || bPendente.pixCode || null;
+      const barcode  = bPendente.digitableLine || bPendente.barCode || bPendente.typeableLine || null;
+      const valor    = parseFloat(bPendente.value || bPendente.amount || 0);
+      const valorFmt = valor > 0 ? `R$ ${valor.toFixed(2).replace('.', ',')}` : '';
+      const vencData = new Date(bPendente.dueDate || bPendente.expiration).toLocaleDateString('pt-BR');
+      const foneFmt  = linha.msisdn.replace('55','').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+      const nome     = (linha.nome_cliente || '').split(' ')[0] || 'cliente';
+
+      let msg = `Olá, ${nome}! 👋\n\n`;
+      msg    += `⏰ Sua fatura Move vence *hoje*!\n\n`;
+      msg    += `📱 Linha: ${foneFmt}\n`;
+      msg    += `📋 Plano: ${linha.plano_nome || '—'}\n`;
+      if (valorFmt) msg += `💰 Valor: *${valorFmt}*\n`;
+      msg    += `📅 Vencimento: ${vencData}\n`;
+
+      if (pixCode) {
+        msg += `\n⚡ *Pague via PIX — Copia e Cola:*\n${pixCode}\n`;
+      } else if (barcode) {
+        msg += `\n📄 *Linha digitável do boleto:*\n${barcode}\n`;
+      }
+
+      msg += `\nApós o pagamento sua linha continua ativa normalmente. ✅\n`;
+      msg += `Dúvidas? Responda esta mensagem.`;
+
+      await enviarWhatsAppMove(linha.msisdn, msg);
+
+      await pool.query(
+        `INSERT INTO move_notif_whatsapp (msisdn, tipo) VALUES ($1, 'vencimento_24h')
+         ON CONFLICT DO NOTHING`,
+        [linha.msisdn]
+      );
+
+      console.log(`[NOTIF-WPP] ✓ Enviado -> ${linha.msisdn} | venc: ${vencData}`);
+      enviados++;
+      await aguardar(1500); // pausa entre envios para não sobrecarregar Z-API
+
+    } catch (e) {
+      console.error(`[NOTIF-WPP] ✗ Erro linha ${linha.msisdn}:`, e.message);
+      erros++;
+    }
+  }
+
+  console.log(`[NOTIF-WPP] Concluído — enviados: ${enviados} | pulados: ${pulados} | erros: ${erros}`);
+  return { enviados, pulados, erros };
+}
+
+// Cron: todo dia às 8h (BRT = UTC-3, então 11h UTC)
+cron.schedule('0 11 * * *', () => {
+  executarNotifVencimento().catch(e => console.error('[NOTIF-WPP] Erro cron:', e.message));
+});
+
+// Rota de disparo manual (admin) — para testar sem esperar o cron
+app.post('/api/admin/notif/disparar-vencimentos', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ erro: 'Apenas admin' });
+  try {
+    const resultado = await executarNotifVencimento();
+    res.json({ ok: true, ...resultado });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
 cron.schedule('0 9 * * *', async () => {
   console.log('[ALERTA] Verificando vencimentos...');
   try {
@@ -2496,6 +2711,7 @@ app.get('/', (req, res) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 garantirColunasEsimQrCode().catch(err => console.error('[DB] Erro ao preparar colunas eSIM:', err.message));
 garantirColunasEquipeVendedor().catch(err => console.error('[DB] Erro ao preparar equipe de vendedores:', err.message));
+garantirTabelaNotifWhatsapp().catch(err => console.error('[DB] Erro ao preparar tabela notif WhatsApp:', err.message));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
