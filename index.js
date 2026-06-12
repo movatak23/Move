@@ -955,6 +955,12 @@ app.get('/api/bora/ddds', authMiddleware, async (req, res) => {
 // ─── ROTAS PÚBLICAS DO APP MOBILE ────────────────────────────────────────────
 // Usam authApp (x-move-app-key) em vez de JWT de vendedor
 
+// Logo público da Move (sem autenticação) — usado na tela inicial do app
+app.get('/api/app/logo', (req, res) => {
+  const url = obterMoveLogoUrl();
+  res.json({ url });
+});
+
 // Próximo eSIM disponível no estoque
 app.get('/api/app/esim/proximo', authApp, async (req, res) => {
   try {
@@ -2158,6 +2164,10 @@ app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
     const clientId = subscriber?.idSubscriberExternal || subscriber?.id || null;
     if (!clientId) throw new Error('clientId não encontrado para este assinante');
 
+    // Email e nome do titular (da Bora ou do payload)
+    const emailTitular = req.body.email || subscriber?.email || details?.email || null;
+    const nomeTitular  = req.body.nome  || subscriber?.name  || details?.name  || null;
+
     // Cria cart de reativação
     const cart = await boraPost('/api/Cart/reactivation', { msisdn, planId, clientId });
     const cartId = cart?.cartId || cart?.id;
@@ -2171,12 +2181,31 @@ app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
     } else if (tipoNorm === 'billetcombo') {
       pagamento = await boraPost(`/api/Cart/reactivation/${cartId}/BilletCombo`, {});
     } else {
-      // boleto padrão
       pagamento = await boraPost(`/api/Cart/reactivation/${cartId}/billet`, {});
     }
 
-    const pixData   = pagamento?.pix    || null;
+    const pixData    = pagamento?.pix    || null;
     const billetData = pagamento?.billet || null;
+
+    // Envia email com o link de pagamento (não bloqueia a resposta)
+    if (emailTitular) {
+      if (pixData?.code) {
+        enviarEmailPix({
+          email: emailTitular,
+          nome: nomeTitular,
+          pixCode: pixData.code,
+          planoNome: 'Reativação de linha',
+          planoValor: 0
+        }).catch(e => console.error('[reativar] email pix erro:', e.message));
+      } else if (billetData?.barCode || billetData?.digitableLine || billetData?.url) {
+        enviarEmailBoleto({
+          email: emailTitular,
+          nome: nomeTitular,
+          barcode: billetData.barCode || billetData.digitableLine || '',
+          url: billetData.url || billetData.pdfUrl || ''
+        }).catch(e => console.error('[reativar] email boleto erro:', e.message));
+      }
+    }
 
     res.json({
       ok: true,
@@ -2191,7 +2220,6 @@ app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
         url:     billetData.url            || billetData.digitableLine || null,
         barcode: billetData.barCode        || billetData.digitableLine || null
       } : null,
-      // devolve o tipo de recorrência pra usar no passo seguinte
       paymentTypeRecorrencia: paymentTypeRecorrencia || 'billet'
     });
   } catch (e) {
@@ -2202,19 +2230,64 @@ app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
 // Passo 4 — Confirma reativação com recorrência futura
 app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
   try {
-    const { msisdn, planId, paymentTypeRecorrencia } = req.body;
+    const {
+      msisdn, planId,
+      paymentType, pagamento,       // primeiro pagamento
+      paymentTypeRecorrencia, recorrencia,
+      email, nome
+    } = req.body;
     if (!msisdn) throw new Error('msisdn obrigatório');
     if (!planId) throw new Error('planId obrigatório');
 
-    const recType = String(paymentTypeRecorrencia || 'billet').toUpperCase();
+    const tipoPrimeiro   = String(paymentType || pagamento || 'billet').toUpperCase();
+    const tipoRecorrente = String(paymentTypeRecorrencia || recorrencia || 'BILLET').toUpperCase();
+
     const data = await boraPost('/api/Subscription/reactivation', {
       msisdn,
       planId,
-      paymentType: recType
+      paymentType: tipoPrimeiro,
+      recurrenceType: tipoRecorrente
     });
 
-    await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [msisdn]);
-    res.json({ ok: true, data });
+    await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [msisdn]).catch(() => null);
+
+    // Tenta obter email do titular pela Bora se não vier no payload
+    let emailFinal = email || null;
+    let nomeFinal  = nome  || null;
+    if (!emailFinal) {
+      try {
+        const details = await boraGet(`/api/Subscription/${msisdn}/details`);
+        const doc = details?.document || details?.cpf || null;
+        if (doc) {
+          const sub = await boraGet(`/api/Subscriber/${doc}/document`);
+          emailFinal = sub?.email || null;
+          nomeFinal  = nomeFinal || sub?.name || null;
+        }
+      } catch {}
+    }
+
+    // Envia email com o código de pagamento
+    const pixCode   = data?.pix?.code  || data?.pixCode || null;
+    const barcode   = data?.billet?.barCode || data?.billet?.digitableLine || data?.barcode || null;
+    const billetUrl = data?.billet?.url || data?.billet?.pdfUrl || data?.billetUrl || null;
+
+    if (emailFinal) {
+      if (pixCode) {
+        enviarEmailPix({ email: emailFinal, nome: nomeFinal, pixCode, planoNome: 'Reativação de linha', planoValor: 0 })
+          .catch(e => console.error('[reativar] email pix:', e.message));
+      } else if (barcode || billetUrl) {
+        enviarEmailBoleto({ email: emailFinal, nome: nomeFinal, barcode, url: billetUrl })
+          .catch(e => console.error('[reativar] email boleto:', e.message));
+      }
+    }
+
+    res.json({
+      ok: true,
+      msisdn,
+      pix:    pixCode ? { code: pixCode } : null,
+      billet: barcode ? { barcode, url: billetUrl } : null,
+      data
+    });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
