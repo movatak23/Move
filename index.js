@@ -639,6 +639,162 @@ async function resolverEscopoVenda(req, vendedorIdInformado = null) {
   return { vendedor_id: vendedorIdInformado || req.user.id, subvendedor_id: null };
 }
 
+function normalizarMsisdnParaBora(valor) {
+  let fone = String(valor || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (fone.length === 10 || fone.length === 11) fone = '55' + fone;
+  return fone;
+}
+
+function variantesMsisdn(valor) {
+  const digitos = String(valor || '').replace(/\D/g, '').replace(/^0+/, '');
+  const set = new Set([String(valor || '').trim(), digitos]);
+  if (digitos.length === 10 || digitos.length === 11) set.add(`55${digitos}`);
+  if (digitos.startsWith('55') && digitos.length > 11) set.add(digitos.slice(2));
+  return Array.from(set).filter(Boolean);
+}
+
+async function carregarMapasComissaoPlanos() {
+  const { rows } = await pool.query('SELECT * FROM planos_comissao');
+  const porId = new Map();
+  const porNome = new Map();
+  for (const p of rows) {
+    porId.set(String(p.plano_id || ''), p);
+    porNome.set(String(p.plano_nome || '').toUpperCase().trim(), p);
+  }
+  return { porId, porNome };
+}
+
+function localizarPlanoComissao(mapas, planId, planNome) {
+  return mapas.porId.get(String(planId || '')) ||
+         mapas.porNome.get(String(planNome || '').toUpperCase().trim()) ||
+         null;
+}
+
+function dataReferenciaPlano(plano, fallback) {
+  const valor = plano?.createdAt || plano?.activationDate || plano?.expiration || fallback || new Date().toISOString();
+  const iso = String(valor);
+  if (/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso.substring(0, 10);
+  const d = new Date(valor);
+  if (!Number.isNaN(d.getTime())) return d.toISOString().substring(0, 10);
+  return new Date().toISOString().substring(0, 10);
+}
+
+async function sincronizarHistoricoRecargasLinha({ linhaId, msisdn, vendedorId, subvendedorId }) {
+  const msisdnBora = normalizarMsisdnParaBora(msisdn);
+  if (!linhaId || !msisdnBora || msisdnBora.length < 12) {
+    return { ok: false, motivo: 'MSISDN inválido para sincronizar histórico', inseridas: 0, atualizadas: 0 };
+  }
+
+  let details;
+  try {
+    details = await boraGet(`/api/Subscription/${msisdnBora}/details`);
+  } catch (e) {
+    console.warn('[transferir-vendedor] Não foi possível consultar histórico na Bora:', msisdnBora, e.response?.status || '', e.response?.data?.detail || e.message);
+    return { ok: false, motivo: e.response?.data?.detail || e.message, inseridas: 0, atualizadas: 0 };
+  }
+
+  const mapas = await carregarMapasComissaoPlanos();
+  const planArray = Array.isArray(details?.plan) ? details.plan : [];
+  const planoAtual = planArray.length ? planArray[planArray.length - 1] : null;
+  const dataAtivacao = details?.activationDate || planoAtual?.createdAt || null;
+  const statusLinha = details?.status || null;
+  const documento = details?.document || details?.subscriber?.document || null;
+  const nomeCliente = details?.name || details?.subscriber?.name || details?.subscriberName || null;
+
+  if (planoAtual || dataAtivacao || statusLinha || documento || nomeCliente) {
+    const planoCfg = planoAtual ? localizarPlanoComissao(mapas, planoAtual.planId, planoAtual.name) : null;
+    await pool.query(
+      `UPDATE linhas
+          SET msisdn = COALESCE(NULLIF($2,''), msisdn),
+              plano_id = COALESCE(NULLIF($3,''), plano_id),
+              plano_nome = COALESCE(NULLIF($4,''), plano_nome),
+              documento_cliente = COALESCE(NULLIF($5,''), documento_cliente),
+              nome_cliente = COALESCE(NULLIF($6,''), nome_cliente),
+              status = COALESCE(NULLIF($7,''), status),
+              data_ativacao = COALESCE($8::timestamp, data_ativacao),
+              ultima_checagem = NOW()
+        WHERE id=$1`,
+      [linhaId, msisdnBora, planoAtual?.planId || planoCfg?.plano_id || '', planoAtual?.name || planoCfg?.plano_nome || '', documento || '', nomeCliente || '', statusLinha || '', dataAtivacao]
+    ).catch(() => null);
+  }
+
+  let inseridas = 0;
+  let atualizadas = 0;
+
+  async function upsertTransacao({ tipo, plano, dataRef }) {
+    const cfg = localizarPlanoComissao(mapas, plano?.planId, plano?.name);
+    const periodo = dataRef;
+    const comissao = tipo === 'ativacao'
+      ? parseFloat(cfg?.comissao_ativacao || 0)
+      : parseFloat(cfg?.comissao_recarga || 0);
+    const valorPlano = parseFloat(cfg?.plano_valor || 0) || null;
+    const planoId = plano?.planId || cfg?.plano_id || null;
+    const planoNome = plano?.name || cfg?.plano_nome || null;
+
+    const existe = await pool.query(
+      `SELECT id FROM transacoes
+        WHERE linha_id=$1 AND tipo=$2 AND COALESCE(periodo_referencia, data_transacao::date::text)=$3
+        LIMIT 1`,
+      [linhaId, tipo, periodo]
+    );
+
+    if (existe.rows.length) {
+      await pool.query(
+        `UPDATE transacoes
+            SET vendedor_id=$1,
+                subvendedor_id=$2,
+                plano_id=COALESCE(plano_id,$3),
+                plano_nome=COALESCE(NULLIF(plano_nome,''),$4),
+                valor_plano=COALESCE(valor_plano,$5),
+                comissao=CASE WHEN COALESCE(comissao,0)=0 THEN $6 ELSE comissao END,
+                periodo_referencia=COALESCE(periodo_referencia,$7),
+                data_transacao=COALESCE(data_transacao,$8::timestamp),
+                fonte=COALESCE(NULLIF(fonte,''),'bora_details')
+          WHERE id=$9`,
+        [vendedorId, subvendedorId, planoId, planoNome, valorPlano, comissao, periodo, periodo, existe.rows[0].id]
+      );
+      atualizadas++;
+      return;
+    }
+
+    await pool.query(
+      `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, data_transacao, periodo_referencia, fonte)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::timestamp,$10,'bora_details')`,
+      [linhaId, vendedorId, subvendedorId, tipo, planoId, planoNome, valorPlano, comissao, periodo, periodo]
+    );
+    inseridas++;
+  }
+
+  if (planArray.length) {
+    const primeiro = planArray[0];
+    await upsertTransacao({
+      tipo: 'ativacao',
+      plano: primeiro,
+      dataRef: dataReferenciaPlano(primeiro, dataAtivacao)
+    });
+
+    for (let i = 1; i < planArray.length; i++) {
+      const p = planArray[i];
+      await upsertTransacao({
+        tipo: 'recarga',
+        plano: p,
+        dataRef: dataReferenciaPlano(p, dataAtivacao)
+      });
+    }
+  } else {
+    const { rows: linhaRows } = await pool.query('SELECT plano_id, plano_nome, data_ativacao FROM linhas WHERE id=$1', [linhaId]);
+    const linha = linhaRows[0] || {};
+    await upsertTransacao({
+      tipo: 'ativacao',
+      plano: { planId: linha.plano_id, name: linha.plano_nome },
+      dataRef: dataReferenciaPlano(null, linha.data_ativacao)
+    });
+  }
+
+  return { ok: true, inseridas, atualizadas, totalPlanosBora: planArray.length };
+}
+
+
 
 // ─── Diagnóstico de deploy ───────────────────────────────────────────────────
 // Use esta rota para confirmar se o Railway está rodando esta versão do backend.
@@ -1174,49 +1330,114 @@ app.post('/api/linhas/transferir-vendedor', authMiddleware, adminOnly, async (re
     const novoVendedorPrincipal = vendedor.role === 'subvendedor' ? (vendedor.parent_id || vendedor.id) : vendedor.id;
     const novoSubvendedor       = vendedor.role === 'subvendedor' ? vendedor.id : null;
 
-    // Localiza a(s) linha(s) por msisdn, considerando variações com/sem DDI 55 e sem máscara.
+    // Localiza a(s) linha(s) por MSISDN normalizado. Regra de negócio:
+    // a linha tem apenas UM vendedor atual e a ÚLTIMA transferência sempre prevalece.
+    // Por isso, buscamos qualquer registro local com o mesmo número, com/sem DDI 55 e com/sem máscara.
     const digitosMsisdn = String(msisdn).replace(/\D/g, '').replace(/^0+/, '');
-    const variantesMsisdn = new Set([String(msisdn).trim(), digitosMsisdn]);
-    if (digitosMsisdn.length === 10 || digitosMsisdn.length === 11) variantesMsisdn.add(`55${digitosMsisdn}`);
-    if (digitosMsisdn.startsWith('55') && digitosMsisdn.length > 11) variantesMsisdn.add(digitosMsisdn.slice(2));
+    const msisdnBora = normalizarMsisdnParaBora(msisdn);
+    const variantes = variantesMsisdn(msisdn);
 
-    let linhaRes = await pool.query(
-      `SELECT id FROM linhas
-        WHERE regexp_replace(COALESCE(msisdn::text, ''), '[^0-9]', '', 'g') = ANY($1::text[])`,
-      [Array.from(variantesMsisdn).filter(Boolean)]
-    );
+    const sqlMesmoMsisdn = `
+      SELECT id FROM linhas
+       WHERE (
+         CASE
+           WHEN regexp_replace(COALESCE(msisdn::text, ''), '[^0-9]', '', 'g') LIKE '55%'
+             THEN regexp_replace(COALESCE(msisdn::text, ''), '[^0-9]', '', 'g')
+           WHEN length(regexp_replace(COALESCE(msisdn::text, ''), '[^0-9]', '', 'g')) IN (10,11)
+             THEN '55' || regexp_replace(COALESCE(msisdn::text, ''), '[^0-9]', '', 'g')
+           ELSE regexp_replace(COALESCE(msisdn::text, ''), '[^0-9]', '', 'g')
+         END
+       ) = $1
+       OR regexp_replace(COALESCE(msisdn::text, ''), '[^0-9]', '', 'g') = ANY($2::text[])
+    `;
+
+    let linhaRes = await pool.query(sqlMesmoMsisdn, [msisdnBora || digitosMsisdn, variantes]);
 
     // Se a linha veio da consulta/Bora, mas ainda não existe no banco local, cria o vínculo mínimo no CRM.
-    // Assim a transferência deixa de falhar por ausência de registro local e passa a vincular a linha ao vendedor escolhido.
+    // O histórico completo será buscado na Bora logo abaixo e vinculado ao novo vendedor.
     let linhaCriadaNoCrm = false;
     if (!linhaRes.rows.length) {
-      const iccidTransferencia = `transferencia-${digitosMsisdn}`;
+      const iccidTransferencia = `transferencia-${msisdnBora || digitosMsisdn}`;
       linhaRes = await pool.query(
         `INSERT INTO linhas (iccid, msisdn, vendedor_id, subvendedor_id, status)
          VALUES ($1,$2,$3,$4,'ativa')
          ON CONFLICT (iccid) DO UPDATE
          SET msisdn=$2, vendedor_id=$3, subvendedor_id=$4
          RETURNING id`,
-        [iccidTransferencia, digitosMsisdn, novoVendedorPrincipal, novoSubvendedor]
+        [iccidTransferencia, msisdnBora || digitosMsisdn, novoVendedorPrincipal, novoSubvendedor]
       );
       linhaCriadaNoCrm = true;
     }
 
+    // Reconsulta após eventual criação para garantir que todos os registros locais deste mesmo MSISDN
+    // sejam atualizados para o último vendedor. Isso impede que a mesma linha fique vinculada a 2 vendedores.
+    linhaRes = await pool.query(sqlMesmoMsisdn, [msisdnBora || digitosMsisdn, variantes]);
+
+    const linhaIdsTransferidas = linhaRes.rows.map(r => Number(r.id)).filter(Boolean);
+
     let linhasAfetadas = 0, transacoesAfetadas = 0;
+    let historicoInserido = 0;
+    let historicoAtualizado = 0;
+    const historicoBora = [];
+
     for (const { id: linhaId } of linhaRes.rows) {
+      // 1) Transfere a linha para o último vendedor selecionado.
+      // Esta atualização intencionalmente sobrescreve qualquer vendedor anterior.
       const r1 = await pool.query(
         'UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2 WHERE id=$3',
         [novoVendedorPrincipal, novoSubvendedor, linhaId]
       );
+
+      // 2) Antes de finalizar, busca o histórico da Bora e cria as transações antigas que ainda não existem.
+      // Assim a linha passa a contar para o vendedor recebido desde a ativação, inclusive em relatórios por período.
+      const sync = await sincronizarHistoricoRecargasLinha({
+        linhaId,
+        msisdn: msisdnBora || digitosMsisdn,
+        vendedorId: novoVendedorPrincipal,
+        subvendedorId: novoSubvendedor
+      });
+      historicoBora.push(sync);
+      historicoInserido += Number(sync.inseridas || 0);
+      historicoAtualizado += Number(sync.atualizadas || 0);
+
+      // 3) Garante que TODO o histórico local existente dessa linha vá para o novo vendedor.
       const r2 = await pool.query(
         'UPDATE transacoes SET vendedor_id=$1, subvendedor_id=$2 WHERE linha_id=$3',
         [novoVendedorPrincipal, novoSubvendedor, linhaId]
       );
+
       linhasAfetadas += r1.rowCount;
       transacoesAfetadas += r2.rowCount;
     }
 
-    res.json({ ok: true, vendedor: vendedor.nome, linhasAfetadas, transacoesAfetadas, linhaCriadaNoCrm });
+    // Reforço final: se existirem registros duplicados no CRM para o mesmo MSISDN,
+    // todos ficam com o mesmo vendedor atual e todas as transações passam para ele.
+    if (linhaIdsTransferidas.length) {
+      await pool.query(
+        'UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2 WHERE id = ANY($3::int[])',
+        [novoVendedorPrincipal, novoSubvendedor, linhaIdsTransferidas]
+      );
+      const rFinal = await pool.query(
+        'UPDATE transacoes SET vendedor_id=$1, subvendedor_id=$2 WHERE linha_id = ANY($3::int[])',
+        [novoVendedorPrincipal, novoSubvendedor, linhaIdsTransferidas]
+      );
+      transacoesAfetadas = Math.max(transacoesAfetadas, rFinal.rowCount);
+    }
+
+    res.json({
+      ok: true,
+      vendedor: vendedor.nome,
+      linhasAfetadas,
+      transacoesAfetadas,
+      linhaCriadaNoCrm,
+      historicoInserido,
+      historicoAtualizado,
+      regraTransferencia: 'ultima_transferencia_prevalece',
+      vendedorAtualId: novoVendedorPrincipal,
+      subvendedorAtualId: novoSubvendedor,
+      linhaIdsTransferidas,
+      historicoBora
+    });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
