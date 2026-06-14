@@ -2527,6 +2527,134 @@ app.post('/api/admin/notif/disparar-vencimentos', authMiddleware, async (req, re
     res.status(500).json({ erro: e.message });
   }
 });
+
+
+// ─── NOTIFICAÇÃO WHATSAPP — parcial semanal de comissões dos vendedores ─────
+function formatarMoedaBR(valor) {
+  const n = Number(valor || 0);
+  return `R$ ${n.toFixed(2).replace('.', ',')}`;
+}
+
+function nomePrimeiro(nome) {
+  return String(nome || '').trim().split(/\s+/)[0] || 'vendedor';
+}
+
+async function executarNotifParcialComissoes({ forcar = false } = {}) {
+  console.log('[COMISSOES-WPP] Iniciando envio de parcial semanal...');
+
+  const { rows: vendedores } = await pool.query(`
+    SELECT id, nome, telefone
+      FROM vendedores
+     WHERE ativo = true
+       AND role = 'vendedor'
+       AND telefone IS NOT NULL
+       AND TRIM(telefone) <> ''
+     ORDER BY nome
+  `);
+
+  let enviados = 0, pulados = 0, erros = 0;
+  const detalhes = [];
+
+  for (const vendedor of vendedores) {
+    const telefoneLimpo = String(vendedor.telefone || '').replace(/\D/g, '');
+    if (!telefoneLimpo) { pulados++; continue; }
+
+    try {
+      if (!forcar) {
+        const jaEnviou = await pool.query(
+          `SELECT 1 FROM move_notif_whatsapp
+            WHERE msisdn=$1 AND tipo='parcial_comissao_7d'
+              AND enviado_em >= (NOW() - INTERVAL '7 days')
+            LIMIT 1`,
+          [telefoneLimpo]
+        );
+        if (jaEnviou.rows.length) { pulados++; continue; }
+      }
+
+      const { rows: resumoRows } = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE tipo='ativacao') AS ativacoes,
+          COUNT(*) FILTER (WHERE tipo='recarga') AS recargas,
+          COALESCE(SUM(comissao) FILTER (WHERE tipo='ativacao'), 0) AS comissao_ativacao,
+          COALESCE(SUM(comissao) FILTER (WHERE tipo='recarga'), 0) AS comissao_recarga,
+          COALESCE(SUM(comissao), 0) AS total_comissao
+        FROM transacoes
+        WHERE vendedor_id = $1
+          AND data_transacao >= date_trunc('month', (NOW() AT TIME ZONE 'America/Recife'))
+          AND data_transacao <  date_trunc('month', (NOW() AT TIME ZONE 'America/Recife')) + INTERVAL '1 month'
+      `, [vendedor.id]);
+
+      const { rows: linhasRows } = await pool.query(`
+        SELECT COUNT(*)::int AS total_linhas
+          FROM linhas
+         WHERE vendedor_id = $1
+           AND data_ativacao >= date_trunc('month', (NOW() AT TIME ZONE 'America/Recife'))
+           AND data_ativacao <  date_trunc('month', (NOW() AT TIME ZONE 'America/Recife')) + INTERVAL '1 month'
+      `, [vendedor.id]);
+
+      const r = resumoRows[0] || {};
+      const ativacoes = Number(r.ativacoes || 0);
+      const recargas = Number(r.recargas || 0);
+      const comissaoAtivacao = Number(r.comissao_ativacao || 0);
+      const comissaoRecarga = Number(r.comissao_recarga || 0);
+      const totalComissao = Number(r.total_comissao || 0);
+      const totalLinhas = Number(linhasRows[0]?.total_linhas || 0);
+
+      const hoje = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Recife' });
+      const mes = new Date().toLocaleDateString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'America/Recife' });
+
+      let msg = `Olá, ${nomePrimeiro(vendedor.nome)}! 👋\n\n`;
+      msg += `📊 *Parcial das suas comissões — ${mes}*\n`;
+      msg += `Atualizado em: ${hoje}\n\n`;
+      msg += `✅ Ativações: *${ativacoes}*\n`;
+      msg += `🔄 Recargas detectadas: *${recargas}*\n`;
+      msg += `📱 Linhas vinculadas no mês: *${totalLinhas}*\n\n`;
+      msg += `💰 Comissão por ativações: *${formatarMoedaBR(comissaoAtivacao)}*\n`;
+      msg += `💰 Comissão por recargas: *${formatarMoedaBR(comissaoRecarga)}*\n`;
+      msg += `🏁 *Total acumulado até agora: ${formatarMoedaBR(totalComissao)}*\n\n`;
+      msg += `Este é um resumo automático. Para conferir os detalhes, acesse seu painel da Move.`;
+
+      await enviarWhatsAppMove(telefoneLimpo, msg);
+
+      await pool.query(
+        `INSERT INTO move_notif_whatsapp (msisdn, tipo)
+         VALUES ($1, 'parcial_comissao_7d')
+         ON CONFLICT DO NOTHING`,
+        [telefoneLimpo]
+      );
+
+      enviados++;
+      detalhes.push({ vendedor_id: vendedor.id, nome: vendedor.nome, telefone: telefoneLimpo, total_comissao: totalComissao });
+      console.log(`[COMISSOES-WPP] ✓ Enviado -> vendedor ${vendedor.id} | ${vendedor.nome} | ${formatarMoedaBR(totalComissao)}`);
+      await aguardar(1500);
+    } catch (e) {
+      erros++;
+      detalhes.push({ vendedor_id: vendedor.id, nome: vendedor.nome, erro: e.message });
+      console.error(`[COMISSOES-WPP] ✗ Erro vendedor ${vendedor.id} (${vendedor.nome}):`, e.message);
+    }
+  }
+
+  console.log(`[COMISSOES-WPP] Concluído — enviados: ${enviados} | pulados: ${pulados} | erros: ${erros}`);
+  return { enviados, pulados, erros, detalhes };
+}
+
+// Cron: toda segunda-feira às 9h (BRT = UTC-3, então 12h UTC).
+// Isso garante um disparo semanal, equivalente a uma parcial a cada 7 dias.
+cron.schedule('0 12 * * 1', () => {
+  executarNotifParcialComissoes().catch(e => console.error('[COMISSOES-WPP] Erro cron:', e.message));
+});
+
+// Rota manual para teste/acionamento administrativo.
+// Envie { "forcar": true } no body se quiser ignorar o bloqueio de 7 dias no teste.
+app.post('/api/admin/notif/disparar-parcial-comissoes', authMiddleware, async (req, res) => {
+  if (req.user.role !== 'admin') return res.status(403).json({ erro: 'Apenas admin' });
+  try {
+    const resultado = await executarNotifParcialComissoes({ forcar: Boolean(req.body?.forcar) });
+    res.json({ ok: true, ...resultado });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
 cron.schedule('0 9 * * *', async () => {
   console.log('[ALERTA] Verificando vencimentos...');
   try {

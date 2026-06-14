@@ -2021,7 +2021,7 @@ function exportarRelatorioVendedorPDF() {
   doc.save(nomeArquivo);
 }
 
-// ── VENDEDORES ────────────────────────────────────────────────────────────────
+// ── VENDEDORES// ── VENDEDORES ────────────────────────────────────────────────────────────────
 async function loadVendedores() {
   try {
     const dados = await api('GET', '/api/vendedores');
