@@ -670,6 +670,18 @@ function localizarPlanoComissao(mapas, planId, planNome) {
          null;
 }
 
+function sqlFiltroPeriodoTransacoes(alias = 't', startParam = '$2', endParam = '$3') {
+  const pref = alias ? `${alias}.` : '';
+  return ` AND (
+    (COALESCE(${pref}periodo_referencia,'') ~ '^\\d{4}-\\d{2}$'
+      AND (${pref}periodo_referencia || '-01')::date <= ${endParam}::date
+      AND ((${pref}periodo_referencia || '-01')::date + INTERVAL '1 month - 1 day') >= ${startParam}::date)
+    OR
+    (NOT (COALESCE(${pref}periodo_referencia,'') ~ '^\\d{4}-\\d{2}$')
+      AND COALESCE(NULLIF(${pref}periodo_referencia,''), ${pref}data_transacao::date::text)::date BETWEEN ${startParam}::date AND ${endParam}::date)
+  )`;
+}
+
 function dataReferenciaPlano(plano, fallback) {
   const valor = plano?.createdAt || plano?.activationDate || plano?.expiration || fallback || new Date().toISOString();
   const iso = String(valor);
@@ -1059,14 +1071,21 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
               l.vendedor_id,
               l.subvendedor_id,
               'ativacao',
-              l.plano_id,
-              COALESCE(l.plano_nome, pc.plano_nome),
+              COALESCE(NULLIF(l.plano_id,''), pc.plano_id),
+              COALESCE(NULLIF(l.plano_nome,''), pc.plano_nome),
               pc.plano_valor,
               COALESCE(pc.comissao_ativacao, 0),
               COALESCE(l.data_ativacao, NOW()),
               'sistema'
          FROM linhas l
-         LEFT JOIN planos_comissao pc ON pc.plano_id::text = l.plano_id::text
+         LEFT JOIN LATERAL (
+           SELECT pc.*
+             FROM planos_comissao pc
+            WHERE (l.plano_id IS NOT NULL AND pc.plano_id::text = l.plano_id::text)
+               OR (l.plano_nome IS NOT NULL AND UPPER(TRIM(pc.plano_nome)) = UPPER(TRIM(l.plano_nome)))
+            ORDER BY CASE WHEN pc.plano_id::text = COALESCE(l.plano_id::text,'') THEN 0 ELSE 1 END
+            LIMIT 1
+         ) pc ON true
         WHERE l.${campoEscopo} = $1
           AND NOT EXISTS (
             SELECT 1 FROM transacoes t
@@ -1086,9 +1105,14 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
                 ELSE t.comissao
               END,
               valor_plano = COALESCE(t.valor_plano, pc.plano_valor),
-              plano_nome = COALESCE(NULLIF(t.plano_nome, ''), pc.plano_nome)
-         FROM planos_comissao pc
-        WHERE pc.plano_id::text = t.plano_id::text
+              plano_id = COALESCE(NULLIF(t.plano_id,''), NULLIF(l.plano_id,''), pc.plano_id),
+              plano_nome = COALESCE(NULLIF(t.plano_nome, ''), NULLIF(l.plano_nome,''), pc.plano_nome)
+         FROM linhas l, planos_comissao pc
+        WHERE l.id = t.linha_id
+          AND (
+            pc.plano_id::text = COALESCE(NULLIF(t.plano_id,''), NULLIF(l.plano_id,''), '')::text
+            OR UPPER(TRIM(pc.plano_nome)) = UPPER(TRIM(COALESCE(NULLIF(t.plano_nome,''), NULLIF(l.plano_nome,''), '')))
+          )
           AND t.${campoEscopo} = $1
           AND COALESCE(t.comissao, 0) = 0`,
       [vendedorId]
@@ -1097,33 +1121,33 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
     const params = [vendedorId];
     let filtroTransacoes = '';
     if (data_inicio && data_fim) {
-      filtroTransacoes = ` AND (
-        CASE WHEN t.fonte IN ('retroativo','bora_details','bora_polling')
-          THEN COALESCE(t.periodo_referencia, t.data_transacao::date::text) BETWEEN $2 AND $3
-          ELSE t.data_transacao::date::text BETWEEN $2 AND $3
-        END
-      )`;
+      filtroTransacoes = sqlFiltroPeriodoTransacoes('t', '$2', '$3');
       params.push(data_inicio, data_fim);
     }
 
     const { rows: transacoes } = await pool.query(
       `SELECT t.*, l.msisdn, l.nome_cliente, l.iccid,
               COALESCE(t.valor_plano, pc.plano_valor) AS valor_plano,
-              COALESCE(NULLIF(t.plano_nome, ''), l.plano_nome, pc.plano_nome) AS plano_nome
+              COALESCE(NULLIF(t.plano_nome, ''), NULLIF(l.plano_nome,''), pc.plano_nome) AS plano_nome
          FROM transacoes t
          LEFT JOIN linhas l ON l.id = t.linha_id
-         LEFT JOIN planos_comissao pc ON pc.plano_id::text = COALESCE(t.plano_id, l.plano_id)::text
+         LEFT JOIN LATERAL (
+           SELECT pc.*
+             FROM planos_comissao pc
+            WHERE pc.plano_id::text = COALESCE(NULLIF(t.plano_id,''), NULLIF(l.plano_id,''), '')::text
+               OR UPPER(TRIM(pc.plano_nome)) = UPPER(TRIM(COALESCE(NULLIF(t.plano_nome,''), NULLIF(l.plano_nome,''), '')))
+            LIMIT 1
+         ) pc ON true
         WHERE t.${campoEscopo} = $1${filtroTransacoes}
         ORDER BY COALESCE(t.periodo_referencia, t.data_transacao::date::text) DESC`,
       params
     );
 
-    const filtroResumo = filtroTransacoes.replace(/t\./g, '');
     const { rows: resumo } = await pool.query(
-      `SELECT tipo, COUNT(*) as quantidade, COALESCE(SUM(comissao),0) as total_comissao
-         FROM transacoes
-        WHERE ${campoEscopo}=$1${filtroResumo}
-        GROUP BY tipo`,
+      `SELECT t.tipo, COUNT(*) as quantidade, COALESCE(SUM(t.comissao),0) as total_comissao
+         FROM transacoes t
+        WHERE t.${campoEscopo}=$1${filtroTransacoes}
+        GROUP BY t.tipo`,
       params
     );
 
@@ -1134,6 +1158,8 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
       paramsLinhas.push(data_inicio, data_fim);
     }
 
+    const filtroJoinTransacoesLinhas = (data_inicio && data_fim) ? sqlFiltroPeriodoTransacoes('t', '$2', '$3') : '';
+
     const { rows: linhas } = await pool.query(
       `SELECT l.*,
               COALESCE(pc.plano_valor, 0) AS plano_valor,
@@ -1142,8 +1168,14 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
               COALESCE(SUM(t.comissao), 0) AS total_comissao,
               COUNT(t.id) AS total_transacoes
          FROM linhas l
-         LEFT JOIN planos_comissao pc ON pc.plano_id::text = l.plano_id::text
-         LEFT JOIN transacoes t ON t.linha_id = l.id
+         LEFT JOIN LATERAL (
+           SELECT pc.*
+             FROM planos_comissao pc
+            WHERE pc.plano_id::text = COALESCE(NULLIF(l.plano_id,''), '')::text
+               OR UPPER(TRIM(pc.plano_nome)) = UPPER(TRIM(COALESCE(NULLIF(l.plano_nome,''), '')))
+            LIMIT 1
+         ) pc ON true
+         LEFT JOIN transacoes t ON t.linha_id = l.id${filtroJoinTransacoesLinhas}
         WHERE l.${campoEscopo} = $1${filtroLinhas}
         GROUP BY l.id, pc.plano_valor
         ORDER BY l.data_ativacao DESC`,
@@ -1993,11 +2025,19 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
       );
       if (existe.length) continue;
       const periodoNorm = String(r.periodo || '').substring(0, 7);
+      const { rows: pcRows } = await pool.query(
+        `SELECT * FROM planos_comissao
+          WHERE plano_id::text=$1::text OR UPPER(TRIM(plano_nome))=UPPER(TRIM($2))
+          LIMIT 1`,
+        [plano_id || '', plano_nome || '']
+      );
+      const cfg = pcRows[0] || {};
+      const comissaoRecarga = parseFloat(r.comissao || 0) || parseFloat(cfg.comissao_recarga || 0) || 0;
       await pool.query(
-        `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
-         VALUES ($1,$2,$3,'recarga',$4,$5,$6,$7,'retroativo')
+        `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, periodo_referencia, fonte)
+         VALUES ($1,$2,$3,'recarga',$4,$5,$6,$7,$8,'retroativo')
          ON CONFLICT DO NOTHING`,
-        [linhaId, escopo.vendedor_id, escopo.subvendedor_id, plano_id, plano_nome, r.comissao, periodoNorm]
+        [linhaId, escopo.vendedor_id, escopo.subvendedor_id, plano_id || cfg.plano_id || null, plano_nome || cfg.plano_nome || null, cfg.plano_valor || null, comissaoRecarga, periodoNorm]
       );
       inseridas++;
     }
