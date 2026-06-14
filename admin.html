@@ -334,6 +334,15 @@ body {
 .stat-value { font-size: 28px; font-weight: 600; font-family: var(--mono); margin-top: 8px; color: var(--accent); }
 .stat-card.blue .stat-value { color: var(--blue); }
 .stat-card.yellow .stat-value { color: var(--yellow); }
+.stat-card.red .stat-value { color: var(--red); }
+
+/* Cards compactos para o detalhe do vendedor */
+.vd-stats-compact { grid-template-columns: repeat(7, 1fr); gap: 10px; }
+.vd-stats-compact .stat-card { padding: 12px 14px; }
+.vd-stats-compact .stat-label { font-size: 9px; letter-spacing: 0.5px; }
+.vd-stats-compact .stat-value { font-size: 20px; margin-top: 5px; }
+@media (max-width: 1200px) { .vd-stats-compact { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 700px) { .vd-stats-compact { grid-template-columns: repeat(2, 1fr); } }
 
 /* ── TABLES ────────────────────────────────────── */
 .table-card {
@@ -719,14 +728,16 @@ select option { background: var(--bg3); }
           <button class="btn btn-secondary" onclick="voltarDashboardVendedores()">← Voltar</button>
         </div>
       </div>
-      <div class="stats-grid">
-        <div class="stat-card"><div class="stat-label">Ativações</div><div class="stat-value" id="vd-ativ">—</div></div>
+      <div class="stats-grid vd-stats-compact">
+        <div class="stat-card"><div class="stat-label">Linhas Ativas no Período</div><div class="stat-value" id="vd-ativ">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Recargas</div><div class="stat-value" id="vd-rec">—</div></div>
         <div class="stat-card yellow"><div class="stat-label">Total Comissão</div><div class="stat-value" id="vd-com">—</div></div>
         <div class="stat-card"><div class="stat-label">Linhas Vinculadas</div><div class="stat-value" id="vd-linhas-total">—</div></div>
+        <div class="stat-card red"><div class="stat-label">Linhas Canceladas/Inativas</div><div class="stat-value" id="vd-canceladas" style="cursor:pointer" onclick="toggleCanceladasDetalhe()">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Linhas Ativas no Dia</div><div class="stat-value" id="vd-linhas-ativas-dia">—</div></div>
         <div class="stat-card yellow"><div class="stat-label">Vencimentos no Dia</div><div class="stat-value" id="vd-vencimentos-dia">—</div></div>
       </div>
+      <div id="vd-canceladas-detalhe" style="display:none;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px 16px;margin-bottom:20px;font-size:13px"></div>
       <div class="table-card">
         <div class="table-header"><div class="table-title">Resumo das Linhas</div></div>
         <table>
@@ -2061,6 +2072,11 @@ async function recarregarDetalheVendedor() {
   await carregarDetalheVendedor();
 }
 
+function toggleCanceladasDetalhe() {
+  const box = document.getElementById('vd-canceladas-detalhe');
+  if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
+}
+
 async function carregarDetalheVendedor() {
   const v = vendedorDetalheAtual;
   if (!v) return;
@@ -2077,12 +2093,24 @@ async function carregarDetalheVendedor() {
     const ativ = dados.resumo.find(r=>r.tipo==='ativacao');
     const rec = dados.resumo.find(r=>r.tipo==='recarga');
     const totalComissao = dados.resumo.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
-    document.getElementById('vd-ativ').textContent = ativ?.quantidade || 0;
+    document.getElementById('vd-ativ').textContent = dados.linhas_ativas_periodo ?? 0;
     document.getElementById('vd-rec').textContent = rec?.quantidade || 0;
     document.getElementById('vd-com').textContent = 'R$'+totalComissao.toFixed(2);
     document.getElementById('vd-linhas-total').textContent = dados.linhas?.length || 0;
+    document.getElementById('vd-canceladas').textContent = dados.linhas_canceladas_inativas ?? 0;
     document.getElementById('vd-linhas-ativas-dia').textContent = dados.indicadores_dia?.linhas_ativas_dia ?? 0;
     document.getElementById('vd-vencimentos-dia').textContent = dados.indicadores_dia?.linhas_vencimento_dia ?? 0;
+
+    // Detalhe dos números cancelados/inativos (mostrado ao clicar no card)
+    const detBox = document.getElementById('vd-canceladas-detalhe');
+    const nums = dados.linhas_canceladas_inativas_numeros || [];
+    if (nums.length) {
+      detBox.innerHTML = '<strong>Linhas canceladas/inativas:</strong> ' +
+        nums.map(n => String(n).replace(/^55/,'').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3')).join(' &nbsp;•&nbsp; ');
+    } else {
+      detBox.innerHTML = 'Nenhuma linha cancelada ou inativa no período.';
+    }
+    detBox.style.display = 'none';
 
     const topBodyVd = document.getElementById('vd-top-clientes');
     if (topBodyVd) {

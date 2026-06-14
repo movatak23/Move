@@ -1593,7 +1593,28 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
       dataReferencia: data_fim || dataHojeRecifeISO()
     });
 
-    res.json({ transacoes, resumo, linhas, top_clientes: topClientes, indicadores_dia: indicadoresDia });
+    // Conta linhas ativas vs canceladas/inativas (a partir das linhas já carregadas)
+    function statusAtivo(st) {
+      const s = String(st || '').toLowerCase();
+      return s.includes('ativ') || s.includes('active');
+    }
+    function statusCanceladoOuInativo(st) {
+      const s = String(st || '').toLowerCase();
+      return s.includes('cancel') || s.includes('inativ') || s.includes('block')
+          || s.includes('bloque') || s.includes('suspend') || s.includes('desativ');
+    }
+    const linhasAtivasPeriodo = linhas.filter(l => statusAtivo(l.status)).length;
+    const linhasCanceladasInativas = linhas.filter(l => statusCanceladoOuInativo(l.status));
+    const linhasCanceladasInativasNumeros = linhasCanceladasInativas
+      .map(l => l.msisdn)
+      .filter(Boolean);
+
+    res.json({
+      transacoes, resumo, linhas, top_clientes: topClientes, indicadores_dia: indicadoresDia,
+      linhas_ativas_periodo: linhasAtivasPeriodo,
+      linhas_canceladas_inativas: linhasCanceladasInativas.length,
+      linhas_canceladas_inativas_numeros: linhasCanceladasInativasNumeros,
+    });
   } catch (e) {
     console.error('[RELATORIO VENDEDOR]', e.message, e.stack);
     res.status(500).json({ erro: e.message });
