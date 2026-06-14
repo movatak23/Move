@@ -2319,21 +2319,25 @@ app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
 app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
   try {
     const msisdn = req.params.msisdn;
-
-    // Busca detalhes atuais da linha (plano, status, accountId)
     const details = await boraGet(`/api/Subscription/${msisdn}/details`);
     const accountId = details?.accountId || null;
-    const planName = details?.planData?.name || details?.plan?.name || details?.planName || null;
-    const planId   = details?.planData?.id   || details?.plan?.id   || details?.planId   || null;
+
+    // Bora retorna plan como array — pega o último (mais recente)
+    const planArray   = Array.isArray(details?.plan) ? details.plan : [];
+    const ultimoPlano = planArray[planArray.length - 1] || {};
+    const planName    = ultimoPlano.name || ultimoPlano.nome
+                     || details?.planData?.name || details?.planName || null;
+    const planId      = ultimoPlano.idPlanExternal || ultimoPlano.planId || ultimoPlano.id
+                     || details?.planData?.id || details?.planId || null;
     const recurrenceType = details?.recurrenceType || details?.paymentMethod || 'BILLET';
 
-    // Se não tiver planId, tenta resolver pelo nome
+    // Se ainda não tem planId, resolve pelo nome nos planos disponíveis
     let planIdFinal = planId;
     if (!planIdFinal && planName) {
       try {
         const planos = await boraGet('/api/Plan/Activation');
-        const lista = Array.isArray(planos) ? planos : (planos.plans || planos.items || []);
-        const match = lista.find(p =>
+        const lista  = Array.isArray(planos) ? planos : (planos.plans || planos.items || []);
+        const match  = lista.find(p =>
           String(p.name || p.nome || '').toUpperCase().trim() === String(planName).toUpperCase().trim()
         );
         if (match) planIdFinal = match.idPlanExternal || match.id || match.planId || null;
