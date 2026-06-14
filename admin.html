@@ -1297,6 +1297,43 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- Modal WhatsApp Cliente -->
+<div class="modal-overlay" id="modal-whatsapp">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-title">💬 Enviar WhatsApp</div>
+    <div id="wpp-dest" style="color:var(--text2);font-size:13px;margin-bottom:12px"></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+      <button class="btn btn-secondary btn-sm" onclick="modeloWpp('promo')">🎯 Promoção</button>
+      <button class="btn btn-secondary btn-sm" onclick="modeloWpp('rede')">📡 Rede</button>
+      <button class="btn btn-secondary btn-sm" onclick="modeloWpp('suporte')">🛟 Suporte</button>
+    </div>
+    <textarea id="wpp-msg" rows="5" placeholder="Digite a mensagem..." style="width:100%;resize:vertical"></textarea>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-whatsapp')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-enviar-wpp" onclick="enviarWhatsappCliente()">Enviar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Transferir Venda -->
+<div class="modal-overlay" id="modal-transferir">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-title">🔀 Transferir Venda</div>
+    <div id="transf-info" style="color:var(--text2);font-size:13px;margin-bottom:14px"></div>
+    <div class="field">
+      <label>Transferir para o vendedor</label>
+      <select id="transf-vendedor"><option value="">Carregando...</option></select>
+    </div>
+    <div style="background:var(--bg3);border-radius:8px;padding:10px 12px;font-size:12px;color:var(--text2);margin:12px 0">
+      A linha e as comissões passarão a constar no painel do vendedor selecionado.
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-transferir')">Cancelar</button>
+      <button class="btn btn-primary" id="btn-confirmar-transf" onclick="confirmarTransferencia()">Transferir</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal Ver PIX Pendente -->
 <div class="modal-overlay" id="modal-ver-pix">
   <div class="modal" style="max-width:560px">
@@ -3107,9 +3144,82 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>
       <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,this)">📄 Encaminhar Boleto</button>
       <button class="btn btn-secondary btn-sm" id="btn-ver-pix-${l.msisdn?.replace(/\D/g,'')}" onclick="abrirPixPendente('${l.msisdn||''}',this)">⚡ Ver PIX</button>
+      <button class="btn btn-secondary btn-sm" onclick="abrirWhatsappCliente('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">💬 WhatsApp</button>
+      ${state.user.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTransferirVenda('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">🔀 Transferir Venda</button>` : ''}
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
+}
+
+// ── WHATSAPP CLIENTE ──────────────────────────────────────────────────────────
+let _wppMsisdn = null;
+function abrirWhatsappCliente(msisdn, nome) {
+  if (!msisdn) { toast('Número não disponível','error'); return; }
+  _wppMsisdn = msisdn;
+  const fone = msisdn.replace('55','').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+  document.getElementById('wpp-dest').innerHTML = `Para: <strong>${nome || 'Cliente'}</strong> — ${fone}`;
+  document.getElementById('wpp-msg').value = '';
+  document.getElementById('modal-whatsapp').classList.add('open');
+}
+
+function modeloWpp(tipo) {
+  const modelos = {
+    promo:   'Olá! 🎉 Temos uma promoção especial da Move pra você. Garanta mais GB por um valor que cabe no bolso. Quer saber mais?',
+    rede:    'Olá! Identificamos uma instabilidade temporária na rede na sua região e nossa equipe já está atuando para normalizar. Pedimos desculpas pelo transtorno. 🙏',
+    suporte: 'Olá! Aqui é o suporte da Move. Como podemos te ajudar hoje?',
+  };
+  document.getElementById('wpp-msg').value = modelos[tipo] || '';
+}
+
+async function enviarWhatsappCliente() {
+  const mensagem = document.getElementById('wpp-msg').value.trim();
+  if (!mensagem) { toast('Digite uma mensagem','error'); return; }
+  const btn = document.getElementById('btn-enviar-wpp');
+  btn.disabled = true; btn.textContent = 'Enviando...';
+  try {
+    await api('POST', '/api/bora/whatsapp/enviar', { msisdn: _wppMsisdn, mensagem });
+    toast('Mensagem enviada!');
+    fecharModal('modal-whatsapp');
+  } catch(e) {
+    toast(e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Enviar';
+  }
+}
+
+// ── TRANSFERIR VENDA ──────────────────────────────────────────────────────────
+let _transfMsisdn = null;
+async function abrirTransferirVenda(msisdn, nome) {
+  if (!msisdn) { toast('Linha não disponível','error'); return; }
+  _transfMsisdn = msisdn;
+  document.getElementById('transf-info').innerHTML = `Linha: <strong>${msisdn}</strong>${nome ? ' — ' + nome : ''}`;
+  const sel = document.getElementById('transf-vendedor');
+  sel.innerHTML = '<option value="">Carregando vendedores...</option>';
+  document.getElementById('modal-transferir').classList.add('open');
+  try {
+    const vendedores = await api('GET', '/api/vendedores');
+    if (!vendedores.length) { sel.innerHTML = '<option value="">Nenhum vendedor cadastrado</option>'; return; }
+    sel.innerHTML = '<option value="">-- Selecione --</option>' +
+      vendedores.map(v => `<option value="${v.id}">${v.nome}${v.role === 'subvendedor' ? ' (subvendedor)' : ''}</option>`).join('');
+  } catch(e) {
+    sel.innerHTML = '<option value="">Erro ao carregar</option>';
+  }
+}
+
+async function confirmarTransferencia() {
+  const novo_vendedor_id = document.getElementById('transf-vendedor').value;
+  if (!novo_vendedor_id) { toast('Selecione um vendedor','error'); return; }
+  const btn = document.getElementById('btn-confirmar-transf');
+  btn.disabled = true; btn.textContent = 'Transferindo...';
+  try {
+    const r = await api('POST', '/api/linhas/transferir-vendedor', { msisdn: _transfMsisdn, novo_vendedor_id });
+    toast(`Venda transferida para ${r.vendedor}`);
+    fecharModal('modal-transferir');
+  } catch(e) {
+    toast(e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Transferir';
+  }
 }
 
 // ── PIX PENDENTE ──────────────────────────────────────────────────────────────

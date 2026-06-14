@@ -1054,6 +1054,58 @@ app.get('/api/bora/ddds', authMiddleware, async (req, res) => {
 // ─── ROTAS PÚBLICAS DO APP MOBILE ────────────────────────────────────────────
 // Usam authApp (x-move-app-key) em vez de JWT de vendedor
 
+// Envia mensagem WhatsApp manual para o número de um cliente (suporte/promoção/avisos)
+app.post('/api/bora/whatsapp/enviar', authMiddleware, async (req, res) => {
+  try {
+    const { msisdn, mensagem } = req.body;
+    if (!msisdn) return res.status(400).json({ erro: 'Número não informado' });
+    if (!mensagem || !mensagem.trim()) return res.status(400).json({ erro: 'Mensagem vazia' });
+    await enviarWhatsAppMove(msisdn, mensagem.trim());
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.response?.data?.message || e.message });
+  }
+});
+
+// Transferir a venda de uma linha para outro vendedor (somente admin)
+app.post('/api/linhas/transferir-vendedor', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { msisdn, novo_vendedor_id } = req.body;
+    if (!msisdn || !novo_vendedor_id) return res.status(400).json({ erro: 'Informe a linha e o vendedor de destino' });
+
+    // Confirma que o vendedor de destino existe
+    const v = await pool.query('SELECT id, nome, role, parent_id FROM vendedores WHERE id=$1', [novo_vendedor_id]);
+    if (!v.rows.length) return res.status(404).json({ erro: 'Vendedor de destino não encontrado' });
+    const vendedor = v.rows[0];
+
+    // Se for subvendedor, vendedor_id = parent, subvendedor_id = ele. Se for vendedor, subvendedor_id = null.
+    const novoVendedorPrincipal = vendedor.role === 'subvendedor' ? (vendedor.parent_id || vendedor.id) : vendedor.id;
+    const novoSubvendedor       = vendedor.role === 'subvendedor' ? vendedor.id : null;
+
+    // Localiza a(s) linha(s) por msisdn
+    const linhaRes = await pool.query('SELECT id FROM linhas WHERE msisdn=$1', [msisdn]);
+    if (!linhaRes.rows.length) return res.status(404).json({ erro: 'Linha não encontrada no sistema' });
+
+    let linhasAfetadas = 0, transacoesAfetadas = 0;
+    for (const { id: linhaId } of linhaRes.rows) {
+      const r1 = await pool.query(
+        'UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2 WHERE id=$3',
+        [novoVendedorPrincipal, novoSubvendedor, linhaId]
+      );
+      const r2 = await pool.query(
+        'UPDATE transacoes SET vendedor_id=$1, subvendedor_id=$2 WHERE linha_id=$3',
+        [novoVendedorPrincipal, novoSubvendedor, linhaId]
+      );
+      linhasAfetadas += r1.rowCount;
+      transacoesAfetadas += r2.rowCount;
+    }
+
+    res.json({ ok: true, vendedor: vendedor.nome, linhasAfetadas, transacoesAfetadas });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 // Logo público da Move (sem autenticação) — usado na tela inicial do app
 app.get('/api/app/logo', (req, res) => {
   const url = obterMoveLogoUrl();
