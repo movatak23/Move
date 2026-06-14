@@ -1298,6 +1298,64 @@ app.get('/api/minhas-permissoes', authMiddleware, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Checa quantos clientes/linhas o vendedor possui (usado antes da exclusão)
+app.get('/api/vendedores/:id/clientes-count', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const r1 = await pool.query('SELECT COUNT(*)::int AS n FROM linhas WHERE vendedor_id=$1 OR subvendedor_id=$1', [id]);
+    const r2 = await pool.query("SELECT COUNT(*)::int AS n FROM vendedores WHERE parent_id=$1", [id]);
+    res.json({ linhas: r1.rows[0].n, subvendedores: r2.rows[0].n });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Exclui um vendedor. Se houver clientes e transferir_para for informado, transfere antes.
+app.delete('/api/vendedores/:id', authMiddleware, adminOnly, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const id = parseInt(req.params.id, 10);
+    const transferirPara = req.body?.transferir_para ? parseInt(req.body.transferir_para, 10) : null;
+
+    const alvo = await client.query('SELECT id, nome FROM vendedores WHERE id=$1', [id]);
+    if (!alvo.rows.length) { client.release(); return res.status(404).json({ erro: 'Vendedor não encontrado' }); }
+
+    // Conta clientes vinculados
+    const cnt = await client.query('SELECT COUNT(*)::int AS n FROM linhas WHERE vendedor_id=$1 OR subvendedor_id=$1', [id]);
+    const temClientes = cnt.rows[0].n > 0;
+
+    if (temClientes && !transferirPara) {
+      client.release();
+      return res.status(409).json({ erro: 'tem_clientes', total_linhas: cnt.rows[0].n });
+    }
+
+    await client.query('BEGIN');
+
+    if (temClientes && transferirPara) {
+      const dest = await client.query('SELECT id, nome, role, parent_id FROM vendedores WHERE id=$1', [transferirPara]);
+      if (!dest.rows.length) { await client.query('ROLLBACK'); client.release(); return res.status(404).json({ erro: 'Vendedor de destino não encontrado' }); }
+      const d = dest.rows[0];
+      const novoPrincipal = d.role === 'subvendedor' ? (d.parent_id || d.id) : d.id;
+      const novoSub = d.role === 'subvendedor' ? d.id : null;
+      // Transfere linhas e transações
+      await client.query('UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2 WHERE vendedor_id=$3 OR subvendedor_id=$3', [novoPrincipal, novoSub, id]);
+      await client.query('UPDATE transacoes SET vendedor_id=$1, subvendedor_id=$2 WHERE vendedor_id=$3 OR subvendedor_id=$3', [novoPrincipal, novoSub, id]);
+      await client.query('UPDATE vinculos_msisdn_vendedor SET vendedor_id=$1, vendedor_nome=$2 WHERE vendedor_id=$3', [novoPrincipal, d.nome, id]).catch(()=>null);
+    }
+
+    // Remove subvendedores vinculados (se houver) e o próprio vendedor
+    await client.query('DELETE FROM vendedor_permissoes WHERE vendedor_id IN (SELECT id FROM vendedores WHERE id=$1 OR parent_id=$1)', [id]);
+    await client.query('DELETE FROM vendedores WHERE parent_id=$1', [id]);
+    await client.query('DELETE FROM vendedores WHERE id=$1', [id]);
+
+    await client.query('COMMIT');
+    client.release();
+    res.json({ ok: true });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(()=>null);
+    client.release();
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 // ─── ADMINISTRADORES (admin) ─────────────────────────────────────────────────
 app.get('/api/admins', authMiddleware, adminOnly, async (req, res) => {
   try {

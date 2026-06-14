@@ -363,6 +363,20 @@ body {
 
 .table-title { font-size: 14px; font-weight: 500; }
 
+/* Caixa com rolagem para listas longas de clientes (scroll interno) */
+.scroll-box-clientes {
+  max-height: 520px;   /* ~12 linhas visíveis; rola para ver as demais */
+  overflow-y: auto;
+}
+.scroll-box-clientes thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg2);
+  z-index: 2;
+}
+.scroll-box-clientes::-webkit-scrollbar { width: 8px; }
+.scroll-box-clientes::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
 table { width: 100%; border-collapse: collapse; }
 thead th {
   padding: 12px 20px;
@@ -702,12 +716,14 @@ select option { background: var(--bg3); }
           <div class="table-title">Linhas Ativadas no Período</div>
           <div class="table-sub" id="dash-ativacoes-count" style="font-size:12px;color:var(--text2)"></div>
         </div>
-        <table>
-          <thead><tr>
-            <th>Data</th><th>Número</th><th>Cliente</th><th>Plano</th><th>Tipo</th><th>Vendedor</th>
-          </tr></thead>
-          <tbody id="dash-ativacoes"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
-        </table>
+        <div class="scroll-box-clientes">
+          <table>
+            <thead><tr>
+              <th>Data</th><th>Número</th><th>Cliente</th><th>Plano</th><th>Tipo</th><th>Vendedor</th>
+            </tr></thead>
+            <tbody id="dash-ativacoes"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -739,11 +755,13 @@ select option { background: var(--bg3); }
       </div>
       <div id="vd-canceladas-detalhe" style="display:none;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px 16px;margin-bottom:20px;font-size:13px"></div>
       <div class="table-card">
-        <div class="table-header"><div class="table-title">Resumo das Linhas</div></div>
-        <table>
-          <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão Ativ.</th><th>Comissão Por Recarga</th><th>Quantidade de Recargas</th><th>Total</th><th>Ativação</th></tr></thead>
-          <tbody id="vd-linhas"><tr><td colspan="10" class="loading">Selecione um vendedor no dashboard</td></tr></tbody>
-        </table>
+        <div class="table-header"><div class="table-title">Resumo das Linhas</div><div class="table-sub" id="vd-linhas-count" style="font-size:12px;color:var(--text2)"></div></div>
+        <div class="scroll-box-linhas">
+          <table>
+            <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão Ativ.</th><th>Comissão Por Recarga</th><th>Quantidade de Recargas</th><th>Total</th><th>Ativação</th></tr></thead>
+            <tbody id="vd-linhas"><tr><td colspan="10" class="loading">Selecione um vendedor no dashboard</td></tr></tbody>
+          </table>
+        </div>
       </div>
       <div class="table-card">
         <div class="table-header"><div class="table-title">Histórico de Transações</div></div>
@@ -1365,6 +1383,27 @@ select option { background: var(--bg3); }
   </div>
 </div>
 <!-- Modal Vendedor -->
+<!-- Modal Excluir Vendedor -->
+<div class="modal-overlay" id="modal-excluir-vendedor">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-title">🗑 Excluir Vendedor</div>
+    <div id="exv-info" style="font-size:14px;color:var(--text2);line-height:1.6;margin-bottom:14px"></div>
+    <div id="exv-transferir-wrap" style="display:none">
+      <div style="background:#1a1000;border:1px solid #f59e0b;border-radius:8px;padding:12px;font-size:13px;color:#f59e0b;margin-bottom:14px">
+        ⚠ Este vendedor possui <strong id="exv-qtd">0</strong> cliente(s) vinculado(s). Para excluí-lo, transfira os clientes para outro vendedor.
+      </div>
+      <div class="field">
+        <label>Transferir clientes para</label>
+        <select id="exv-destino"><option value="">-- Selecione um vendedor --</option></select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-excluir-vendedor')">Cancelar</button>
+      <button class="btn btn-primary" id="exv-btn-confirmar" style="background:var(--red);border-color:var(--red)" onclick="confirmarExclusaoVendedor()">Excluir</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-vendedor">
   <div class="modal">
     <div class="modal-title" id="modal-vendedor-title">Novo Vendedor</div>
@@ -1980,12 +2019,20 @@ async function loadDashboard() {
     api('GET', `/api/dashboard/ativacoes-periodo?data_inicio=${ini}&data_fim=${fim}`, null, {cache: 5*60*1000})
       .then(r => {
         const lista = r.ativacoes || [];
-        document.getElementById('dash-ativacoes-count').textContent = lista.length ? `${lista.length} ativações` : '';
+        // Ordena da mais recente para a mais antiga e mostra só as 30 primeiras
+        const ordenada = [...lista].sort((a,b) => {
+          const da = new Date(a.data.split('/').reverse().join('-'));
+          const db = new Date(b.data.split('/').reverse().join('-'));
+          return db - da;
+        });
+        const exibidas = ordenada.slice(0, 30);
+        document.getElementById('dash-ativacoes-count').textContent =
+          lista.length ? (lista.length > 30 ? `mostrando 30 de ${lista.length} ativações` : `${lista.length} ativações`) : '';
         if (!lista.length) {
           tbodyAtiv.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">📋</div><p>Nenhuma ativação no período</p></td></tr>`;
           return;
         }
-        tbodyAtiv.innerHTML = lista.map(a => {
+        tbodyAtiv.innerHTML = exibidas.map(a => {
           const fone = String(a.msisdn).replace(/^55/,'').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
           return `<tr>
             <td>${a.data}</td>
@@ -2245,9 +2292,64 @@ async function loadVendedores() {
       <td>${v.total_linhas}</td>
       <td class="currency">R$ ${parseFloat(v.total_comissao||0).toFixed(2)}</td>
       <td><span class="badge ${v.ativo?'badge-green':'badge-red'}">${v.ativo?'Ativo':'Inativo'}</span></td>
-      <td><button class="btn btn-secondary btn-sm" onclick="editarVendedor(${v.id},'${v.nome}','${v.email}','${v.telefone||''}',${v.ativo})">Editar</button></td>
+      <td>
+        <button class="btn btn-secondary btn-sm" onclick="editarVendedor(${v.id},'${v.nome}','${v.email}','${v.telefone||''}',${v.ativo})">Editar</button>
+        ${state.user?.role === 'admin' ? `<button class="btn btn-secondary btn-sm" style="border-color:var(--red);color:var(--red)" onclick="excluirVendedor(${v.id},'${escapeHtmlAttr(v.nome)}')">Excluir</button>` : ''}
+      </td>
     </tr>`).join('');
   } catch(e) { toast(e.message,'error'); }
+}
+
+// ── EXCLUIR VENDEDOR ──────────────────────────────────────────────────────────
+let _exvId = null;
+async function excluirVendedor(id, nome) {
+  _exvId = id;
+  const info = document.getElementById('exv-info');
+  const wrap = document.getElementById('exv-transferir-wrap');
+  const btn = document.getElementById('exv-btn-confirmar');
+  info.innerHTML = `Carregando dados de <strong>${nome}</strong>...`;
+  wrap.style.display = 'none';
+  btn.disabled = true;
+  document.getElementById('modal-excluir-vendedor').classList.add('open');
+  try {
+    const c = await api('GET', `/api/vendedores/${id}/clientes-count`);
+    btn.disabled = false;
+    if (c.linhas > 0) {
+      info.innerHTML = `Você está prestes a excluir <strong>${nome}</strong>.`;
+      document.getElementById('exv-qtd').textContent = c.linhas;
+      wrap.style.display = 'block';
+      // popular vendedores de destino (exceto o que será excluído)
+      const vendedores = await api('GET', '/api/vendedores');
+      const sel = document.getElementById('exv-destino');
+      sel.innerHTML = '<option value="">-- Selecione um vendedor --</option>' +
+        vendedores.filter(v => v.id !== id).map(v => `<option value="${v.id}">${v.nome}</option>`).join('');
+    } else {
+      info.innerHTML = `Tem certeza que deseja excluir <strong>${nome}</strong>? Este vendedor não possui clientes vinculados. Esta ação é permanente.`;
+      wrap.style.display = 'none';
+    }
+  } catch(e) {
+    info.innerHTML = `<span style="color:var(--red)">Erro: ${e.message}</span>`;
+  }
+}
+
+async function confirmarExclusaoVendedor() {
+  if (!_exvId) return;
+  const wrap = document.getElementById('exv-transferir-wrap');
+  const temClientes = wrap.style.display !== 'none';
+  const destino = document.getElementById('exv-destino').value;
+  if (temClientes && !destino) { toast('Selecione o vendedor para transferir os clientes','error'); return; }
+  const btn = document.getElementById('exv-btn-confirmar');
+  btn.disabled = true; btn.textContent = 'Excluindo...';
+  try {
+    await api('DELETE', `/api/vendedores/${_exvId}`, temClientes ? { transferir_para: destino } : null);
+    toast('Vendedor excluído com sucesso');
+    fecharModal('modal-excluir-vendedor');
+    loadVendedores();
+  } catch(e) {
+    toast(e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Excluir';
+  }
 }
 
 function abrirModalVendedor() {
