@@ -374,19 +374,30 @@ function authApp(req, res, next) {
 
 // Envia mensagem via Z-API (instância Move)
 async function enviarWhatsAppMove(telefone, mensagem) {
-  const fone = String(telefone).replace(/\D/g, '');
-  if (!fone || fone.length < 10) throw new Error('Telefone inválido: ' + telefone);
-  await axios.post(
-    `https://api.z-api.io/instances/${MOVE_ZAPI_INSTANCE}/token/${MOVE_ZAPI_TOKEN}/send-text`,
-    { phone: fone, message: mensagem },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(MOVE_ZAPI_CLIENT_TOKEN ? { 'Client-Token': MOVE_ZAPI_CLIENT_TOKEN } : {})
-      },
-      timeout: 15000
-    }
-  );
+  let fone = String(telefone).replace(/\D/g, '');
+  // Remove zeros à esquerda
+  fone = fone.replace(/^0+/, '');
+  // Garante DDI 55: se tem 10-11 dígitos (DDD + número), prefixa 55
+  if (fone.length === 10 || fone.length === 11) fone = '55' + fone;
+  if (fone.length < 12) throw new Error('Telefone inválido: ' + telefone);
+
+  try {
+    await axios.post(
+      `https://api.z-api.io/instances/${MOVE_ZAPI_INSTANCE}/token/${MOVE_ZAPI_TOKEN}/send-text`,
+      { phone: fone, message: mensagem },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          ...(MOVE_ZAPI_CLIENT_TOKEN ? { 'Client-Token': MOVE_ZAPI_CLIENT_TOKEN } : {})
+        },
+        timeout: 15000
+      }
+    );
+  } catch (e) {
+    const zapiMsg = e.response?.data?.message || e.response?.data?.error || e.response?.data?.value || JSON.stringify(e.response?.data || {});
+    console.error('[zapi-move] erro:', e.response?.status, zapiMsg);
+    throw new Error(`Z-API (${e.response?.status || '?'}): ${zapiMsg}`);
+  }
 }
 
 // Migration: tabela de controle de notificações WhatsApp (evita duplicata no mesmo dia)
