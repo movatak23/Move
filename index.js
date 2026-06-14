@@ -1211,6 +1211,7 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
                    THEN COALESCE(tx.comissao_recarga, 0)
                    ELSE COALESCE(tx.comissao_ativacao, 0) + COALESCE(tx.comissao_recarga, 0)
               END AS total_comissao,
+              COALESCE(tx.quantidade_recargas, 0) AS quantidade_recargas,
               COALESCE(tx.total_transacoes, 0) AS total_transacoes
          FROM linhas l
          LEFT JOIN LATERAL (
@@ -1220,6 +1221,7 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
              MAX(t.valor_plano) AS valor_plano_ref,
              COALESCE(SUM(CASE WHEN t.tipo='ativacao' THEN t.comissao ELSE 0 END), 0) AS comissao_ativacao,
              COALESCE(SUM(CASE WHEN t.tipo='recarga' THEN t.comissao ELSE 0 END), 0) AS comissao_recarga,
+             COUNT(CASE WHEN t.tipo='recarga' THEN 1 END) AS quantidade_recargas,
              COUNT(t.id) AS total_transacoes
            FROM transacoes t
           WHERE t.linha_id = l.id${filtroJoinTransacoesLinhas}

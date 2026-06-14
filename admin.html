@@ -666,7 +666,7 @@ select option { background: var(--bg3); }
         </div>
         <table>
           <thead><tr>
-            <th>Vendedor</th><th>Ativações</th><th>Recargas</th><th>Comissão Ativ.</th><th>Comissão Rec.</th><th>Total</th><th>Ações</th>
+            <th>Vendedor</th><th>Ativações</th><th>Recargas</th><th>Comissão Ativ.</th><th>Comissão Por Recarga</th><th>Total</th><th>Ações</th>
           </tr></thead>
           <tbody id="dash-tabela"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
         </table>
@@ -699,8 +699,8 @@ select option { background: var(--bg3); }
       <div class="table-card">
         <div class="table-header"><div class="table-title">Resumo das Linhas</div></div>
         <table>
-          <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão Ativ.</th><th>Comissão Rec.</th><th>Total</th><th>Ativação</th></tr></thead>
-          <tbody id="vd-linhas"><tr><td colspan="9" class="loading">Selecione um vendedor no dashboard</td></tr></tbody>
+          <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão Ativ.</th><th>Comissão Por Recarga</th><th>Quantidade de Recargas</th><th>Total</th><th>Ativação</th></tr></thead>
+          <tbody id="vd-linhas"><tr><td colspan="10" class="loading">Selecione um vendedor no dashboard</td></tr></tbody>
         </table>
       </div>
       <div class="table-card">
@@ -933,8 +933,8 @@ select option { background: var(--bg3); }
       <div class="table-card">
         <div class="table-header"><div class="table-title">Minhas Linhas Ativas</div></div>
         <table>
-          <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão Ativ.</th><th>Comissão Rec.</th><th>Total Comissão</th><th>Ativação</th><th>Última Checagem</th></tr></thead>
-          <tbody id="mp-linhas"><tr><td colspan="10" class="loading">Carregando...</td></tr></tbody>
+          <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão Ativ.</th><th>Comissão Por Recarga</th><th>Quantidade de Recargas</th><th>Total Comissão</th><th>Ativação</th><th>Última Checagem</th></tr></thead>
+          <tbody id="mp-linhas"><tr><td colspan="11" class="loading">Carregando...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1914,7 +1914,7 @@ async function carregarDetalheVendedor() {
   const fim = document.getElementById('vd-fim').value;
   document.getElementById('vd-title').textContent = `Resumo — ${v.nome}`;
   document.getElementById('vd-sub').textContent = v.email || 'Vendas, recargas e comissões do vendedor selecionado';
-  document.getElementById('vd-linhas').innerHTML = `<tr><td colspan="9" class="loading">Carregando linhas...</td></tr>`;
+  document.getElementById('vd-linhas').innerHTML = `<tr><td colspan="10" class="loading">Carregando linhas...</td></tr>`;
   document.getElementById('vd-transacoes').innerHTML = `<tr><td colspan="7" class="loading">Carregando transações...</td></tr>`;
   try {
     const dados = await api('GET', `/api/relatorio/vendedor/${v.id}?data_inicio=${ini}&data_fim=${fim}`);
@@ -1929,7 +1929,7 @@ async function carregarDetalheVendedor() {
 
     const linhasBody = document.getElementById('vd-linhas');
     if (!dados.linhas || !dados.linhas.length) {
-      linhasBody.innerHTML = `<tr><td colspan="9" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha vinculada no período</p></td></tr>`;
+      linhasBody.innerHTML = `<tr><td colspan="10" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha vinculada no período</p></td></tr>`;
     } else {
       linhasBody.innerHTML = dados.linhas.map(l => `<tr>
         <td class="mono">${l.iccid || '—'}</td>
@@ -1939,6 +1939,7 @@ async function carregarDetalheVendedor() {
         <td class="currency">R$ ${parseFloat(l.plano_valor||0).toFixed(2)}</td>
         <td class="currency">R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}</td>
         <td class="currency">R$ ${parseFloat(l.comissao_recarga||0).toFixed(2)}</td>
+        <td class="mono">${parseInt(l.quantidade_recargas||0, 10)}</td>
         <td><strong class="currency">R$ ${parseFloat(l.total_comissao||0).toFixed(2)}</strong></td>
         <td>${l.data_ativacao ? new Date(l.data_ativacao).toLocaleDateString('pt-BR') : '—'}</td>
       </tr>`).join('');
@@ -1991,12 +1992,13 @@ function exportarRelatorioVendedorPDF() {
 
   doc.autoTable({
     startY: 44,
-    head: [['ICCID','MSISDN','Cliente','Plano','Valor Plano','Comissão Ativ.','Comissão Recarga','Total','Ativação']],
+    head: [['ICCID','MSISDN','Cliente','Plano','Valor Plano','Comissão Ativ.','Comissão Por Recarga','Quantidade de Recargas','Total','Ativação']],
     body: (dados.linhas || []).map(l => [
       l.iccid || '—', l.msisdn || '—', l.nome_cliente || '—', l.plano_nome || '—',
       `R$ ${parseFloat(l.plano_valor||0).toFixed(2)}`,
       `R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}`,
       `R$ ${parseFloat(l.comissao_recarga||0).toFixed(2)}`,
+      `${parseInt(l.quantidade_recargas||0, 10)}`,
       `R$ ${parseFloat(l.total_comissao||0).toFixed(2)}`,
       l.data_ativacao ? new Date(l.data_ativacao).toLocaleDateString('pt-BR') : '—'
     ]),
@@ -2744,7 +2746,7 @@ async function loadMeuPainel() {
 
     const linhasBody = document.getElementById('mp-linhas');
     if (!dados.linhas.length) {
-      linhasBody.innerHTML = `<tr><td colspan="10" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha ativa</p></td></tr>`;
+      linhasBody.innerHTML = `<tr><td colspan="11" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha ativa</p></td></tr>`;
     } else {
       linhasBody.innerHTML = dados.linhas.map(l => `<tr>
         <td class="mono">${l.iccid}</td>
@@ -2754,6 +2756,7 @@ async function loadMeuPainel() {
         <td class="currency">R$ ${parseFloat(l.plano_valor||0).toFixed(2)}</td>
         <td class="currency">R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}</td>
         <td class="currency">R$ ${parseFloat(l.comissao_recarga||0).toFixed(2)}</td>
+        <td class="mono">${parseInt(l.quantidade_recargas||0, 10)}</td>
         <td class="currency">R$ ${parseFloat(l.total_comissao||0).toFixed(2)}</td>
         <td>${l.data_ativacao ? new Date(l.data_ativacao).toLocaleDateString('pt-BR') : '—'}</td>
         <td class="text-muted">${l.ultima_checagem?new Date(l.ultima_checagem).toLocaleString('pt-BR'):'Nunca'}</td>
