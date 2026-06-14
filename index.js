@@ -1636,209 +1636,6 @@ app.get('/api/relatorio/geral', authMiddleware, adminOnly, async (req, res) => {
 // Receita da Move = mesmo valor da comissão do vendedor em cada ativação/recarga.
 // Observação: inadimplência/cancelamento usa o STATUS atual salvo na tabela linhas,
 // porque o schema atual não possui uma data específica de bloqueio/cancelamento.
-// ─── COMISSÃO RETROATIVA (importação do relatório Sales da Bora) ──────────────
-
-// Normaliza MSISDN (só dígitos, garante 55)
-function normMsisdn(ms) {
-  let s = String(ms || '').replace(/\D/g, '');
-  if (s.length === 10 || s.length === 11) s = '55' + s;
-  return s;
-}
-
-// Gera email/login fictício a partir do nome do vendedor
-function emailFicticioVendedor(nome) {
-  const slug = String(nome).toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '.').replace(/^\.|\.$/g, '');
-  return `${slug}@move.vendedor`;
-}
-
-// Importa o relatório Sales: cria vendedores, registra vínculos chip->vendedor, lista órfãos
-app.post('/api/retroativo/importar', authMiddleware, adminOnly, uploadMem.single('planilha'), async (req, res) => {
-  try {
-    const XLSX = require('xlsx');
-    if (!req.file) return res.status(400).json({ erro: 'Envie a planilha (campo "planilha")' });
-
-    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
-
-    // 1) Mapa MSISDN -> vendedor pela ATIVAÇÃO (fonte da verdade do dono do chip)
-    const ativadorPorMsisdn = {};
-    const nomesVendedores = new Set();
-    for (const r of linhas) {
-      const tipo = String(r['TIPO'] || '').toUpperCase();
-      const vend = String(r['VENDEDOR'] || '').trim();
-      const ms = normMsisdn(r['MSISDN']);
-      if (vend) nomesVendedores.add(vend);
-      if (tipo.startsWith('ATIVA') && ms && vend) ativadorPorMsisdn[ms] = vend;
-    }
-
-    // 2) Cria vendedores que ainda não existem (login/senha fictícios)
-    const vendedoresCriados = [];
-    const mapaNomeId = {};
-    for (const nome of nomesVendedores) {
-      const email = emailFicticioVendedor(nome);
-      // já existe?
-      const ex = await pool.query('SELECT id FROM vendedores WHERE nome=$1 OR email=$2 LIMIT 1', [nome, email]);
-      if (ex.rows.length) { mapaNomeId[nome] = ex.rows[0].id; continue; }
-      const senha = 'move' + Math.random().toString(36).slice(2, 8);
-      const hash = await bcrypt.hash(senha, 10);
-      const ins = await pool.query(
-        `INSERT INTO vendedores (nome, email, senha_hash, role, ativo)
-         VALUES ($1,$2,$3,'vendedor',true) RETURNING id`,
-        [nome, email, hash]
-      );
-      mapaNomeId[nome] = ins.rows[0].id;
-      vendedoresCriados.push({ nome, email, senha });
-    }
-
-    // 3) Registra vínculos MSISDN -> vendedor (para chips com ativação conhecida)
-    let vinculos = 0;
-    for (const [ms, nome] of Object.entries(ativadorPorMsisdn)) {
-      const vid = mapaNomeId[nome] || null;
-      await pool.query(
-        `INSERT INTO vinculos_msisdn_vendedor (msisdn, vendedor_id, vendedor_nome, origem)
-         VALUES ($1,$2,$3,'importacao')
-         ON CONFLICT (msisdn) DO UPDATE SET vendedor_id=EXCLUDED.vendedor_id, vendedor_nome=EXCLUDED.vendedor_nome, atualizado_em=NOW()`,
-        [ms, vid, nome]
-      );
-      vinculos++;
-    }
-
-    // 4) Identifica órfãos: MSISDNs com transação mas SEM vendedor conhecido
-    const todosMsisdn = new Set(linhas.map(r => normMsisdn(r['MSISDN'])).filter(Boolean));
-    const orfaos = [];
-    for (const ms of todosMsisdn) {
-      if (ativadorPorMsisdn[ms]) continue; // tem dono
-      const jaVinculado = await pool.query('SELECT 1 FROM vinculos_msisdn_vendedor WHERE msisdn=$1 AND vendedor_id IS NOT NULL', [ms]);
-      if (jaVinculado.rows.length) continue;
-      // pega dados do cliente para exibir
-      const amostra = linhas.find(r => normMsisdn(r['MSISDN']) === ms) || {};
-      orfaos.push({
-        msisdn: ms,
-        cliente: String(amostra['NOME DO CLIENTE'] || ''),
-        documento: String(amostra['CPF/CNPJ'] || ''),
-        plano: String(amostra['PLANO'] || ''),
-      });
-      // registra órfão sem vendedor para aparecer na conciliação
-      await pool.query(
-        `INSERT INTO vinculos_msisdn_vendedor (msisdn, vendedor_id, vendedor_nome, origem)
-         VALUES ($1,NULL,NULL,'orfao') ON CONFLICT (msisdn) DO NOTHING`,
-        [ms]
-      );
-    }
-
-    res.json({
-      ok: true,
-      vendedores_criados: vendedoresCriados,
-      total_vendedores_criados: vendedoresCriados.length,
-      vinculos_registrados: vinculos,
-      orfaos_encontrados: orfaos.length,
-      orfaos,
-    });
-  } catch (e) {
-    console.error('[RETROATIVO IMPORTAR]', e.message);
-    res.status(500).json({ erro: e.message });
-  }
-});
-
-// Calcula comissão retroativa por vendedor, a partir de uma planilha Sales + vínculos salvos
-app.post('/api/retroativo/calcular', authMiddleware, adminOnly, uploadMem.single('planilha'), async (req, res) => {
-  try {
-    const XLSX = require('xlsx');
-    if (!req.file) return res.status(400).json({ erro: 'Envie a planilha (campo "planilha")' });
-    const mapas = await carregarMapasComissaoPlanos();
-
-    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
-
-    // Carrega todos os vínculos salvos: msisdn -> {vendedor_id, nome}
-    const vinc = await pool.query('SELECT msisdn, vendedor_id, vendedor_nome FROM vinculos_msisdn_vendedor');
-    const vincMap = {};
-    for (const v of vinc.rows) vincMap[v.msisdn] = v;
-
-    // Acumula por vendedor
-    const porVendedor = {}; // nome -> {ativacoes, recargas, comissao}
-    let semVendedor = { ativacoes: 0, recargas: 0, comissao: 0 };
-    let semPlano = 0;
-    const planosNaoEncontrados = new Set();
-
-    for (const r of linhas) {
-      const tipo = String(r['TIPO'] || '').toUpperCase();
-      const plano = String(r['PLANO'] || '').trim();
-      const ms = normMsisdn(r['MSISDN']);
-      const vendCol = String(r['VENDEDOR'] || '').trim();
-
-      const ehAtivacao = tipo.startsWith('ATIVA');
-      const ehRecarga = tipo.includes('RECARGA') || tipo.includes('PACOTE');
-      if (!ehAtivacao && !ehRecarga) continue;
-
-      const cfg = localizarPlanoComissao(mapas, null, plano);
-      if (!cfg) { semPlano++; planosNaoEncontrados.add(plano); continue; }
-      const comissao = ehAtivacao ? Number(cfg.comissao_ativacao || 0) : Number(cfg.comissao_recarga || 0);
-
-      // Define o dono: 1) coluna VENDEDOR; 2) vínculo do MSISDN; senão sem vendedor
-      let nomeDono = vendCol || (vincMap[ms] && vincMap[ms].vendedor_nome) || null;
-
-      if (!nomeDono) {
-        semVendedor.comissao += comissao;
-        if (ehAtivacao) semVendedor.ativacoes++; else semVendedor.recargas++;
-        continue;
-      }
-      if (!porVendedor[nomeDono]) porVendedor[nomeDono] = { ativacoes: 0, recargas: 0, comissao: 0 };
-      porVendedor[nomeDono].comissao += comissao;
-      if (ehAtivacao) porVendedor[nomeDono].ativacoes++; else porVendedor[nomeDono].recargas++;
-    }
-
-    const resultado = Object.entries(porVendedor)
-      .map(([nome, d]) => ({ vendedor: nome, ...d, comissao: Number(d.comissao.toFixed(2)) }))
-      .sort((a, b) => b.comissao - a.comissao);
-
-    res.json({
-      ok: true,
-      por_vendedor: resultado,
-      sem_vendedor: { ...semVendedor, comissao: Number(semVendedor.comissao.toFixed(2)) },
-      eventos_sem_plano: semPlano,
-      planos_nao_encontrados: Array.from(planosNaoEncontrados),
-    });
-  } catch (e) {
-    console.error('[RETROATIVO CALCULAR]', e.message);
-    res.status(500).json({ erro: e.message });
-  }
-});
-
-// Lista os chips órfãos (sem vendedor atribuído) para conciliação manual
-app.get('/api/retroativo/orfaos', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT msisdn FROM vinculos_msisdn_vendedor WHERE vendedor_id IS NULL ORDER BY msisdn`
-    );
-    res.json({ ok: true, orfaos: rows });
-  } catch (e) {
-    res.status(500).json({ erro: e.message });
-  }
-});
-
-// Atribui manualmente um chip órfão a um vendedor
-app.post('/api/retroativo/atribuir-orfao', authMiddleware, adminOnly, async (req, res) => {
-  try {
-    const { msisdn, vendedor_id } = req.body;
-    if (!msisdn || !vendedor_id) return res.status(400).json({ erro: 'Informe o chip e o vendedor' });
-    const v = await pool.query('SELECT nome FROM vendedores WHERE id=$1', [vendedor_id]);
-    if (!v.rows.length) return res.status(404).json({ erro: 'Vendedor não encontrado' });
-    await pool.query(
-      `INSERT INTO vinculos_msisdn_vendedor (msisdn, vendedor_id, vendedor_nome, origem)
-       VALUES ($1,$2,$3,'manual')
-       ON CONFLICT (msisdn) DO UPDATE SET vendedor_id=EXCLUDED.vendedor_id, vendedor_nome=EXCLUDED.vendedor_nome, origem='manual', atualizado_em=NOW()`,
-      [normMsisdn(msisdn), vendedor_id, v.rows[0].nome]
-    );
-    res.json({ ok: true, vendedor: v.rows[0].nome });
-  } catch (e) {
-    res.status(500).json({ erro: e.message });
-  }
-});
 
 // Lista as ativações do período a partir do relatório Sales da Bora (inclui vendedor)
 app.get('/api/dashboard/ativacoes-periodo', authMiddleware, adminOnly, async (req, res) => {
@@ -2805,6 +2602,210 @@ app.post('/api/comissao/registrar-retroativo', authMiddleware, async (req, res) 
 const multer = require('multer');
 const XLSX = require('xlsx');
 const uploadMem = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024 } });
+
+// ─── COMISSÃO RETROATIVA (importação do relatório Sales da Bora) ──────────────
+
+// Normaliza MSISDN (só dígitos, garante 55)
+function normMsisdn(ms) {
+  let s = String(ms || '').replace(/\D/g, '');
+  if (s.length === 10 || s.length === 11) s = '55' + s;
+  return s;
+}
+
+// Gera email/login fictício a partir do nome do vendedor
+function emailFicticioVendedor(nome) {
+  const slug = String(nome).toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '.').replace(/^\.|\.$/g, '');
+  return `${slug}@move.vendedor`;
+}
+
+// Importa o relatório Sales: cria vendedores, registra vínculos chip->vendedor, lista órfãos
+app.post('/api/retroativo/importar', authMiddleware, adminOnly, uploadMem.single('planilha'), async (req, res) => {
+  try {
+    const XLSX = require('xlsx');
+    if (!req.file) return res.status(400).json({ erro: 'Envie a planilha (campo "planilha")' });
+
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+    // 1) Mapa MSISDN -> vendedor pela ATIVAÇÃO (fonte da verdade do dono do chip)
+    const ativadorPorMsisdn = {};
+    const nomesVendedores = new Set();
+    for (const r of linhas) {
+      const tipo = String(r['TIPO'] || '').toUpperCase();
+      const vend = String(r['VENDEDOR'] || '').trim();
+      const ms = normMsisdn(r['MSISDN']);
+      if (vend) nomesVendedores.add(vend);
+      if (tipo.startsWith('ATIVA') && ms && vend) ativadorPorMsisdn[ms] = vend;
+    }
+
+    // 2) Cria vendedores que ainda não existem (login/senha fictícios)
+    const vendedoresCriados = [];
+    const mapaNomeId = {};
+    for (const nome of nomesVendedores) {
+      const email = emailFicticioVendedor(nome);
+      // já existe?
+      const ex = await pool.query('SELECT id FROM vendedores WHERE nome=$1 OR email=$2 LIMIT 1', [nome, email]);
+      if (ex.rows.length) { mapaNomeId[nome] = ex.rows[0].id; continue; }
+      const senha = 'move' + Math.random().toString(36).slice(2, 8);
+      const hash = await bcrypt.hash(senha, 10);
+      const ins = await pool.query(
+        `INSERT INTO vendedores (nome, email, senha_hash, role, ativo)
+         VALUES ($1,$2,$3,'vendedor',true) RETURNING id`,
+        [nome, email, hash]
+      );
+      mapaNomeId[nome] = ins.rows[0].id;
+      vendedoresCriados.push({ nome, email, senha });
+    }
+
+    // 3) Registra vínculos MSISDN -> vendedor (para chips com ativação conhecida)
+    let vinculos = 0;
+    for (const [ms, nome] of Object.entries(ativadorPorMsisdn)) {
+      const vid = mapaNomeId[nome] || null;
+      await pool.query(
+        `INSERT INTO vinculos_msisdn_vendedor (msisdn, vendedor_id, vendedor_nome, origem)
+         VALUES ($1,$2,$3,'importacao')
+         ON CONFLICT (msisdn) DO UPDATE SET vendedor_id=EXCLUDED.vendedor_id, vendedor_nome=EXCLUDED.vendedor_nome, atualizado_em=NOW()`,
+        [ms, vid, nome]
+      );
+      vinculos++;
+    }
+
+    // 4) Identifica órfãos: MSISDNs com transação mas SEM vendedor conhecido
+    const todosMsisdn = new Set(linhas.map(r => normMsisdn(r['MSISDN'])).filter(Boolean));
+    const orfaos = [];
+    for (const ms of todosMsisdn) {
+      if (ativadorPorMsisdn[ms]) continue; // tem dono
+      const jaVinculado = await pool.query('SELECT 1 FROM vinculos_msisdn_vendedor WHERE msisdn=$1 AND vendedor_id IS NOT NULL', [ms]);
+      if (jaVinculado.rows.length) continue;
+      // pega dados do cliente para exibir
+      const amostra = linhas.find(r => normMsisdn(r['MSISDN']) === ms) || {};
+      orfaos.push({
+        msisdn: ms,
+        cliente: String(amostra['NOME DO CLIENTE'] || ''),
+        documento: String(amostra['CPF/CNPJ'] || ''),
+        plano: String(amostra['PLANO'] || ''),
+      });
+      // registra órfão sem vendedor para aparecer na conciliação
+      await pool.query(
+        `INSERT INTO vinculos_msisdn_vendedor (msisdn, vendedor_id, vendedor_nome, origem)
+         VALUES ($1,NULL,NULL,'orfao') ON CONFLICT (msisdn) DO NOTHING`,
+        [ms]
+      );
+    }
+
+    res.json({
+      ok: true,
+      vendedores_criados: vendedoresCriados,
+      total_vendedores_criados: vendedoresCriados.length,
+      vinculos_registrados: vinculos,
+      orfaos_encontrados: orfaos.length,
+      orfaos,
+    });
+  } catch (e) {
+    console.error('[RETROATIVO IMPORTAR]', e.message);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// Calcula comissão retroativa por vendedor, a partir de uma planilha Sales + vínculos salvos
+app.post('/api/retroativo/calcular', authMiddleware, adminOnly, uploadMem.single('planilha'), async (req, res) => {
+  try {
+    const XLSX = require('xlsx');
+    if (!req.file) return res.status(400).json({ erro: 'Envie a planilha (campo "planilha")' });
+    const mapas = await carregarMapasComissaoPlanos();
+
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+    // Carrega todos os vínculos salvos: msisdn -> {vendedor_id, nome}
+    const vinc = await pool.query('SELECT msisdn, vendedor_id, vendedor_nome FROM vinculos_msisdn_vendedor');
+    const vincMap = {};
+    for (const v of vinc.rows) vincMap[v.msisdn] = v;
+
+    // Acumula por vendedor
+    const porVendedor = {}; // nome -> {ativacoes, recargas, comissao}
+    let semVendedor = { ativacoes: 0, recargas: 0, comissao: 0 };
+    let semPlano = 0;
+    const planosNaoEncontrados = new Set();
+
+    for (const r of linhas) {
+      const tipo = String(r['TIPO'] || '').toUpperCase();
+      const plano = String(r['PLANO'] || '').trim();
+      const ms = normMsisdn(r['MSISDN']);
+      const vendCol = String(r['VENDEDOR'] || '').trim();
+
+      const ehAtivacao = tipo.startsWith('ATIVA');
+      const ehRecarga = tipo.includes('RECARGA') || tipo.includes('PACOTE');
+      if (!ehAtivacao && !ehRecarga) continue;
+
+      const cfg = localizarPlanoComissao(mapas, null, plano);
+      if (!cfg) { semPlano++; planosNaoEncontrados.add(plano); continue; }
+      const comissao = ehAtivacao ? Number(cfg.comissao_ativacao || 0) : Number(cfg.comissao_recarga || 0);
+
+      // Define o dono: 1) coluna VENDEDOR; 2) vínculo do MSISDN; senão sem vendedor
+      let nomeDono = vendCol || (vincMap[ms] && vincMap[ms].vendedor_nome) || null;
+
+      if (!nomeDono) {
+        semVendedor.comissao += comissao;
+        if (ehAtivacao) semVendedor.ativacoes++; else semVendedor.recargas++;
+        continue;
+      }
+      if (!porVendedor[nomeDono]) porVendedor[nomeDono] = { ativacoes: 0, recargas: 0, comissao: 0 };
+      porVendedor[nomeDono].comissao += comissao;
+      if (ehAtivacao) porVendedor[nomeDono].ativacoes++; else porVendedor[nomeDono].recargas++;
+    }
+
+    const resultado = Object.entries(porVendedor)
+      .map(([nome, d]) => ({ vendedor: nome, ...d, comissao: Number(d.comissao.toFixed(2)) }))
+      .sort((a, b) => b.comissao - a.comissao);
+
+    res.json({
+      ok: true,
+      por_vendedor: resultado,
+      sem_vendedor: { ...semVendedor, comissao: Number(semVendedor.comissao.toFixed(2)) },
+      eventos_sem_plano: semPlano,
+      planos_nao_encontrados: Array.from(planosNaoEncontrados),
+    });
+  } catch (e) {
+    console.error('[RETROATIVO CALCULAR]', e.message);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// Lista os chips órfãos (sem vendedor atribuído) para conciliação manual
+app.get('/api/retroativo/orfaos', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT msisdn FROM vinculos_msisdn_vendedor WHERE vendedor_id IS NULL ORDER BY msisdn`
+    );
+    res.json({ ok: true, orfaos: rows });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// Atribui manualmente um chip órfão a um vendedor
+app.post('/api/retroativo/atribuir-orfao', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { msisdn, vendedor_id } = req.body;
+    if (!msisdn || !vendedor_id) return res.status(400).json({ erro: 'Informe o chip e o vendedor' });
+    const v = await pool.query('SELECT nome FROM vendedores WHERE id=$1', [vendedor_id]);
+    if (!v.rows.length) return res.status(404).json({ erro: 'Vendedor não encontrado' });
+    await pool.query(
+      `INSERT INTO vinculos_msisdn_vendedor (msisdn, vendedor_id, vendedor_nome, origem)
+       VALUES ($1,$2,$3,'manual')
+       ON CONFLICT (msisdn) DO UPDATE SET vendedor_id=EXCLUDED.vendedor_id, vendedor_nome=EXCLUDED.vendedor_nome, origem='manual', atualizado_em=NOW()`,
+      [normMsisdn(msisdn), vendedor_id, v.rows[0].nome]
+    );
+    res.json({ ok: true, vendedor: v.rows[0].nome });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
 
 
 // ─── MARCA DO VENDEDOR PRINCIPAL / APP ──────────────────────────────────────
