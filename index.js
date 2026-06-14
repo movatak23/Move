@@ -2446,49 +2446,55 @@ app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
   }
 });
 
-// Passo 4 — Confirma reativação com recorrência futura
+// Reativação — fluxo real da Bora (2 passos):
+//   1) POST /api/Subscription/reactivation { msisdn } -> { cartId, clientId, planId }
+//   2) POST /api/cart/recharge/{cartId}/{pix|billet|BilletCombo} { isRecurrence, recurrenceType, cartId }
 app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
   try {
-    const {
-      msisdn, planId,
-      paymentType, pagamento,       // primeiro pagamento
-      paymentTypeRecorrencia, recorrencia,
-      email, nome
-    } = req.body;
+    const { msisdn, paymentType, pagamento, paymentTypeRecorrencia, recorrencia, email, nome } = req.body;
     if (!msisdn) throw new Error('msisdn obrigatório');
-    if (!planId) throw new Error('planId obrigatório');
 
-    const tipoPrimeiro   = String(paymentType || pagamento || 'billet').toUpperCase();
+    // primeiro pagamento: pix | billet | billetcombo
+    const tipoPrimeiro   = String(paymentType || pagamento || 'pix').toLowerCase();
+    // recorrência: BILLET | CREDIT
     const tipoRecorrente = String(paymentTypeRecorrencia || recorrencia || 'BILLET').toUpperCase();
 
-    const data = await boraPost('/api/Subscription/reactivation', {
-      msisdn,
-      planId,
-      paymentType: tipoPrimeiro,
-      recurrenceType: tipoRecorrente
-    });
+    // ── Passo 1: cria o carrinho de reativação (Bora só aceita { msisdn }) ──
+    const react = await boraPost('/api/Subscription/reactivation', { msisdn });
+    const cartId = react?.cartId || react?.cart?.id || null;
+    if (!cartId) throw new Error('cartId não retornado pela reativação');
+
+    // ── Passo 2: processa o primeiro pagamento sobre o cartId ──
+    const payBody = { isRecurrence: true, recurrenceType: tipoRecorrente, cartId };
+    let pagamentoResp;
+    if (tipoPrimeiro === 'pix') {
+      pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/pix`, payBody);
+    } else if (tipoPrimeiro === 'billetcombo') {
+      pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/BilletCombo`, payBody);
+    } else {
+      pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/billet`, payBody);
+    }
 
     await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [msisdn]).catch(() => null);
 
-    // Tenta obter email do titular pela Bora se não vier no payload
+    // Extrai PIX / boleto da resposta
+    const pixData    = pagamentoResp?.pix || null;
+    const billetData = pagamentoResp?.billet || null;
+    const pixCode    = pixData?.code || pagamentoResp?.pixCode || pagamentoResp?.pixCopyPaste || null;
+    const pixQrUrl   = pixData?.qrCodeUrl || pagamentoResp?.qrCodeUrl || null;
+    const barcode    = billetData?.barCode || billetData?.digitableLine || pagamentoResp?.barcode || null;
+    const billetUrl  = billetData?.url || billetData?.pdfUrl || pagamentoResp?.billetUrl || null;
+
+    // Email do titular (payload -> Bora details)
     let emailFinal = email || null;
     let nomeFinal  = nome  || null;
     if (!emailFinal) {
       try {
         const details = await boraGet(`/api/Subscription/${msisdn}/details`);
-        const doc = details?.document || details?.cpf || null;
-        if (doc) {
-          const sub = await boraGet(`/api/Subscriber/${doc}/document`);
-          emailFinal = sub?.email || null;
-          nomeFinal  = nomeFinal || sub?.name || null;
-        }
+        emailFinal = details?.email || null;
+        nomeFinal  = nomeFinal || details?.name || null;
       } catch {}
     }
-
-    // Envia email com o código de pagamento
-    const pixCode   = data?.pix?.code  || data?.pixCode || null;
-    const barcode   = data?.billet?.barCode || data?.billet?.digitableLine || data?.barcode || null;
-    const billetUrl = data?.billet?.url || data?.billet?.pdfUrl || data?.billetUrl || null;
 
     if (emailFinal) {
       if (pixCode) {
@@ -2503,12 +2509,13 @@ app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
     res.json({
       ok: true,
       msisdn,
-      pix:    pixCode ? { code: pixCode } : null,
-      billet: barcode ? { barcode, url: billetUrl } : null,
-      data
+      cartId,
+      pix:    pixCode ? { code: pixCode, qrCodeUrl: pixQrUrl } : null,
+      billet: (barcode || billetUrl) ? { barcode, url: billetUrl } : null,
     });
   } catch (e) {
-    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+    console.error('[reativar] erro:', e.response?.data || e.message);
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.response?.data?.message || e.message });
   }
 });
 
