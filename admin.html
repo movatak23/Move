@@ -1289,6 +1289,47 @@ select option { background: var(--bg3); }
       </div>
     </div>
 
+    <div class="page" id="page-retroativo">
+      <div class="page-header">
+        <div><div class="page-title">🧾 Comissão Retroativa</div><div class="page-sub">Importe o relatório de Vendas (Sales) da Bora para apurar comissões por vendedor</div></div>
+      </div>
+
+      <div class="table-card" style="margin-bottom:20px">
+        <div class="table-header"><div class="table-title">1. Importar relatório</div></div>
+        <div style="padding:8px 4px;font-size:13px;color:var(--text2);line-height:1.6">
+          Selecione a planilha <strong>Sales/Vendas (.xlsx)</strong> exportada da Bora. O sistema cria automaticamente os vendedores que ainda não existem (com login provisório), vincula cada chip ao vendedor que o ativou e identifica os chips "órfãos" (ativados antes do período).
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap">
+          <input type="file" id="retro-file" accept=".xlsx,.xls" style="font-size:13px">
+          <button class="btn btn-primary" onclick="retroImportar()">Importar e vincular</button>
+          <button class="btn btn-secondary" onclick="retroCalcular()">Calcular comissões</button>
+        </div>
+        <div id="retro-import-result" style="margin-top:14px"></div>
+      </div>
+
+      <div class="table-card" style="margin-bottom:20px">
+        <div class="table-header"><div class="table-title">2. Comissão por vendedor</div></div>
+        <table>
+          <thead><tr><th>Vendedor</th><th>Ativações</th><th>Recargas</th><th>Comissão Total</th></tr></thead>
+          <tbody id="retro-comissoes"><tr><td colspan="4" class="loading">Importe e calcule para ver os resultados</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title">3. Chips órfãos — atribuir vendedor</div>
+          <div class="table-sub" id="retro-orfaos-count" style="font-size:12px;color:var(--text2)"></div>
+        </div>
+        <div style="padding:4px;font-size:12px;color:var(--text2);margin-bottom:8px">
+          Chips ativados antes do período (sem vendedor conhecido). Conforme você descobrir quem ativou cada um, atribua aqui — o vínculo fica salvo e passa a valer para todas as recargas futuras.
+        </div>
+        <table>
+          <thead><tr><th>Número (MSISDN)</th><th>Atribuir a</th><th></th></tr></thead>
+          <tbody id="retro-orfaos"><tr><td colspan="3" class="loading">Nenhum órfão carregado</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
   </div><!-- /main-content -->
 </div><!-- /app-screen -->
 
@@ -1847,6 +1888,7 @@ function construirNav() {
     { page: 'inadimplencia', icon: '⚠', label: 'Inadimplência' },
     { page: 'churn', icon: '📉', label: 'Churn' },
     { page: 'promocoes-admin', icon: '🎯', label: 'Promoções' },
+    { page: 'retroativo', icon: '🧾', label: 'Comissão Retroativa' },
   ] : [
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
     ...(isVendedorPrincipal ? [
@@ -1890,6 +1932,7 @@ function navegarPara(page) {
   if (page === 'inadimplencia') loadInadimplencia();
   if (page === 'promocoes-admin') loadPromocoesAdmin();
   if (page === 'churn') loadChurn(60);
+  if (page === 'retroativo') loadRetroativoOrfaos();
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -3590,6 +3633,116 @@ async function enviarPixWhatsapp() {
     toast('PIX enviado por WhatsApp para ' + d.msisdn.replace('55','').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3'));
     fecharModal('modal-ver-pix');
   } catch (e) { toast(e.message, 'error'); }
+}
+
+// ── COMISSÃO RETROATIVA ───────────────────────────────────────────────────────
+let _retroVendedores = [];
+
+async function retroImportar() {
+  const file = document.getElementById('retro-file').files[0];
+  if (!file) { toast('Selecione a planilha primeiro','error'); return; }
+  const fd = new FormData();
+  fd.append('planilha', file);
+  const box = document.getElementById('retro-import-result');
+  box.innerHTML = '<div class="loading">Importando e criando vínculos...</div>';
+  try {
+    const r = await apiForm('POST', '/api/retroativo/importar', fd);
+    let html = `<div style="background:var(--bg3);border-radius:8px;padding:12px;font-size:13px;line-height:1.7">`;
+    html += `✅ <strong>${r.vinculos_registrados}</strong> chips vinculados ao vendedor que ativou<br>`;
+    html += `👤 <strong>${r.total_vendedores_criados}</strong> vendedores criados automaticamente<br>`;
+    html += `⚠ <strong>${r.orfaos_encontrados}</strong> chips órfãos (precisam de atribuição manual)`;
+    if (r.vendedores_criados.length) {
+      html += `<div style="margin-top:10px"><strong>Logins provisórios criados:</strong><br>`;
+      html += r.vendedores_criados.map(v => `• ${v.nome} — <code>${v.email}</code> / senha: <code>${v.senha}</code>`).join('<br>');
+      html += `</div>`;
+    }
+    html += `</div>`;
+    box.innerHTML = html;
+    toast('Importação concluída!');
+    loadRetroativoOrfaos();
+  } catch(e) {
+    box.innerHTML = '';
+    toast(e.message, 'error');
+  }
+}
+
+async function retroCalcular() {
+  const file = document.getElementById('retro-file').files[0];
+  if (!file) { toast('Selecione a planilha primeiro','error'); return; }
+  const fd = new FormData();
+  fd.append('planilha', file);
+  const tbody = document.getElementById('retro-comissoes');
+  tbody.innerHTML = '<tr><td colspan="4" class="loading">Calculando...</td></tr>';
+  try {
+    const r = await apiForm('POST', '/api/retroativo/calcular', fd);
+    const lista = r.por_vendedor || [];
+    if (!lista.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Nenhuma comissão apurada</td></tr>'; return; }
+    let html = lista.map(v => `<tr>
+      <td><strong>${v.vendedor}</strong></td>
+      <td>${v.ativacoes}</td>
+      <td>${v.recargas}</td>
+      <td><strong class="currency">R$ ${v.comissao.toFixed(2)}</strong></td>
+    </tr>`).join('');
+    if (r.sem_vendedor && (r.sem_vendedor.ativacoes || r.sem_vendedor.recargas)) {
+      html += `<tr style="opacity:0.7">
+        <td><em>Sem vendedor (órfãos)</em></td>
+        <td>${r.sem_vendedor.ativacoes}</td>
+        <td>${r.sem_vendedor.recargas}</td>
+        <td><em class="currency">R$ ${r.sem_vendedor.comissao.toFixed(2)}</em></td>
+      </tr>`;
+    }
+    tbody.innerHTML = html;
+    if (r.planos_nao_encontrados && r.planos_nao_encontrados.length) {
+      toast('Planos não cadastrados (ignorados): ' + r.planos_nao_encontrados.join(', '), 'info');
+    }
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Erro ao calcular</td></tr>';
+    toast(e.message, 'error');
+  }
+}
+
+async function loadRetroativoOrfaos() {
+  const tbody = document.getElementById('retro-orfaos');
+  tbody.innerHTML = '<tr><td colspan="3" class="loading">Carregando...</td></tr>';
+  try {
+    // carrega vendedores para o select
+    if (!_retroVendedores.length) {
+      _retroVendedores = await api('GET', '/api/vendedores');
+    }
+    const r = await api('GET', '/api/retroativo/orfaos');
+    const orfaos = r.orfaos || [];
+    document.getElementById('retro-orfaos-count').textContent = orfaos.length ? `${orfaos.length} chips sem vendedor` : 'Nenhum órfão';
+    if (!orfaos.length) { tbody.innerHTML = '<tr><td colspan="3" class="empty-state">Nenhum chip órfão 🎉</td></tr>'; return; }
+    const opts = _retroVendedores.map(v => `<option value="${v.id}">${v.nome}</option>`).join('');
+    tbody.innerHTML = orfaos.map(o => {
+      const fone = String(o.msisdn).replace(/^55/,'').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+      return `<tr data-msisdn="${o.msisdn}">
+        <td>${fone}</td>
+        <td><select class="retro-orfao-sel" style="font-size:13px"><option value="">-- Selecione --</option>${opts}</select></td>
+        <td><button class="btn btn-secondary btn-sm" onclick="retroAtribuir(this)">Atribuir</button></td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    tbody.innerHTML = '<tr><td colspan="3" class="empty-state">Erro ao carregar órfãos</td></tr>';
+  }
+}
+
+async function retroAtribuir(btn) {
+  const tr = btn.closest('tr');
+  const msisdn = tr.dataset.msisdn;
+  const vendedor_id = tr.querySelector('.retro-orfao-sel').value;
+  if (!vendedor_id) { toast('Selecione um vendedor','error'); return; }
+  btn.disabled = true; btn.textContent = '...';
+  try {
+    const r = await api('POST', '/api/retroativo/atribuir-orfao', { msisdn, vendedor_id });
+    toast(`Atribuído a ${r.vendedor}`);
+    tr.style.opacity = '0.4';
+    tr.querySelector('select').disabled = true;
+    btn.textContent = '✓ Feito';
+  } catch(e) {
+    btn.disabled = false; btn.textContent = 'Atribuir';
+    toast(e.message, 'error');
+  }
 }
 
 function navegarParaRecarga(msisdn) {
