@@ -695,6 +695,115 @@ function sqlFiltroPeriodoTransacoes(alias = 't', startParam = '$2', endParam = '
   )`;
 }
 
+function dataHojeRecifeISO() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Recife',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(new Date());
+  const get = type => parts.find(p => p.type === type)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function normalizarDataDashboardISO(value) {
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}-\d{2}$/.test(raw)) return `${raw}-01`;
+  const d = raw ? new Date(raw) : null;
+  if (d && !Number.isNaN(d.getTime())) return d.toISOString().substring(0, 10);
+  return dataHojeRecifeISO();
+}
+
+function dataBoletoISO(value) {
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.substring(0, 10);
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
+    const [dia, mes, ano] = raw.split('/');
+    return `${ano}-${mes}-${dia}`;
+  }
+  const d = raw ? new Date(raw) : null;
+  if (d && !Number.isNaN(d.getTime())) return d.toISOString().substring(0, 10);
+  return null;
+}
+
+function boletoPendente(boleto) {
+  return !(
+    boleto?.paid ||
+    boleto?.paymentDate ||
+    boleto?.paidAt ||
+    boleto?.status === 'PAID' ||
+    String(boleto?.status || '').toUpperCase() === 'PAID' ||
+    String(boleto?.status || '').toUpperCase() === 'PAGO'
+  );
+}
+
+async function calcularIndicadoresDiaPorEscopo({ campoEscopo = null, vendedorId = null, dataReferencia = null } = {}) {
+  const dataDia = normalizarDataDashboardISO(dataReferencia);
+  const params = [dataDia];
+  let filtroEscopo = '';
+
+  if (campoEscopo && vendedorId) {
+    params.push(vendedorId);
+    filtroEscopo = ` AND l.${campoEscopo} = $2`;
+  }
+
+  const { rows: linhasAtivasRows } = await pool.query(
+    `SELECT COUNT(DISTINCT l.id)::int AS total
+       FROM linhas l
+      WHERE LOWER(COALESCE(l.status, '')) IN ('ativa', 'active')
+        AND l.msisdn IS NOT NULL
+        AND (l.data_ativacao IS NULL OR l.data_ativacao::date <= $1::date)
+        ${filtroEscopo}`,
+    params
+  );
+
+  const { rows: linhas } = await pool.query(
+    `SELECT DISTINCT l.id, l.msisdn, l.documento_cliente
+       FROM linhas l
+      WHERE LOWER(COALESCE(l.status, '')) IN ('ativa', 'active')
+        AND l.msisdn IS NOT NULL
+        AND l.documento_cliente IS NOT NULL
+        AND (l.data_ativacao IS NULL OR l.data_ativacao::date <= $1::date)
+        ${filtroEscopo}`,
+    params
+  );
+
+  let vencimentos = 0;
+  let errosVencimentos = 0;
+  const docsConsultados = new Map();
+
+  for (const linha of linhas) {
+    try {
+      const doc = String(linha.documento_cliente || '').replace(/\D/g, '');
+      if (!doc) continue;
+      let lista = docsConsultados.get(doc);
+      if (!lista) {
+        const boletos = await boraGet(`/api/Subscriber/${doc}/billets`);
+        lista = Array.isArray(boletos) ? boletos : (boletos?.items || boletos?.billets || boletos?.data || []);
+        docsConsultados.set(doc, lista);
+        await aguardar(80);
+      }
+
+      const temVencimentoNoDia = lista.some(b => {
+        if (!boletoPendente(b)) return false;
+        const vencISO = dataBoletoISO(b.dueDate || b.expiration || b.vencimento || b.due_date);
+        return vencISO === dataDia;
+      });
+      if (temVencimentoNoDia) vencimentos++;
+    } catch (e) {
+      errosVencimentos++;
+    }
+  }
+
+  return {
+    data_referencia: dataDia,
+    linhas_ativas_dia: parseInt(linhasAtivasRows[0]?.total || 0, 10),
+    linhas_vencimento_dia: vencimentos,
+    erros_vencimentos: errosVencimentos
+  };
+}
+
 function dataReferenciaPlano(plano, fallback) {
   const valor = plano?.createdAt || plano?.activationDate || plano?.expiration || fallback || new Date().toISOString();
   const iso = String(valor);
@@ -1239,7 +1348,31 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
       paramsLinhas
     );
 
-    res.json({ transacoes, resumo, linhas });
+    const { rows: topClientes } = await pool.query(
+      `SELECT l.msisdn,
+              COALESCE(NULLIF(l.nome_cliente,''), 'Cliente sem nome') AS nome_cliente,
+              COALESCE(NULLIF(l.plano_nome,''), MAX(NULLIF(t.plano_nome,'')), 'Sem plano') AS plano_nome,
+              COUNT(t.id)::int AS quantidade_recargas,
+              COALESCE(SUM(t.comissao), 0) AS total_comissao_recargas,
+              COALESCE(SUM(t.valor_plano), 0) AS total_valor_planos,
+              MAX(COALESCE(t.periodo_referencia, t.data_transacao::date::text)) AS ultima_recarga
+         FROM linhas l
+         JOIN transacoes t ON t.linha_id = l.id
+        WHERE t.${campoEscopo} = $1
+          AND t.tipo = 'recarga'${filtroTransacoes}
+        GROUP BY l.id, l.msisdn, l.nome_cliente, l.plano_nome
+        ORDER BY COUNT(t.id) DESC, COALESCE(SUM(t.comissao), 0) DESC
+        LIMIT 5`,
+      params
+    );
+
+    const indicadoresDia = await calcularIndicadoresDiaPorEscopo({
+      campoEscopo,
+      vendedorId,
+      dataReferencia: data_fim || dataHojeRecifeISO()
+    });
+
+    res.json({ transacoes, resumo, linhas, top_clientes: topClientes, indicadores_dia: indicadoresDia });
   } catch (e) {
     console.error('[RELATORIO VENDEDOR]', e.message, e.stack);
     res.status(500).json({ erro: e.message });
@@ -1271,6 +1404,31 @@ app.get('/api/relatorio/geral', authMiddleware, adminOnly, async (req, res) => {
       params
     );
     res.json(rows);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.get('/api/dashboard/indicadores-dia', authMiddleware, async (req, res) => {
+  try {
+    const dataReferencia = req.query.data || req.query.data_fim || dataHojeRecifeISO();
+    let campoEscopo = null;
+    let vendedorId = null;
+
+    if (req.user.role === 'admin') {
+      if (req.query.vendedor_id) {
+        vendedorId = parseInt(req.query.vendedor_id, 10);
+        const { rows } = await pool.query('SELECT role FROM vendedores WHERE id=$1', [vendedorId]);
+        if (!rows.length) return res.status(404).json({ erro: 'Vendedor não encontrado' });
+        campoEscopo = rows[0].role === 'subvendedor' ? 'subvendedor_id' : 'vendedor_id';
+      }
+    } else {
+      vendedorId = parseInt(req.user.id, 10);
+      campoEscopo = req.user.role === 'subvendedor' ? 'subvendedor_id' : 'vendedor_id';
+    }
+
+    const indicadores = await calcularIndicadoresDiaPorEscopo({ campoEscopo, vendedorId, dataReferencia });
+    res.json({ ok: true, ...indicadores });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
