@@ -806,6 +806,133 @@ async function calcularIndicadoresDiaPorEscopo({ campoEscopo = null, vendedorId 
   };
 }
 
+
+function dataEventoPlanoBora(plano, fallback) {
+  const raw = String(
+    plano?.createdAt ||
+    plano?.activationDate ||
+    plano?.activatedAt ||
+    plano?.startDate ||
+    plano?.date ||
+    plano?.expiration ||
+    fallback ||
+    ''
+  ).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.substring(0, 10);
+  if (/^\d{4}-\d{2}$/.test(raw)) return `${raw}-01`;
+  const d = raw ? new Date(raw) : null;
+  if (d && !Number.isNaN(d.getTime())) return d.toISOString().substring(0, 10);
+  return null;
+}
+
+function dataDentroPeriodo(dataISO, inicio, fim) {
+  if (!dataISO) return false;
+  const data = String(dataISO).substring(0, 10);
+  if (inicio && data < inicio) return false;
+  if (fim && data > fim) return false;
+  return true;
+}
+
+async function calcularReceitaMoveBoraPeriodo({ dataInicio, dataFim }) {
+  const mapas = await carregarMapasComissaoPlanos();
+  const inicio = dataInicio || null;
+  const fim = dataFim || dataHojeRecifeISO();
+
+  const { rows: linhas } = await pool.query(
+    `SELECT DISTINCT ON (regexp_replace(COALESCE(msisdn,''), '\\D', '', 'g'))
+            id, msisdn, iccid, data_ativacao, plano_id, plano_nome
+       FROM linhas
+      WHERE msisdn IS NOT NULL
+        AND regexp_replace(COALESCE(msisdn,''), '\\D', '', 'g') <> ''
+      ORDER BY regexp_replace(COALESCE(msisdn,''), '\\D', '', 'g'), id DESC`
+  );
+
+  let receitaMove = 0;
+  let ativacoesBora = 0;
+  let recargasBora = 0;
+  let linhasConsultadas = 0;
+  let linhasComErro = 0;
+  let eventosSemPlanoConfigurado = 0;
+
+  for (const linha of linhas) {
+    const msisdnBora = normalizarMsisdnParaBora(linha.msisdn);
+    if (!msisdnBora || msisdnBora.length < 12) continue;
+
+    let details;
+    try {
+      details = await boraGet(`/api/Subscription/${msisdnBora}/details`);
+      linhasConsultadas++;
+      await aguardar(80);
+    } catch (e) {
+      linhasComErro++;
+      continue;
+    }
+
+    const planArray = Array.isArray(details?.plan) ? details.plan : [];
+    const activationDate = dataEventoPlanoBora(null, details?.activationDate || linha.data_ativacao);
+    const linhaRetroativa = String(linha.iccid || '').toLowerCase().startsWith('retroativo-');
+
+    if (planArray.length) {
+      for (let i = 0; i < planArray.length; i++) {
+        const plano = planArray[i];
+        const tipo = i === 0 ? 'ativacao' : 'recarga';
+        if (linhaRetroativa && tipo === 'ativacao') continue;
+
+        const dataEvento = i === 0
+          ? dataEventoPlanoBora(plano, activationDate)
+          : dataEventoPlanoBora(plano, null);
+
+        if (!dataDentroPeriodo(dataEvento, inicio, fim)) continue;
+
+        const cfg = localizarPlanoComissao(mapas, plano?.planId || plano?.id || plano?.idPlanExternal, plano?.name || plano?.nome);
+        if (!cfg) {
+          eventosSemPlanoConfigurado++;
+          continue;
+        }
+
+        const valorComissao = tipo === 'ativacao'
+          ? Number(cfg.comissao_ativacao || 0)
+          : Number(cfg.comissao_recarga || 0);
+
+        if (valorComissao <= 0) continue;
+        receitaMove += valorComissao;
+        if (tipo === 'ativacao') ativacoesBora++;
+        if (tipo === 'recarga') recargasBora++;
+      }
+      continue;
+    }
+
+    // Fallback conservador: se a Bora não retornar array de planos, conta apenas a ativação
+    // pelo plano atual da linha/detalhes, desde que a data de ativação esteja no período.
+    if (!linhaRetroativa && dataDentroPeriodo(activationDate, inicio, fim)) {
+      const cfg = localizarPlanoComissao(
+        mapas,
+        details?.planData?.id || details?.planId || linha.plano_id,
+        details?.planData?.name || details?.planName || linha.plano_nome
+      );
+      if (cfg) {
+        const valorComissao = Number(cfg.comissao_ativacao || 0);
+        if (valorComissao > 0) {
+          receitaMove += valorComissao;
+          ativacoesBora++;
+        }
+      } else {
+        eventosSemPlanoConfigurado++;
+      }
+    }
+  }
+
+  return {
+    receita_move_periodo: receitaMove,
+    ativacoes_bora_periodo: ativacoesBora,
+    recargas_bora_periodo: recargasBora,
+    linhas_consultadas_bora: linhasConsultadas,
+    linhas_com_erro_bora: linhasComErro,
+    eventos_sem_plano_configurado: eventosSemPlanoConfigurado,
+    fonte_receita_move: 'bora_subscription_details'
+  };
+}
+
 function dataReferenciaPlano(plano, fallback) {
   const valor = plano?.createdAt || plano?.activationDate || plano?.expiration || fallback || new Date().toISOString();
   const iso = String(valor);
@@ -1422,23 +1549,10 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
     const dataInicio = req.query.data_inicio || null;
     const dataFim = req.query.data_fim || null;
 
-    const paramsTx = [];
-    let filtroTx = '';
-    if (dataInicio && dataFim) {
-      paramsTx.push(dataInicio, dataFim);
-      filtroTx = sqlFiltroPeriodoTransacoes('t', '$1', '$2');
-    }
-
-    const { rows: receitaRows } = await pool.query(
-      `SELECT COALESCE(SUM(t.comissao), 0) AS receita_move,
-              COUNT(CASE WHEN t.tipo='ativacao' THEN 1 END)::int AS ativacoes_comissionadas,
-              COUNT(CASE WHEN t.tipo='recarga' THEN 1 END)::int AS recargas_comissionadas
-         FROM transacoes t
-         LEFT JOIN linhas l ON l.id = t.linha_id
-        WHERE 1=1${filtroTx}
-          AND NOT (t.tipo='ativacao' AND COALESCE(l.iccid, '') ILIKE 'retroativo-%')`,
-      paramsTx
-    );
+    // Receita Move no período deve vir da Bora, não apenas das transações locais.
+    // Regra: para cada ativação/recarga listada na Bora no período, a receita da Move
+    // é igual à comissão configurada daquele plano em Planos & Comissões.
+    const receitaBora = await calcularReceitaMoveBoraPeriodo({ dataInicio, dataFim });
 
     const paramsLinhas = [];
     let filtroLinhasPeriodo = '';
@@ -1465,9 +1579,13 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
 
     res.json({
       ok: true,
-      receita_move_periodo: Number(receitaRows[0]?.receita_move || 0),
-      ativacoes_comissionadas: Number(receitaRows[0]?.ativacoes_comissionadas || 0),
-      recargas_comissionadas: Number(receitaRows[0]?.recargas_comissionadas || 0),
+      receita_move_periodo: Number(receitaBora.receita_move_periodo || 0),
+      ativacoes_comissionadas: Number(receitaBora.ativacoes_bora_periodo || 0),
+      recargas_comissionadas: Number(receitaBora.recargas_bora_periodo || 0),
+      linhas_consultadas_bora: Number(receitaBora.linhas_consultadas_bora || 0),
+      linhas_com_erro_bora: Number(receitaBora.linhas_com_erro_bora || 0),
+      eventos_sem_plano_configurado: Number(receitaBora.eventos_sem_plano_configurado || 0),
+      fonte_receita_move: receitaBora.fonte_receita_move,
       total_linhas_base: base,
       linhas_ativas_base: Number(linhasRows[0]?.linhas_ativas || 0),
       linhas_inadimplentes: inad,
