@@ -1260,6 +1260,16 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
 
     if (!clientId) throw new Error('Não foi possível obter clientId do subscriber');
 
+    // Confirma na Bora que o ICCID está realmente disponível antes de prosseguir.
+    // Vale para eSIM e físico — evita o erro genérico "ICCID não está disponível".
+    if (cartPayload.iccid && await esimJaUsadoNaBora(cartPayload.iccid)) {
+      await pool.query(
+        "UPDATE esims SET status='usado', usado_em=NOW() WHERE iccid=$1 AND status='disponivel'",
+        [cartPayload.iccid]
+      ).catch(() => null);
+      return res.status(409).json({ erro: 'Este ICCID já foi utilizado e foi removido do estoque. Selecione outro.' });
+    }
+
     const cartBody = {
       iccid: cartPayload.iccid,
       ddd: cartPayload.ddd,
@@ -1700,18 +1710,18 @@ app.post('/api/esim/importar', authMiddleware, adminOnly, uploadMem.single('plan
   }
 });
 
-// Verifica na Bora se um ICCID já está em uso (vinculado a um assinante ativo)
+// Verifica na Bora se um ICCID já está em uso.
+// Resposta real da Bora no endpoint /iccid: { status: "IN_USE" | "AVAILABLE", iccid, ... }
 async function esimJaUsadoNaBora(iccid) {
   try {
     const data = await boraGet(`/api/Subscriber/${encodeURIComponent(iccid)}/iccid`);
-    // Se retornou um assinante com msisdn, o chip já está em uso
-    const msisdn = data?.msisdn || data?.subscriber?.msisdn || null;
-    const ativo  = data?.active === true || data?.status === 'ACTIVE' || !!msisdn;
-    return ativo;
+    const status = String(data?.status || '').toUpperCase();
+    // Só marca como usado quando a Bora informa explicitamente um estado de uso.
+    // Estados conhecidos de indisponibilidade: IN_USE, USED, ACTIVE, BLOCKED, CANCELED.
+    const usado = ['IN_USE', 'USED', 'ACTIVE', 'BLOCKED', 'CANCELED', 'CANCELLED', 'SUSPENDED'].includes(status);
+    return usado;
   } catch (e) {
-    // 404 = ICCID livre (não vinculado a ninguém)
-    if (e.response?.status === 404) return false;
-    // Qualquer outro erro: não bloqueia, considera disponível (não remove indevidamente)
+    // Erro de consulta (404, rede): não remove para não tirar eSIM bom por engano.
     return false;
   }
 }
