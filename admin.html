@@ -894,8 +894,8 @@ select option { background: var(--bg3); }
       <div class="table-card">
         <div class="table-header"><div class="table-title">Minhas Linhas Ativas</div></div>
         <table>
-          <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Ativação</th><th>Última Checagem</th></tr></thead>
-          <tbody id="mp-linhas"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
+          <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão Ativ.</th><th>Comissão Rec.</th><th>Total Comissão</th><th>Ativação</th><th>Última Checagem</th></tr></thead>
+          <tbody id="mp-linhas"><tr><td colspan="10" class="loading">Carregando...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -2555,14 +2555,18 @@ async function loadMeuPainel() {
 
     const linhasBody = document.getElementById('mp-linhas');
     if (!dados.linhas.length) {
-      linhasBody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha ativa</p></td></tr>`;
+      linhasBody.innerHTML = `<tr><td colspan="10" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha ativa</p></td></tr>`;
     } else {
       linhasBody.innerHTML = dados.linhas.map(l => `<tr>
         <td class="mono">${l.iccid}</td>
         <td class="mono">${l.msisdn||'—'}</td>
         <td>${l.nome_cliente||'—'}</td>
         <td>${l.plano_nome||'—'}</td>
-        <td>${new Date(l.data_ativacao).toLocaleDateString('pt-BR')}</td>
+        <td class="currency">R$ ${parseFloat(l.plano_valor||0).toFixed(2)}</td>
+        <td class="currency">R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}</td>
+        <td class="currency">R$ ${parseFloat(l.comissao_recarga||0).toFixed(2)}</td>
+        <td class="currency">R$ ${parseFloat(l.total_comissao||0).toFixed(2)}</td>
+        <td>${l.data_ativacao ? new Date(l.data_ativacao).toLocaleDateString('pt-BR') : '—'}</td>
         <td class="text-muted">${l.ultima_checagem?new Date(l.ultima_checagem).toLocaleString('pt-BR'):'Nunca'}</td>
       </tr>`).join('');
     }

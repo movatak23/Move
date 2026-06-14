@@ -880,42 +880,120 @@ app.post('/api/planos-comissao', authMiddleware, adminOnly, async (req, res) => 
 // ─── RELATÓRIOS ───────────────────────────────────────────────────────────────
 app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
   try {
-    const vendedorId = req.params.id;
-    const isSubvendedorProprio = req.user.role === 'subvendedor' && parseInt(req.user.id) === parseInt(vendedorId);
-    if (req.user.role !== 'admin' && parseInt(req.user.id) !== parseInt(vendedorId)) {
+    const vendedorId = parseInt(req.params.id, 10);
+    if (!vendedorId) return res.status(400).json({ erro: 'Vendedor inválido' });
+
+    // Segurança: vendedor/subvendedor só acessa o próprio painel. Admin pode consultar qualquer vendedor.
+    if (req.user.role !== 'admin' && parseInt(req.user.id, 10) !== vendedorId) {
       return res.status(403).json({ erro: 'Acesso negado' });
     }
+
+    const { rows: alvoRows } = await pool.query('SELECT id, role FROM vendedores WHERE id=$1', [vendedorId]);
+    if (!alvoRows.length) return res.status(404).json({ erro: 'Vendedor não encontrado' });
+
+    const alvoRole = alvoRows[0].role;
+    const campoEscopo = alvoRole === 'subvendedor' ? 'subvendedor_id' : 'vendedor_id';
     const { data_inicio, data_fim } = req.query;
+
+    // 1) Garante que toda linha do vendedor tenha uma transação de ativação.
+    // Isso evita painel vazio quando a linha existe, mas a comissão/ativação não foi registrada em transacoes.
+    await pool.query(
+      `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, data_transacao, fonte)
+       SELECT l.id,
+              l.vendedor_id,
+              l.subvendedor_id,
+              'ativacao',
+              l.plano_id,
+              COALESCE(l.plano_nome, pc.plano_nome),
+              pc.plano_valor,
+              COALESCE(pc.comissao_ativacao, 0),
+              COALESCE(l.data_ativacao, NOW()),
+              'sistema'
+         FROM linhas l
+         LEFT JOIN planos_comissao pc ON pc.plano_id::text = l.plano_id::text
+        WHERE l.${campoEscopo} = $1
+          AND NOT EXISTS (
+            SELECT 1 FROM transacoes t
+             WHERE t.linha_id = l.id
+               AND t.tipo = 'ativacao'
+          )`,
+      [vendedorId]
+    );
+
+    // 2) Preenche comissões zeradas/nulas a partir da tabela planos_comissao.
+    // Não altera comissões já preenchidas manualmente.
+    await pool.query(
+      `UPDATE transacoes t
+          SET comissao = CASE
+                WHEN t.tipo = 'ativacao' AND COALESCE(pc.comissao_ativacao, 0) > 0 THEN pc.comissao_ativacao
+                WHEN t.tipo = 'recarga'   AND COALESCE(pc.comissao_recarga, 0) > 0 THEN pc.comissao_recarga
+                ELSE t.comissao
+              END,
+              valor_plano = COALESCE(t.valor_plano, pc.plano_valor),
+              plano_nome = COALESCE(NULLIF(t.plano_nome, ''), pc.plano_nome)
+         FROM planos_comissao pc
+        WHERE pc.plano_id::text = t.plano_id::text
+          AND t.${campoEscopo} = $1
+          AND COALESCE(t.comissao, 0) = 0`,
+      [vendedorId]
+    );
+
     const params = [vendedorId];
-    let filtro = '';
+    let filtroTransacoes = '';
     if (data_inicio && data_fim) {
-      filtro = ` AND (
+      filtroTransacoes = ` AND (
         CASE WHEN t.fonte IN ('retroativo','bora_details','bora_polling')
-          THEN t.periodo_referencia BETWEEN $2 AND $3
+          THEN COALESCE(t.periodo_referencia, t.data_transacao::date::text) BETWEEN $2 AND $3
           ELSE t.data_transacao::date::text BETWEEN $2 AND $3
         END
       )`;
       params.push(data_inicio, data_fim);
     }
+
     const { rows: transacoes } = await pool.query(
-      `SELECT t.*, l.msisdn, l.nome_cliente, l.iccid
-       FROM transacoes t
-       LEFT JOIN linhas l ON l.id = t.linha_id
-       WHERE ${isSubvendedorProprio ? 't.subvendedor_id' : 't.vendedor_id'} = $1${filtro}
-       ORDER BY COALESCE(t.periodo_referencia, t.data_transacao::date::text) DESC`,
+      `SELECT t.*, l.msisdn, l.nome_cliente, l.iccid,
+              COALESCE(t.valor_plano, pc.plano_valor) AS valor_plano,
+              COALESCE(NULLIF(t.plano_nome, ''), l.plano_nome, pc.plano_nome) AS plano_nome
+         FROM transacoes t
+         LEFT JOIN linhas l ON l.id = t.linha_id
+         LEFT JOIN planos_comissao pc ON pc.plano_id::text = COALESCE(t.plano_id, l.plano_id)::text
+        WHERE t.${campoEscopo} = $1${filtroTransacoes}
+        ORDER BY COALESCE(t.periodo_referencia, t.data_transacao::date::text) DESC`,
       params
     );
-    const filtroResumo = filtro.replace(/t\./g, '');
+
+    const filtroResumo = filtroTransacoes.replace(/t\./g, '');
     const { rows: resumo } = await pool.query(
       `SELECT tipo, COUNT(*) as quantidade, COALESCE(SUM(comissao),0) as total_comissao
-       FROM transacoes WHERE ${isSubvendedorProprio ? 'subvendedor_id' : 'vendedor_id'}=$1${filtroResumo}
-       GROUP BY tipo`,
+         FROM transacoes
+        WHERE ${campoEscopo}=$1${filtroResumo}
+        GROUP BY tipo`,
       params
     );
+
+    const paramsLinhas = [vendedorId];
+    let filtroLinhas = '';
+    if (data_inicio && data_fim) {
+      filtroLinhas = ' AND l.data_ativacao::date::text BETWEEN $2 AND $3';
+      paramsLinhas.push(data_inicio, data_fim);
+    }
+
     const { rows: linhas } = await pool.query(
-      `SELECT * FROM linhas WHERE ${isSubvendedorProprio ? 'subvendedor_id' : 'vendedor_id'}=$1 ORDER BY data_ativacao DESC`,
-      [vendedorId]
+      `SELECT l.*,
+              COALESCE(pc.plano_valor, 0) AS plano_valor,
+              COALESCE(SUM(CASE WHEN t.tipo='ativacao' THEN t.comissao ELSE 0 END), 0) AS comissao_ativacao,
+              COALESCE(SUM(CASE WHEN t.tipo='recarga' THEN t.comissao ELSE 0 END), 0) AS comissao_recarga,
+              COALESCE(SUM(t.comissao), 0) AS total_comissao,
+              COUNT(t.id) AS total_transacoes
+         FROM linhas l
+         LEFT JOIN planos_comissao pc ON pc.plano_id::text = l.plano_id::text
+         LEFT JOIN transacoes t ON t.linha_id = l.id
+        WHERE l.${campoEscopo} = $1${filtroLinhas}
+        GROUP BY l.id, pc.plano_valor
+        ORDER BY l.data_ativacao DESC`,
+      paramsLinhas
     );
+
     res.json({ transacoes, resumo, linhas });
   } catch (e) {
     console.error('[RELATORIO VENDEDOR]', e.message, e.stack);
