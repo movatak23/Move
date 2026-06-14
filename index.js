@@ -1011,7 +1011,7 @@ app.get('/api/relatorio/geral', authMiddleware, adminOnly, async (req, res) => {
       params.push(data_inicio, data_fim + ' 23:59:59');
     }
     const { rows } = await pool.query(
-      `SELECT v.nome, v.email,
+      `SELECT v.id AS vendedor_id, v.nome, v.email,
         COUNT(DISTINCT CASE WHEN t.tipo='ativacao' THEN t.id END) as ativacoes,
         COUNT(DISTINCT CASE WHEN t.tipo='recarga' THEN t.id END) as recargas,
         COALESCE(SUM(CASE WHEN t.tipo='ativacao' THEN t.comissao END),0) as comissao_ativacao,

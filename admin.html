@@ -666,9 +666,48 @@ select option { background: var(--bg3); }
         </div>
         <table>
           <thead><tr>
-            <th>Vendedor</th><th>Ativações</th><th>Recargas</th><th>Comissão Ativ.</th><th>Comissão Rec.</th><th>Total</th>
+            <th>Vendedor</th><th>Ativações</th><th>Recargas</th><th>Comissão Ativ.</th><th>Comissão Rec.</th><th>Total</th><th>Ações</th>
           </tr></thead>
           <tbody id="dash-tabela"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+
+
+    <!-- ── DETALHE DO VENDEDOR (ADMIN) ───────────── -->
+    <div class="page" id="page-vendedor-detalhe">
+      <div class="page-header">
+        <div>
+          <div class="page-title" id="vd-title">Resumo do Vendedor</div>
+          <div class="page-sub" id="vd-sub">Vendas, recargas e comissões do vendedor selecionado</div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+          <input type="date" id="vd-inicio" style="width:150px">
+          <input type="date" id="vd-fim" style="width:150px">
+          <button class="btn btn-secondary" onclick="recarregarDetalheVendedor()">Filtrar</button>
+          <button class="btn btn-primary" onclick="exportarRelatorioVendedorPDF()">📄 Relatório completo</button>
+          <button class="btn btn-secondary" onclick="voltarDashboardVendedores()">← Voltar</button>
+        </div>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-label">Ativações</div><div class="stat-value" id="vd-ativ">—</div></div>
+        <div class="stat-card blue"><div class="stat-label">Recargas</div><div class="stat-value" id="vd-rec">—</div></div>
+        <div class="stat-card yellow"><div class="stat-label">Total Comissão</div><div class="stat-value" id="vd-com">—</div></div>
+        <div class="stat-card"><div class="stat-label">Linhas Vinculadas</div><div class="stat-value" id="vd-linhas-total">—</div></div>
+      </div>
+      <div class="table-card">
+        <div class="table-header"><div class="table-title">Resumo das Linhas</div></div>
+        <table>
+          <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão Ativ.</th><th>Comissão Rec.</th><th>Total</th><th>Ativação</th></tr></thead>
+          <tbody id="vd-linhas"><tr><td colspan="9" class="loading">Selecione um vendedor no dashboard</td></tr></tbody>
+        </table>
+      </div>
+      <div class="table-card">
+        <div class="table-header"><div class="table-title">Histórico de Transações</div></div>
+        <table>
+          <thead><tr><th>Data</th><th>Tipo</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão</th></tr></thead>
+          <tbody id="vd-transacoes"><tr><td colspan="7" class="loading">Selecione um vendedor no dashboard</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1820,16 +1859,166 @@ async function loadDashboard() {
     document.getElementById('st-recargas').textContent = totRec;
     document.getElementById('st-comissoes').textContent = 'R$'+totCom.toFixed(2);
     const tbody = document.getElementById('dash-tabela');
-    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">📊</div><p>Nenhum dado no período</p></td></tr>`; return; }
-    tbody.innerHTML = dados.map(r => `<tr>
+    if (!dados.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="ico">📊</div><p>Nenhum dado no período</p></td></tr>`; return; }
+    tbody.innerHTML = dados.map(r => `<tr class="dash-vendedor-row" style="cursor:pointer" data-vendedor-id="${r.vendedor_id}" data-vendedor-nome="${escapeHtmlAttr(r.nome)}" data-vendedor-email="${escapeHtmlAttr(r.email)}" onclick="abrirDetalheVendedorFromRow(this)">
       <td><strong>${r.nome}</strong><br><small class="text-muted">${r.email}</small></td>
       <td>${r.ativacoes}</td>
       <td>${r.recargas}</td>
       <td class="currency">R$ ${parseFloat(r.comissao_ativacao||0).toFixed(2)}</td>
       <td class="currency">R$ ${parseFloat(r.comissao_recarga||0).toFixed(2)}</td>
       <td><strong class="currency">R$ ${parseFloat(r.total_comissao||0).toFixed(2)}</strong></td>
+      <td><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();abrirDetalheVendedor(${r.vendedor_id}, this.closest('tr').dataset.vendedorNome, this.closest('tr').dataset.vendedorEmail)">Ver</button></td>
     </tr>`).join('');
   } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── DETALHE DO VENDEDOR NO DASHBOARD ─────────────────────────────────────────
+let vendedorDetalheAtual = null;
+let vendedorDetalheDados = null;
+
+function escapeHtmlAttr(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function abrirDetalheVendedorFromRow(row) {
+  abrirDetalheVendedor(row.dataset.vendedorId, row.dataset.vendedorNome, row.dataset.vendedorEmail);
+}
+
+async function abrirDetalheVendedor(id, nome, email) {
+  if (!id) return toast('Vendedor inválido', 'error');
+  vendedorDetalheAtual = { id, nome: nome || 'Vendedor', email: email || '' };
+  const iniDash = document.getElementById('dash-inicio')?.value || '';
+  const fimDash = document.getElementById('dash-fim')?.value || '';
+  document.getElementById('vd-inicio').value = iniDash;
+  document.getElementById('vd-fim').value = fimDash;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-vendedor-detalhe')?.classList.add('active');
+  state.currentPage = 'vendedor-detalhe';
+  await carregarDetalheVendedor();
+}
+
+async function recarregarDetalheVendedor() {
+  if (!vendedorDetalheAtual) return toast('Selecione um vendedor no dashboard', 'error');
+  await carregarDetalheVendedor();
+}
+
+async function carregarDetalheVendedor() {
+  const v = vendedorDetalheAtual;
+  if (!v) return;
+  const ini = document.getElementById('vd-inicio').value;
+  const fim = document.getElementById('vd-fim').value;
+  document.getElementById('vd-title').textContent = `Resumo — ${v.nome}`;
+  document.getElementById('vd-sub').textContent = v.email || 'Vendas, recargas e comissões do vendedor selecionado';
+  document.getElementById('vd-linhas').innerHTML = `<tr><td colspan="9" class="loading">Carregando linhas...</td></tr>`;
+  document.getElementById('vd-transacoes').innerHTML = `<tr><td colspan="7" class="loading">Carregando transações...</td></tr>`;
+  try {
+    const dados = await api('GET', `/api/relatorio/vendedor/${v.id}?data_inicio=${ini}&data_fim=${fim}`);
+    vendedorDetalheDados = dados;
+    const ativ = dados.resumo.find(r=>r.tipo==='ativacao');
+    const rec = dados.resumo.find(r=>r.tipo==='recarga');
+    const totalComissao = dados.resumo.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
+    document.getElementById('vd-ativ').textContent = ativ?.quantidade || 0;
+    document.getElementById('vd-rec').textContent = rec?.quantidade || 0;
+    document.getElementById('vd-com').textContent = 'R$'+totalComissao.toFixed(2);
+    document.getElementById('vd-linhas-total').textContent = dados.linhas?.length || 0;
+
+    const linhasBody = document.getElementById('vd-linhas');
+    if (!dados.linhas || !dados.linhas.length) {
+      linhasBody.innerHTML = `<tr><td colspan="9" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha vinculada no período</p></td></tr>`;
+    } else {
+      linhasBody.innerHTML = dados.linhas.map(l => `<tr>
+        <td class="mono">${l.iccid || '—'}</td>
+        <td class="mono">${l.msisdn || '—'}</td>
+        <td>${l.nome_cliente || '—'}</td>
+        <td>${l.plano_nome || '—'}</td>
+        <td class="currency">R$ ${parseFloat(l.plano_valor||0).toFixed(2)}</td>
+        <td class="currency">R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}</td>
+        <td class="currency">R$ ${parseFloat(l.comissao_recarga||0).toFixed(2)}</td>
+        <td><strong class="currency">R$ ${parseFloat(l.total_comissao||0).toFixed(2)}</strong></td>
+        <td>${l.data_ativacao ? new Date(l.data_ativacao).toLocaleDateString('pt-BR') : '—'}</td>
+      </tr>`).join('');
+    }
+
+    const transBody = document.getElementById('vd-transacoes');
+    if (!dados.transacoes || !dados.transacoes.length) {
+      transBody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="ico">📋</div><p>Nenhuma transação no período</p></td></tr>`;
+    } else {
+      transBody.innerHTML = dados.transacoes.map(t => `<tr>
+        <td class="mono">${t.data_transacao ? new Date(t.data_transacao).toLocaleDateString('pt-BR') : (t.periodo_referencia || '—')}</td>
+        <td><span class="badge ${t.tipo==='ativacao'?'badge-green':'badge-blue'}">${t.tipo}</span></td>
+        <td class="mono">${t.msisdn || '—'}</td>
+        <td>${t.nome_cliente || '—'}</td>
+        <td>${t.plano_nome || '—'}</td>
+        <td class="currency">R$ ${parseFloat(t.valor_plano||0).toFixed(2)}</td>
+        <td class="currency">R$ ${parseFloat(t.comissao||0).toFixed(2)}</td>
+      </tr>`).join('');
+    }
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function voltarDashboardVendedores() {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-dashboard')?.classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('nav-dashboard')?.classList.add('active');
+  state.currentPage = 'dashboard';
+}
+
+function exportarRelatorioVendedorPDF() {
+  if (!vendedorDetalheAtual || !vendedorDetalheDados) return toast('Abra o resumo de um vendedor primeiro', 'error');
+  const { jsPDF } = window.jspdf || {};
+  if (!jsPDF) return toast('Biblioteca de PDF não carregada', 'error');
+  const doc = new jsPDF({ orientation: 'landscape' });
+  const v = vendedorDetalheAtual;
+  const dados = vendedorDetalheDados;
+  const ini = document.getElementById('vd-inicio').value || 'início';
+  const fim = document.getElementById('vd-fim').value || 'hoje';
+  const ativ = dados.resumo.find(r=>r.tipo==='ativacao');
+  const rec = dados.resumo.find(r=>r.tipo==='recarga');
+  const totalComissao = dados.resumo.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
+
+  doc.setFontSize(16);
+  doc.text('Relatório completo do vendedor', 14, 16);
+  doc.setFontSize(10);
+  doc.text(`Vendedor: ${v.nome}${v.email ? ' — ' + v.email : ''}`, 14, 24);
+  doc.text(`Período: ${ini} até ${fim}`, 14, 30);
+  doc.text(`Ativações: ${ativ?.quantidade || 0} | Recargas: ${rec?.quantidade || 0} | Linhas: ${dados.linhas?.length || 0} | Comissão total: R$ ${totalComissao.toFixed(2)}`, 14, 36);
+
+  doc.autoTable({
+    startY: 44,
+    head: [['ICCID','MSISDN','Cliente','Plano','Valor Plano','Comissão Ativ.','Comissão Rec.','Total','Ativação']],
+    body: (dados.linhas || []).map(l => [
+      l.iccid || '—', l.msisdn || '—', l.nome_cliente || '—', l.plano_nome || '—',
+      `R$ ${parseFloat(l.plano_valor||0).toFixed(2)}`,
+      `R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}`,
+      `R$ ${parseFloat(l.comissao_recarga||0).toFixed(2)}`,
+      `R$ ${parseFloat(l.total_comissao||0).toFixed(2)}`,
+      l.data_ativacao ? new Date(l.data_ativacao).toLocaleDateString('pt-BR') : '—'
+    ]),
+    styles: { fontSize: 7 },
+    headStyles: { fontSize: 7 }
+  });
+
+  doc.autoTable({
+    startY: (doc.lastAutoTable?.finalY || 44) + 8,
+    head: [['Data','Tipo','MSISDN','Cliente','Plano','Valor Plano','Comissão']],
+    body: (dados.transacoes || []).map(t => [
+      t.data_transacao ? new Date(t.data_transacao).toLocaleDateString('pt-BR') : (t.periodo_referencia || '—'),
+      t.tipo || '—', t.msisdn || '—', t.nome_cliente || '—', t.plano_nome || '—',
+      `R$ ${parseFloat(t.valor_plano||0).toFixed(2)}`,
+      `R$ ${parseFloat(t.comissao||0).toFixed(2)}`
+    ]),
+    styles: { fontSize: 7 },
+    headStyles: { fontSize: 7 }
+  });
+
+  const nomeArquivo = `relatorio-vendedor-${String(v.nome||'vendedor').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'') || v.id}.pdf`;
+  doc.save(nomeArquivo);
 }
 
 // ── VENDEDORES ────────────────────────────────────────────────────────────────
