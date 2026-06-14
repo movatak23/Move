@@ -25,9 +25,17 @@ const pool = new Pool({
 // ─── Config ───────────────────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET || 'bora-vendas-secret-2024';
 const MOVE_APP_KEY        = process.env.MOVE_APP_KEY        || 'move-app-2026';
-const MOVE_ZAPI_INSTANCE  = process.env.MOVE_ZAPI_INSTANCE  || '3F3A6D855AFBB2BDF16E7E7503EF1C64';
-const MOVE_ZAPI_TOKEN     = process.env.MOVE_ZAPI_TOKEN     || 'ABDF61CE9B2A8A340C5FF549';
-const MOVE_ZAPI_CLIENT_TOKEN = process.env.MOVE_ZAPI_CLIENT_TOKEN || '';
+// Z-API: sanitiza variáveis de ambiente para evitar falhas por espaços/quebras de linha.
+// Também aceita aliases comuns para facilitar deploys onde o nome foi cadastrado diferente.
+const MOVE_ZAPI_INSTANCE  = String(process.env.MOVE_ZAPI_INSTANCE || process.env.ZAPI_INSTANCE || '').trim() || '3F3A6D855AFBB2BDF16E7E7503EF1C64';
+const MOVE_ZAPI_TOKEN     = String(process.env.MOVE_ZAPI_TOKEN || process.env.ZAPI_TOKEN || '').trim() || 'ABDF61CE9B2A8A340C5FF549';
+const MOVE_ZAPI_CLIENT_TOKEN = String(
+  process.env.MOVE_ZAPI_CLIENT_TOKEN ||
+  process.env.ZAPI_CLIENT_TOKEN ||
+  process.env.CLIENT_TOKEN ||
+  process.env.Z_API_CLIENT_TOKEN ||
+  ''
+).trim();
 const BORA_BASE = 'https://app.boramvno.com.br/appapi';
 const BORA_EMAIL = process.env.BORA_EMAIL;
 const BORA_SENHA = process.env.BORA_SENHA;
@@ -648,6 +656,32 @@ app.get('/api/deploy/check', (req, res) => {
     qrcodeEsimRoute: '/api/bora/esim/:iccid/qrcode',
     resendConfigured: Boolean(RESEND_API_KEY),
     emailAuto: ESIM_EMAIL_AUTO,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Diagnóstico Z-API: confirma se o backend em produção está recebendo as variáveis.
+// Não expõe tokens completos. Use esta rota para validar o Railway/deploy ativo.
+app.get('/api/zapi/check', authMiddleware, (req, res) => {
+  const mascarar = (valor) => {
+    const s = String(valor || '').trim();
+    if (!s) return null;
+    if (s.length <= 8) return `${s.slice(0, 2)}***${s.slice(-2)}`;
+    return `${s.slice(0, 4)}***${s.slice(-4)}`;
+  };
+
+  res.json({
+    ok: true,
+    instanceConfigured: Boolean(MOVE_ZAPI_INSTANCE),
+    tokenConfigured: Boolean(MOVE_ZAPI_TOKEN),
+    clientTokenConfigured: Boolean(MOVE_ZAPI_CLIENT_TOKEN),
+    instanceLength: MOVE_ZAPI_INSTANCE ? MOVE_ZAPI_INSTANCE.length : 0,
+    tokenLength: MOVE_ZAPI_TOKEN ? MOVE_ZAPI_TOKEN.length : 0,
+    clientTokenLength: MOVE_ZAPI_CLIENT_TOKEN ? MOVE_ZAPI_CLIENT_TOKEN.length : 0,
+    instancePreview: mascarar(MOVE_ZAPI_INSTANCE),
+    tokenPreview: mascarar(MOVE_ZAPI_TOKEN),
+    clientTokenPreview: mascarar(MOVE_ZAPI_CLIENT_TOKEN),
+    headerClientTokenWillBeSent: Boolean(MOVE_ZAPI_CLIENT_TOKEN),
     timestamp: new Date().toISOString()
   });
 });
