@@ -4326,12 +4326,57 @@ async function checarRecargas() {
 
     console.log(`[CRON] Concluído. ${detectadas} recargas | ${atualizadas} planos atualizados.`);
   } catch (err) {
-    console.error(`[CRON] Erro geral: ${err.message}`);
+    console.error(`[CRON] Erro geral:`, err?.message || err?.toString() || JSON.stringify(err) || 'erro desconhecido');
   }
 }
 
 // Roda a cada hora
 cron.schedule('0 * * * *', checarRecargas);
+
+// ─── RECONCILIAÇÃO — corrige linhas que voltaram a ativar na Bora ─────────────
+// O cron checarRecargas só olha linhas 'ativa'. Linhas marcadas como cancelada/
+// suspensa/bloqueada ficam fora dele para sempre. Se o cliente reativar na Bora,
+// nosso banco não fica sabendo. Esta função detecta esses casos 1x/dia e corrige
+// o status (sem retroagir comissão — a contagem volta a valer só daqui pra frente).
+async function reconciliarStatusLinhas() {
+  console.log(`[RECONC] Iniciando reconciliação de status — ${new Date().toISOString()}`);
+  let reativadas = 0, verificadas = 0;
+  try {
+    const { rows: linhas } = await pool.query(
+      `SELECT id, msisdn, status FROM linhas
+        WHERE LOWER(COALESCE(status,'')) IN
+          ('cancelada','cancelado','cancelled','canceled','suspensa','suspenso','suspended','bloqueada','bloqueado','blocked','inativa','inativo')
+          AND msisdn IS NOT NULL`
+    );
+    for (const linha of linhas) {
+      verificadas++;
+      try {
+        const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+        const st = String(details?.status || details?.lineStatus || '').toUpperCase();
+        if (st === 'ACTIVE') {
+          await pool.query("UPDATE linhas SET status='ativa', ultima_checagem=NOW() WHERE id=$1", [linha.id]);
+          reativadas++;
+          console.log(`[RECONC] Linha ${linha.msisdn} voltou a ACTIVE na Bora — status corrigido para ativa`);
+        }
+      } catch (e) {
+        // 404 ou erro: mantém como está (continua cancelada)
+      }
+      await aguardar(150);
+    }
+    console.log(`[RECONC] Concluído. ${verificadas} verificadas, ${reativadas} reativadas.`);
+  } catch (err) {
+    console.error(`[RECONC] Erro geral: ${err.message}`);
+  }
+}
+
+// Roda 1x por dia, às 7h BRT (10h UTC)
+cron.schedule('0 10 * * *', reconciliarStatusLinhas);
+
+// Endpoint para forçar reconciliação manualmente
+app.post('/api/admin/reconciliar/forcar', authMiddleware, adminOnly, async (req, res) => {
+  reconciliarStatusLinhas().catch(console.error);
+  res.json({ ok: true, mensagem: 'Reconciliação iniciada em background' });
+});
 
 // Endpoint para forçar polling manualmente
 app.post('/api/admin/polling/forcar', authMiddleware, adminOnly, async (req, res) => {
@@ -4345,13 +4390,41 @@ app.get('/', (req, res) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-garantirColunasEsimQrCode().catch(err => console.error('[DB] Erro ao preparar colunas eSIM:', err.message));
-garantirColunasEquipeVendedor().catch(err => console.error('[DB] Erro ao preparar equipe de vendedores:', err.message));
-garantirTabelaNotifWhatsapp().catch(err => console.error('[DB] Erro ao preparar tabela notif WhatsApp:', err.message));
-garantirTabelaVinculoVendedor().catch(err => console.error('[DB] Erro ao preparar tabela vínculos vendedor:', err.message));
+// Migrations rodam APÓS o banco estar pronto, com retry — evita falhas silenciosas
+// no boot quando o pool ainda não conectou.
+async function rodarMigrations(tentativa = 1) {
+  const migrations = [
+    ['colunas eSIM', garantirColunasEsimQrCode],
+    ['equipe de vendedores', garantirColunasEquipeVendedor],
+    ['tabela notif WhatsApp', garantirTabelaNotifWhatsapp],
+    ['tabela vínculos vendedor', garantirTabelaVinculoVendedor],
+  ];
+  let falhas = [];
+  for (const [nome, fn] of migrations) {
+    try {
+      await fn();
+    } catch (e) {
+      falhas.push({ nome, erro: e.message });
+    }
+  }
+  if (falhas.length && tentativa < 3) {
+    console.warn(`[DB] ${falhas.length} migration(s) falharam (tentativa ${tentativa}). Repetindo em 5s...`);
+    falhas.forEach(f => console.warn(`  - ${f.nome}: ${f.erro || 'erro sem mensagem'}`));
+    await aguardar(5000);
+    return rodarMigrations(tentativa + 1);
+  }
+  if (falhas.length) {
+    console.error(`[DB] ${falhas.length} migration(s) ainda falhando após ${tentativa} tentativas:`);
+    falhas.forEach(f => console.error(`  - ${f.nome}: ${f.erro || 'erro sem mensagem'}`));
+  } else {
+    console.log('[DB] Migrations concluídas com sucesso.');
+  }
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Bora Vendas rodando na porta ${PORT}`);
+  // Migrations + primeiro polling só depois do servidor no ar e banco provavelmente pronto
+  setTimeout(() => { rodarMigrations().catch(e => console.error('[DB] Erro nas migrations:', e.message)); }, 3000);
   setTimeout(checarRecargas, 2 * 60 * 1000);
 });
