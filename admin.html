@@ -2099,15 +2099,21 @@ async function salvarPlanoComissao() {
 async function carregarEsimsDisponiveis() {
   const sel = document.getElementById('esim-select');
   if (!sel) return;
+  sel.innerHTML = '<option value="">⏳ Sincronizando estoque com a Bora...</option>';
+  sel.disabled = true;
   try {
     const esims = await api('GET', '/api/esim/disponiveis');
     sel.innerHTML = '<option value="">-- Selecione um E-SIM --</option>' +
       esims.map(e => '<option value="' + e.iccid + '">' + e.iccid + '</option>').join('');
-    if (esims.length < 10) {
+    sel.disabled = false;
+    if (esims.length === 0) {
+      toast('⚠ Nenhum E-SIM disponível no estoque', 'error');
+    } else if (esims.length < 10) {
       toast('⚠ Apenas ' + esims.length + ' E-SIMs disponíveis', 'info');
     }
   } catch(e) {
     sel.innerHTML = '<option value="">Erro ao carregar</option>';
+    sel.disabled = false;
   }
 }
 

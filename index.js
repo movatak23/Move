@@ -1700,8 +1700,49 @@ app.post('/api/esim/importar', authMiddleware, adminOnly, uploadMem.single('plan
   }
 });
 
+// Verifica na Bora se um ICCID já está em uso (vinculado a um assinante ativo)
+async function esimJaUsadoNaBora(iccid) {
+  try {
+    const data = await boraGet(`/api/Subscriber/${encodeURIComponent(iccid)}/iccid`);
+    // Se retornou um assinante com msisdn, o chip já está em uso
+    const msisdn = data?.msisdn || data?.subscriber?.msisdn || null;
+    const ativo  = data?.active === true || data?.status === 'ACTIVE' || !!msisdn;
+    return ativo;
+  } catch (e) {
+    // 404 = ICCID livre (não vinculado a ninguém)
+    if (e.response?.status === 404) return false;
+    // Qualquer outro erro: não bloqueia, considera disponível (não remove indevidamente)
+    return false;
+  }
+}
+
+// Sincroniza o estoque local com a Bora: marca como usado os que já estão em uso lá
+async function sincronizarEstoqueEsim() {
+  const { rows } = await pool.query(
+    "SELECT iccid FROM esims WHERE status='disponivel' AND iccid IS NOT NULL"
+  );
+  let sincronizados = 0;
+  for (const { iccid } of rows) {
+    try {
+      if (await esimJaUsadoNaBora(iccid)) {
+        await pool.query(
+          "UPDATE esims SET status='usado', usado_em=NOW() WHERE iccid=$1 AND status='disponivel'",
+          [iccid]
+        );
+        sincronizados++;
+      }
+    } catch {}
+    await aguardar(150); // pausa leve entre consultas para não sobrecarregar a Bora
+  }
+  return sincronizados;
+}
+
 app.get('/api/esim/disponiveis', authMiddleware, async (req, res) => {
   try {
+    // Sincroniza com a Bora antes de listar (remove os já usados lá)
+    if (String(req.query.sync || 'true') !== 'false') {
+      await sincronizarEstoqueEsim().catch(e => console.error('[esim-sync]', e.message));
+    }
     const { rows } = await pool.query(
       "SELECT * FROM esims WHERE status='disponivel' ORDER BY importado_em ASC"
     );
