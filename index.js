@@ -41,6 +41,29 @@ const BORA_EMAIL = process.env.BORA_EMAIL;
 const BORA_SENHA = process.env.BORA_SENHA;
 const MOVE_BUILD_TAG_QRCODE_ESIM = 'move-qrcode-esim-route-confirmed-2026-06-03';
 
+
+function mascararSegredo(valor) {
+  const s = String(valor || '');
+  if (!s) return null;
+  if (s.length <= 8) return `${s.slice(0, 2)}***${s.slice(-2)}`;
+  return `${s.slice(0, 4)}***${s.slice(-4)}`;
+}
+
+function diagnosticoZapi() {
+  return {
+    instanceConfigured: Boolean(MOVE_ZAPI_INSTANCE),
+    tokenConfigured: Boolean(MOVE_ZAPI_TOKEN),
+    clientTokenConfigured: Boolean(MOVE_ZAPI_CLIENT_TOKEN),
+    instanceLength: MOVE_ZAPI_INSTANCE ? MOVE_ZAPI_INSTANCE.length : 0,
+    tokenLength: MOVE_ZAPI_TOKEN ? MOVE_ZAPI_TOKEN.length : 0,
+    clientTokenLength: MOVE_ZAPI_CLIENT_TOKEN ? MOVE_ZAPI_CLIENT_TOKEN.length : 0,
+    instancePreview: mascararSegredo(MOVE_ZAPI_INSTANCE),
+    tokenPreview: mascararSegredo(MOVE_ZAPI_TOKEN),
+    clientTokenPreview: mascararSegredo(MOVE_ZAPI_CLIENT_TOKEN),
+    headerClientTokenWillBeSent: Boolean(MOVE_ZAPI_CLIENT_TOKEN)
+  };
+}
+
 // ─── Configuração de e-mail / eSIM ───────────────────────────────────────────
 const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_FROM || 'Move <noreply@move.local>';
 const SMTP_HOST = process.env.SMTP_HOST || null;
@@ -390,6 +413,12 @@ async function enviarWhatsAppMove(telefone, mensagem) {
   if (fone.length < 12) throw new Error('Telefone inválido: ' + telefone);
 
   try {
+    console.log('[zapi-move] tentativa de envio', {
+      phonePreview: fone ? `${fone.slice(0, 4)}***${fone.slice(-4)}` : null,
+      messageLength: String(mensagem || '').length,
+      ...diagnosticoZapi()
+    });
+
     await axios.post(
       `https://api.z-api.io/instances/${MOVE_ZAPI_INSTANCE}/token/${MOVE_ZAPI_TOKEN}/send-text`,
       { phone: fone, message: mensagem },
@@ -663,25 +692,13 @@ app.get('/api/deploy/check', (req, res) => {
 // Diagnóstico Z-API: confirma se o backend em produção está recebendo as variáveis.
 // Não expõe tokens completos. Use esta rota para validar o Railway/deploy ativo.
 app.get('/api/zapi/check', authMiddleware, (req, res) => {
-  const mascarar = (valor) => {
-    const s = String(valor || '').trim();
-    if (!s) return null;
-    if (s.length <= 8) return `${s.slice(0, 2)}***${s.slice(-2)}`;
-    return `${s.slice(0, 4)}***${s.slice(-4)}`;
-  };
-
+  const diag = diagnosticoZapi();
+  console.log('[zapi-check] rota consultada', diag);
   res.json({
     ok: true,
-    instanceConfigured: Boolean(MOVE_ZAPI_INSTANCE),
-    tokenConfigured: Boolean(MOVE_ZAPI_TOKEN),
-    clientTokenConfigured: Boolean(MOVE_ZAPI_CLIENT_TOKEN),
-    instanceLength: MOVE_ZAPI_INSTANCE ? MOVE_ZAPI_INSTANCE.length : 0,
-    tokenLength: MOVE_ZAPI_TOKEN ? MOVE_ZAPI_TOKEN.length : 0,
-    clientTokenLength: MOVE_ZAPI_CLIENT_TOKEN ? MOVE_ZAPI_CLIENT_TOKEN.length : 0,
-    instancePreview: mascarar(MOVE_ZAPI_INSTANCE),
-    tokenPreview: mascarar(MOVE_ZAPI_TOKEN),
-    clientTokenPreview: mascarar(MOVE_ZAPI_CLIENT_TOKEN),
-    headerClientTokenWillBeSent: Boolean(MOVE_ZAPI_CLIENT_TOKEN),
+    app: 'Move Bora Vendas',
+    build: MOVE_BUILD_TAG_QRCODE_ESIM,
+    ...diag,
     timestamp: new Date().toISOString()
   });
 });
@@ -3059,5 +3076,6 @@ garantirTabelaNotifWhatsapp().catch(err => console.error('[DB] Erro ao preparar 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Bora Vendas rodando na porta ${PORT}`);
+  console.log('[startup] Z-API config carregada', diagnosticoZapi());
   setTimeout(checarRecargas, 2 * 60 * 1000);
 });
