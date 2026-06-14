@@ -25,44 +25,13 @@ const pool = new Pool({
 // ─── Config ───────────────────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET || 'bora-vendas-secret-2024';
 const MOVE_APP_KEY        = process.env.MOVE_APP_KEY        || 'move-app-2026';
-// Z-API: sanitiza variáveis de ambiente para evitar falhas por espaços/quebras de linha.
-// Também aceita aliases comuns para facilitar deploys onde o nome foi cadastrado diferente.
-const MOVE_ZAPI_INSTANCE  = String(process.env.MOVE_ZAPI_INSTANCE || process.env.ZAPI_INSTANCE || '').trim() || '3F3A6D855AFBB2BDF16E7E7503EF1C64';
-const MOVE_ZAPI_TOKEN     = String(process.env.MOVE_ZAPI_TOKEN || process.env.ZAPI_TOKEN || '').trim() || 'ABDF61CE9B2A8A340C5FF549';
-const MOVE_ZAPI_CLIENT_TOKEN = String(
-  process.env.MOVE_ZAPI_CLIENT_TOKEN ||
-  process.env.ZAPI_CLIENT_TOKEN ||
-  process.env.CLIENT_TOKEN ||
-  process.env.Z_API_CLIENT_TOKEN ||
-  ''
-).trim();
+const MOVE_ZAPI_INSTANCE  = process.env.MOVE_ZAPI_INSTANCE  || '3F3A6D855AFBB2BDF16E7E7503EF1C64';
+const MOVE_ZAPI_TOKEN     = process.env.MOVE_ZAPI_TOKEN     || 'ABDF61CE9B2A8A340C5FF549';
+const MOVE_ZAPI_CLIENT_TOKEN = process.env.MOVE_ZAPI_CLIENT_TOKEN || '';
 const BORA_BASE = 'https://app.boramvno.com.br/appapi';
 const BORA_EMAIL = process.env.BORA_EMAIL;
 const BORA_SENHA = process.env.BORA_SENHA;
 const MOVE_BUILD_TAG_QRCODE_ESIM = 'move-qrcode-esim-route-confirmed-2026-06-03';
-
-
-function mascararSegredo(valor) {
-  const s = String(valor || '');
-  if (!s) return null;
-  if (s.length <= 8) return `${s.slice(0, 2)}***${s.slice(-2)}`;
-  return `${s.slice(0, 4)}***${s.slice(-4)}`;
-}
-
-function diagnosticoZapi() {
-  return {
-    instanceConfigured: Boolean(MOVE_ZAPI_INSTANCE),
-    tokenConfigured: Boolean(MOVE_ZAPI_TOKEN),
-    clientTokenConfigured: Boolean(MOVE_ZAPI_CLIENT_TOKEN),
-    instanceLength: MOVE_ZAPI_INSTANCE ? MOVE_ZAPI_INSTANCE.length : 0,
-    tokenLength: MOVE_ZAPI_TOKEN ? MOVE_ZAPI_TOKEN.length : 0,
-    clientTokenLength: MOVE_ZAPI_CLIENT_TOKEN ? MOVE_ZAPI_CLIENT_TOKEN.length : 0,
-    instancePreview: mascararSegredo(MOVE_ZAPI_INSTANCE),
-    tokenPreview: mascararSegredo(MOVE_ZAPI_TOKEN),
-    clientTokenPreview: mascararSegredo(MOVE_ZAPI_CLIENT_TOKEN),
-    headerClientTokenWillBeSent: Boolean(MOVE_ZAPI_CLIENT_TOKEN)
-  };
-}
 
 // ─── Configuração de e-mail / eSIM ───────────────────────────────────────────
 const EMAIL_FROM = process.env.EMAIL_FROM || process.env.SMTP_FROM || 'Move <noreply@move.local>';
@@ -413,19 +382,16 @@ async function enviarWhatsAppMove(telefone, mensagem) {
   if (fone.length < 12) throw new Error('Telefone inválido: ' + telefone);
 
   try {
-    console.log('[zapi-move] tentativa de envio', {
-      phonePreview: fone ? `${fone.slice(0, 4)}***${fone.slice(-4)}` : null,
-      messageLength: String(mensagem || '').length,
-      ...diagnosticoZapi()
-    });
-
     await axios.post(
       `https://api.z-api.io/instances/${MOVE_ZAPI_INSTANCE}/token/${MOVE_ZAPI_TOKEN}/send-text`,
       { phone: fone, message: mensagem },
       {
         headers: {
           'Content-Type': 'application/json',
-          ...(MOVE_ZAPI_CLIENT_TOKEN ? { 'Client-Token': MOVE_ZAPI_CLIENT_TOKEN } : {})
+          ...(MOVE_ZAPI_CLIENT_TOKEN ? {
+            'Client-Token': MOVE_ZAPI_CLIENT_TOKEN,
+            'client-token': MOVE_ZAPI_CLIENT_TOKEN
+          } : {})
         },
         timeout: 15000
       }
@@ -685,20 +651,6 @@ app.get('/api/deploy/check', (req, res) => {
     qrcodeEsimRoute: '/api/bora/esim/:iccid/qrcode',
     resendConfigured: Boolean(RESEND_API_KEY),
     emailAuto: ESIM_EMAIL_AUTO,
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Diagnóstico Z-API: confirma se o backend em produção está recebendo as variáveis.
-// Não expõe tokens completos. Use esta rota para validar o Railway/deploy ativo.
-app.get('/api/zapi/check', authMiddleware, (req, res) => {
-  const diag = diagnosticoZapi();
-  console.log('[zapi-check] rota consultada', diag);
-  res.json({
-    ok: true,
-    app: 'Move Bora Vendas',
-    build: MOVE_BUILD_TAG_QRCODE_ESIM,
-    ...diag,
     timestamp: new Date().toISOString()
   });
 });
@@ -1144,20 +1096,33 @@ app.post('/api/linhas/transferir-vendedor', authMiddleware, adminOnly, async (re
     const novoVendedorPrincipal = vendedor.role === 'subvendedor' ? (vendedor.parent_id || vendedor.id) : vendedor.id;
     const novoSubvendedor       = vendedor.role === 'subvendedor' ? vendedor.id : null;
 
-    // Localiza a(s) linha(s) por msisdn.
-    // A Bora/Z-API pode retornar a linha com DDI 55, enquanto o banco pode ter salvo sem DDI
-    // ou com máscara. Por isso a busca considera variações equivalentes do mesmo número.
+    // Localiza a(s) linha(s) por msisdn, considerando variações com/sem DDI 55 e sem máscara.
     const digitosMsisdn = String(msisdn).replace(/\D/g, '').replace(/^0+/, '');
     const variantesMsisdn = new Set([String(msisdn).trim(), digitosMsisdn]);
     if (digitosMsisdn.length === 10 || digitosMsisdn.length === 11) variantesMsisdn.add(`55${digitosMsisdn}`);
     if (digitosMsisdn.startsWith('55') && digitosMsisdn.length > 11) variantesMsisdn.add(digitosMsisdn.slice(2));
 
-    const linhaRes = await pool.query(
+    let linhaRes = await pool.query(
       `SELECT id FROM linhas
-        WHERE regexp_replace(COALESCE(msisdn::text, ''), '\D', '', 'g') = ANY($1::text[])`,
+        WHERE regexp_replace(COALESCE(msisdn::text, ''), '[^0-9]', '', 'g') = ANY($1::text[])`,
       [Array.from(variantesMsisdn).filter(Boolean)]
     );
-    if (!linhaRes.rows.length) return res.status(404).json({ erro: 'Linha não encontrada no sistema' });
+
+    // Se a linha veio da consulta/Bora, mas ainda não existe no banco local, cria o vínculo mínimo no CRM.
+    // Assim a transferência deixa de falhar por ausência de registro local e passa a vincular a linha ao vendedor escolhido.
+    let linhaCriadaNoCrm = false;
+    if (!linhaRes.rows.length) {
+      const iccidTransferencia = `transferencia-${digitosMsisdn}`;
+      linhaRes = await pool.query(
+        `INSERT INTO linhas (iccid, msisdn, vendedor_id, subvendedor_id, status)
+         VALUES ($1,$2,$3,$4,'ativa')
+         ON CONFLICT (iccid) DO UPDATE
+         SET msisdn=$2, vendedor_id=$3, subvendedor_id=$4
+         RETURNING id`,
+        [iccidTransferencia, digitosMsisdn, novoVendedorPrincipal, novoSubvendedor]
+      );
+      linhaCriadaNoCrm = true;
+    }
 
     let linhasAfetadas = 0, transacoesAfetadas = 0;
     for (const { id: linhaId } of linhaRes.rows) {
@@ -1173,7 +1138,7 @@ app.post('/api/linhas/transferir-vendedor', authMiddleware, adminOnly, async (re
       transacoesAfetadas += r2.rowCount;
     }
 
-    res.json({ ok: true, vendedor: vendedor.nome, linhasAfetadas, transacoesAfetadas });
+    res.json({ ok: true, vendedor: vendedor.nome, linhasAfetadas, transacoesAfetadas, linhaCriadaNoCrm });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
@@ -3087,6 +3052,5 @@ garantirTabelaNotifWhatsapp().catch(err => console.error('[DB] Erro ao preparar 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Bora Vendas rodando na porta ${PORT}`);
-  console.log('[startup] Z-API config carregada', diagnosticoZapi());
   setTimeout(checarRecargas, 2 * 60 * 1000);
 });
