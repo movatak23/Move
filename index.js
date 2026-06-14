@@ -753,6 +753,7 @@ async function calcularIndicadoresDiaPorEscopo({ campoEscopo = null, vendedorId 
        FROM linhas l
       WHERE LOWER(COALESCE(l.status, '')) IN ('ativa', 'active')
         AND l.msisdn IS NOT NULL
+        AND COALESCE(l.iccid, '') NOT ILIKE 'retroativo-%'
         AND (l.data_ativacao IS NULL OR l.data_ativacao::date <= $1::date)
         ${filtroEscopo}`,
     params
@@ -764,6 +765,7 @@ async function calcularIndicadoresDiaPorEscopo({ campoEscopo = null, vendedorId 
       WHERE LOWER(COALESCE(l.status, '')) IN ('ativa', 'active')
         AND l.msisdn IS NOT NULL
         AND l.documento_cliente IS NOT NULL
+        AND COALESCE(l.iccid, '') NOT ILIKE 'retroativo-%'
         AND (l.data_ativacao IS NULL OR l.data_ativacao::date <= $1::date)
         ${filtroEscopo}`,
     params
@@ -1405,6 +1407,78 @@ app.get('/api/relatorio/geral', authMiddleware, adminOnly, async (req, res) => {
     );
     res.json(rows);
   } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+
+
+// ─── KPIs financeiros do dashboard admin ─────────────────────────────────────
+// Receita da Move = mesmo valor da comissão do vendedor em cada ativação/recarga.
+// Observação: inadimplência/cancelamento usa o STATUS atual salvo na tabela linhas,
+// porque o schema atual não possui uma data específica de bloqueio/cancelamento.
+app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const dataInicio = req.query.data_inicio || null;
+    const dataFim = req.query.data_fim || null;
+
+    const paramsTx = [];
+    let filtroTx = '';
+    if (dataInicio && dataFim) {
+      paramsTx.push(dataInicio, dataFim);
+      filtroTx = sqlFiltroPeriodoTransacoes('t', '$1', '$2');
+    }
+
+    const { rows: receitaRows } = await pool.query(
+      `SELECT COALESCE(SUM(t.comissao), 0) AS receita_move,
+              COUNT(CASE WHEN t.tipo='ativacao' THEN 1 END)::int AS ativacoes_comissionadas,
+              COUNT(CASE WHEN t.tipo='recarga' THEN 1 END)::int AS recargas_comissionadas
+         FROM transacoes t
+         LEFT JOIN linhas l ON l.id = t.linha_id
+        WHERE 1=1${filtroTx}
+          AND NOT (t.tipo='ativacao' AND COALESCE(l.iccid, '') ILIKE 'retroativo-%')`,
+      paramsTx
+    );
+
+    const paramsLinhas = [];
+    let filtroLinhasPeriodo = '';
+    if (dataFim) {
+      paramsLinhas.push(dataFim);
+      filtroLinhasPeriodo = ' AND (l.data_ativacao IS NULL OR l.data_ativacao::date <= $1::date)';
+    }
+
+    const { rows: linhasRows } = await pool.query(
+      `SELECT
+          COUNT(*)::int AS total_linhas,
+          COUNT(CASE WHEN LOWER(COALESCE(l.status,'')) IN ('ativa','active') THEN 1 END)::int AS linhas_ativas,
+          COUNT(CASE WHEN LOWER(COALESCE(l.status,'')) IN ('bloqueada','bloqueado','suspensa','suspenso','inadimplente','overdue','blocked','suspended') THEN 1 END)::int AS linhas_inadimplentes,
+          COUNT(CASE WHEN LOWER(COALESCE(l.status,'')) IN ('cancelada','cancelado','cancelled','canceled') THEN 1 END)::int AS linhas_canceladas
+         FROM linhas l
+        WHERE COALESCE(l.iccid, '') NOT ILIKE 'retroativo-%'
+          AND l.msisdn IS NOT NULL${filtroLinhasPeriodo}`,
+      paramsLinhas
+    );
+
+    const base = Number(linhasRows[0]?.total_linhas || 0);
+    const inad = Number(linhasRows[0]?.linhas_inadimplentes || 0);
+    const canc = Number(linhasRows[0]?.linhas_canceladas || 0);
+
+    res.json({
+      ok: true,
+      receita_move_periodo: Number(receitaRows[0]?.receita_move || 0),
+      ativacoes_comissionadas: Number(receitaRows[0]?.ativacoes_comissionadas || 0),
+      recargas_comissionadas: Number(receitaRows[0]?.recargas_comissionadas || 0),
+      total_linhas_base: base,
+      linhas_ativas_base: Number(linhasRows[0]?.linhas_ativas || 0),
+      linhas_inadimplentes: inad,
+      taxa_inadimplencia: base ? (inad / base) * 100 : 0,
+      linhas_canceladas: canc,
+      taxa_cancelamento: base ? (canc / base) * 100 : 0,
+      data_inicio: dataInicio,
+      data_fim: dataFim || null
+    });
+  } catch (e) {
+    console.error('[DASHBOARD FINANCEIRO]', e.message, e.stack);
     res.status(500).json({ erro: e.message });
   }
 });

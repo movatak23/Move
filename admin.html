@@ -661,6 +661,9 @@ select option { background: var(--bg3); }
         <div class="stat-card"><div class="stat-label">Comissões Pagas</div><div class="stat-value" id="st-comissoes">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Linhas Ativas no Dia</div><div class="stat-value" id="st-linhas-ativas-dia">—</div></div>
         <div class="stat-card yellow"><div class="stat-label">Vencimentos no Dia</div><div class="stat-value" id="st-vencimentos-dia">—</div></div>
+        <div class="stat-card"><div class="stat-label">Receita Move no Período</div><div class="stat-value" id="st-receita-move">—</div></div>
+        <div class="stat-card red"><div class="stat-label">Inadimplência</div><div class="stat-value" id="st-inadimplencia">—</div></div>
+        <div class="stat-card red"><div class="stat-label">Cancelamentos</div><div class="stat-value" id="st-cancelamentos">—</div></div>
       </div>
       <div class="table-card">
         <div class="table-header">
@@ -708,17 +711,17 @@ select option { background: var(--bg3); }
         </table>
       </div>
       <div class="table-card">
-        <div class="table-header"><div class="table-title">Top 5 Clientes por Recargas</div></div>
-        <table>
-          <thead><tr><th>Cliente</th><th>MSISDN</th><th>Plano</th><th>Qtd. Recargas</th><th>Comissão por Recargas</th><th>Última Recarga</th></tr></thead>
-          <tbody id="vd-top-clientes"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
-        </table>
-      </div>
-      <div class="table-card">
         <div class="table-header"><div class="table-title">Histórico de Transações</div></div>
         <table>
           <thead><tr><th>Data</th><th>Tipo</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão</th></tr></thead>
           <tbody id="vd-transacoes"><tr><td colspan="7" class="loading">Selecione um vendedor no dashboard</td></tr></tbody>
+        </table>
+      </div>
+      <div class="table-card">
+        <div class="table-header"><div class="table-title">Top 5 Clientes por Recargas</div></div>
+        <table>
+          <thead><tr><th>Cliente</th><th>MSISDN</th><th>Plano</th><th>Qtd. Recargas</th><th>Comissão por Recargas</th><th>Última Recarga</th></tr></thead>
+          <tbody id="vd-top-clientes"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -937,13 +940,6 @@ select option { background: var(--bg3); }
         <div class="stat-card yellow"><div class="stat-label">Vencimentos no Dia</div><div class="stat-value" id="mp-vencimentos-dia">—</div></div>
       </div>
       <div class="table-card">
-        <div class="table-header"><div class="table-title">Top 5 Clientes por Recargas</div></div>
-        <table>
-          <thead><tr><th>Cliente</th><th>MSISDN</th><th>Plano</th><th>Qtd. Recargas</th><th>Comissão por Recargas</th><th>Última Recarga</th></tr></thead>
-          <tbody id="mp-top-clientes"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
-        </table>
-      </div>
-      <div class="table-card">
         <div class="table-header"><div class="table-title">Histórico de Transações</div></div>
         <table>
           <thead><tr><th>Data</th><th>Tipo</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Comissão</th></tr></thead>
@@ -955,6 +951,13 @@ select option { background: var(--bg3); }
         <table>
           <thead><tr><th>ICCID</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Valor Plano</th><th>Comissão Ativ.</th><th>Comissão Por Recarga</th><th>Quantidade de Recargas</th><th>Total Comissão</th><th>Ativação</th><th>Última Checagem</th></tr></thead>
           <tbody id="mp-linhas"><tr><td colspan="11" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="table-card">
+        <div class="table-header"><div class="table-title">Top 5 Clientes por Recargas</div></div>
+        <table>
+          <thead><tr><th>Cliente</th><th>MSISDN</th><th>Plano</th><th>Qtd. Recargas</th><th>Comissão por Recargas</th><th>Última Recarga</th></tr></thead>
+          <tbody id="mp-top-clientes"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1881,6 +1884,18 @@ async function loadDashboard() {
         document.getElementById('st-linhas-ativas-dia').textContent = '—';
         document.getElementById('st-vencimentos-dia').textContent = '—';
       });
+
+    api('GET', `/api/dashboard/financeiro-periodo?data_inicio=${ini}&data_fim=${fim}`, null, {cache: 5*60*1000})
+      .then(kpi => {
+        document.getElementById('st-receita-move').textContent = 'R$' + parseFloat(kpi.receita_move_periodo || 0).toFixed(2);
+        document.getElementById('st-inadimplencia').textContent = `${kpi.linhas_inadimplentes || 0} (${parseFloat(kpi.taxa_inadimplencia || 0).toFixed(1)}%)`;
+        document.getElementById('st-cancelamentos').textContent = `${kpi.linhas_canceladas || 0} (${parseFloat(kpi.taxa_cancelamento || 0).toFixed(1)}%)`;
+      })
+      .catch(() => {
+        document.getElementById('st-receita-move').textContent = '—';
+        document.getElementById('st-inadimplencia').textContent = '—';
+        document.getElementById('st-cancelamentos').textContent = '—';
+      });
     const totAtiv = dados.reduce((a,r)=>a+(parseInt(r.ativacoes)||0),0);
     const totRec = dados.reduce((a,r)=>a+(parseInt(r.recargas)||0),0);
     const totCom = dados.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
@@ -1912,21 +1927,6 @@ function escapeHtmlAttr(value) {
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-}
-
-function formatarDataReferencia(value) {
-  const raw = String(value || '').trim();
-  if (!raw) return '—';
-  if (/^\d{4}-\d{2}$/.test(raw)) {
-    const [ano, mes] = raw.split('-');
-    return `${mes}/${ano}`;
-  }
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
-    const d = new Date(raw.substring(0, 10) + 'T00:00:00');
-    return Number.isNaN(d.getTime()) ? raw : d.toLocaleDateString('pt-BR');
-  }
-  const d = new Date(raw);
-  return Number.isNaN(d.getTime()) ? raw : d.toLocaleDateString('pt-BR');
 }
 
 function abrirDetalheVendedorFromRow(row) {
@@ -2794,25 +2794,6 @@ async function loadMeuPainel() {
     document.getElementById('mp-ativ').textContent = ativ?.quantidade||0;
     document.getElementById('mp-rec').textContent = rec?.quantidade||0;
     document.getElementById('mp-com').textContent = 'R$'+totCom.toFixed(2);
-    document.getElementById('mp-linhas-ativas-dia').textContent = dados.indicadores_dia?.linhas_ativas_dia ?? 0;
-    document.getElementById('mp-vencimentos-dia').textContent = dados.indicadores_dia?.linhas_vencimento_dia ?? 0;
-
-    const topBody = document.getElementById('mp-top-clientes');
-    if (topBody) {
-      const top = dados.top_clientes || [];
-      if (!top.length) {
-        topBody.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">🏆</div><p>Nenhuma recarga no período</p></td></tr>`;
-      } else {
-        topBody.innerHTML = top.map(c => `<tr>
-          <td>${c.nome_cliente || '—'}</td>
-          <td class="mono">${c.msisdn || '—'}</td>
-          <td>${c.plano_nome || '—'}</td>
-          <td class="mono">${parseInt(c.quantidade_recargas || 0, 10)}</td>
-          <td class="currency">R$ ${parseFloat(c.total_comissao_recargas || 0).toFixed(2)}</td>
-          <td class="mono">${formatarDataReferencia(c.ultima_recarga)}</td>
-        </tr>`).join('');
-      }
-    }
 
     const tbody = document.getElementById('mp-tabela');
     if (!dados.transacoes.length) {
