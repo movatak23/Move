@@ -3710,17 +3710,12 @@ async function confirmarReativacao() {
   btn.textContent = 'Processando...';
 
   try {
-    // Passo 1: suspende e cancela recorrência automaticamente
-    await api('POST', `/api/bora/linha/${msisdn}/suspender-recorrencia`);
-
-    // Passo 2: gera cart e processa primeiro pagamento
-    const pag = await api('POST', '/api/bora/reativar/pagamento', {
-      msisdn, planId, paymentTypePrimeiro, paymentTypeRecorrencia
-    });
-
-    // Passo 3: confirma reativação com recorrência futura
-    await api('POST', '/api/bora/reativar', {
-      msisdn, planId, paymentTypeRecorrencia
+    // Reativação completa em uma chamada (suspende, cancela recorrência e gera novo pagamento)
+    const pag = await api('POST', '/api/bora/reativar', {
+      msisdn,
+      planId,
+      paymentType: paymentTypePrimeiro,
+      paymentTypeRecorrencia
     });
 
     // Monta resultado do pagamento
