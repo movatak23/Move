@@ -2023,6 +2023,21 @@ function escapeHtmlAttr(value) {
     .replace(/>/g, '&gt;');
 }
 
+// Formata data de referência que pode vir como 'AAAA-MM', 'AAAA-MM-DD' ou ISO completo
+function formatarDataReferencia(valor) {
+  if (!valor) return '—';
+  const s = String(valor).trim();
+  // AAAA-MM (período mensal)
+  if (/^\d{4}-\d{2}$/.test(s)) {
+    const [ano, mes] = s.split('-');
+    return `${mes}/${ano}`;
+  }
+  // AAAA-MM-DD ou ISO
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d.toLocaleDateString('pt-BR');
+  return s;
+}
+
 function abrirDetalheVendedorFromRow(row) {
   abrirDetalheVendedor(row.dataset.vendedorId, row.dataset.vendedorNome, row.dataset.vendedorEmail);
 }
