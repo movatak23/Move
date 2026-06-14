@@ -1991,7 +1991,7 @@ function exportarRelatorioVendedorPDF() {
 
   doc.autoTable({
     startY: 44,
-    head: [['ICCID','MSISDN','Cliente','Plano','Valor Plano','Comissão Ativ.','Comissão Rec.','Total','Ativação']],
+    head: [['ICCID','MSISDN','Cliente','Plano','Valor Plano','Comissão Ativ.','Comissão Recarga','Total','Ativação']],
     body: (dados.linhas || []).map(l => [
       l.iccid || '—', l.msisdn || '—', l.nome_cliente || '—', l.plano_nome || '—',
       `R$ ${parseFloat(l.plano_valor||0).toFixed(2)}`,

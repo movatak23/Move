@@ -743,10 +743,18 @@ async function sincronizarHistoricoRecargasLinha({ linhaId, msisdn, vendedorId, 
     ).catch(() => null);
   }
 
+  const { rows: linhaRetroRows } = await pool.query('SELECT iccid FROM linhas WHERE id=$1 LIMIT 1', [linhaId]).catch(() => ({ rows: [] }));
+  const linhaEhRetroativa = String(linhaRetroRows?.[0]?.iccid || '').toLowerCase().startsWith('retroativo-');
+
   let inseridas = 0;
   let atualizadas = 0;
 
   async function upsertTransacao({ tipo, plano, dataRef }) {
+    // Linha retroativa não gera comissão de ativação.
+    // Para retroativos, o valor válido de comissão é apenas o de recarga/mensalidade.
+    if (linhaEhRetroativa && tipo === 'ativacao') {
+      return;
+    }
     const cfg = localizarPlanoComissao(mapas, plano?.planId, plano?.name);
     const periodo = dataRef;
     const comissao = tipo === 'ativacao'
@@ -806,7 +814,7 @@ async function sincronizarHistoricoRecargasLinha({ linhaId, msisdn, vendedorId, 
         dataRef: dataReferenciaPlano(p, dataAtivacao)
       });
     }
-  } else {
+  } else if (!linhaEhRetroativa) {
     const { rows: linhaRows } = await pool.query('SELECT plano_id, plano_nome, data_ativacao FROM linhas WHERE id=$1', [linhaId]);
     const linha = linhaRows[0] || {};
     await upsertTransacao({
@@ -1100,6 +1108,7 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
             LIMIT 1
          ) pc ON true
         WHERE l.${campoEscopo} = $1
+          AND COALESCE(l.iccid, '') NOT ILIKE 'retroativo-%'
           AND NOT EXISTS (
             SELECT 1 FROM transacoes t
              WHERE t.linha_id = l.id
@@ -1108,8 +1117,22 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
       [vendedorId]
     );
 
-    // 2) Preenche comissões zeradas/nulas a partir da tabela planos_comissao.
-    // Não altera comissões já preenchidas manualmente.
+    // 2) Regra de retroativos: linhas com ICCID retroativo-* não geram comissão de ativação.
+    // Elas só devem remunerar recargas/mensalidades.
+    await pool.query(
+      `UPDATE transacoes t
+          SET comissao = 0
+         FROM linhas l
+        WHERE l.id = t.linha_id
+          AND t.${campoEscopo} = $1
+          AND t.tipo = 'ativacao'
+          AND COALESCE(l.iccid, '') ILIKE 'retroativo-%'
+          AND COALESCE(t.comissao, 0) <> 0`,
+      [vendedorId]
+    );
+
+    // 3) Preenche comissões zeradas/nulas a partir da tabela planos_comissao.
+    // Não altera comissões já preenchidas manualmente, exceto a regra acima dos retroativos.
     await pool.query(
       `UPDATE transacoes t
           SET comissao = CASE
@@ -1127,6 +1150,7 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
             OR UPPER(TRIM(pc.plano_nome)) = UPPER(TRIM(COALESCE(NULLIF(t.plano_nome,''), NULLIF(l.plano_nome,''), '')))
           )
           AND t.${campoEscopo} = $1
+          AND NOT (t.tipo = 'ativacao' AND COALESCE(l.iccid, '') ILIKE 'retroativo-%')
           AND COALESCE(t.comissao, 0) = 0`,
       [vendedorId]
     );
@@ -1152,6 +1176,7 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
             LIMIT 1
          ) pc ON true
         WHERE t.${campoEscopo} = $1${filtroTransacoes}
+          AND NOT (t.tipo = 'ativacao' AND COALESCE(l.iccid, '') ILIKE 'retroativo-%')
         ORDER BY COALESCE(t.periodo_referencia, t.data_transacao::date::text) DESC`,
       params
     );
@@ -1159,7 +1184,9 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
     const { rows: resumo } = await pool.query(
       `SELECT t.tipo, COUNT(*) as quantidade, COALESCE(SUM(t.comissao),0) as total_comissao
          FROM transacoes t
+         LEFT JOIN linhas l ON l.id = t.linha_id
         WHERE t.${campoEscopo}=$1${filtroTransacoes}
+          AND NOT (t.tipo = 'ativacao' AND COALESCE(l.iccid, '') ILIKE 'retroativo-%')
         GROUP BY t.tipo`,
       params
     );
@@ -1175,22 +1202,37 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
 
     const { rows: linhas } = await pool.query(
       `SELECT l.*,
-              COALESCE(pc.plano_valor, 0) AS plano_valor,
-              COALESCE(SUM(CASE WHEN t.tipo='ativacao' THEN t.comissao ELSE 0 END), 0) AS comissao_ativacao,
-              COALESCE(SUM(CASE WHEN t.tipo='recarga' THEN t.comissao ELSE 0 END), 0) AS comissao_recarga,
-              COALESCE(SUM(t.comissao), 0) AS total_comissao,
-              COUNT(t.id) AS total_transacoes
+              COALESCE(NULLIF(l.plano_nome,''), tx.plano_nome_ref, pc.plano_nome) AS plano_nome,
+              COALESCE(NULLIF(l.plano_id,''), tx.plano_id_ref, pc.plano_id) AS plano_id,
+              COALESCE(pc.plano_valor, tx.valor_plano_ref, 0) AS plano_valor,
+              CASE WHEN COALESCE(l.iccid, '') ILIKE 'retroativo-%' THEN 0 ELSE COALESCE(tx.comissao_ativacao, 0) END AS comissao_ativacao,
+              COALESCE(tx.comissao_recarga, 0) AS comissao_recarga,
+              CASE WHEN COALESCE(l.iccid, '') ILIKE 'retroativo-%'
+                   THEN COALESCE(tx.comissao_recarga, 0)
+                   ELSE COALESCE(tx.comissao_ativacao, 0) + COALESCE(tx.comissao_recarga, 0)
+              END AS total_comissao,
+              COALESCE(tx.total_transacoes, 0) AS total_transacoes
          FROM linhas l
+         LEFT JOIN LATERAL (
+           SELECT
+             MAX(NULLIF(t.plano_id,'')) AS plano_id_ref,
+             MAX(NULLIF(t.plano_nome,'')) AS plano_nome_ref,
+             MAX(t.valor_plano) AS valor_plano_ref,
+             COALESCE(SUM(CASE WHEN t.tipo='ativacao' THEN t.comissao ELSE 0 END), 0) AS comissao_ativacao,
+             COALESCE(SUM(CASE WHEN t.tipo='recarga' THEN t.comissao ELSE 0 END), 0) AS comissao_recarga,
+             COUNT(t.id) AS total_transacoes
+           FROM transacoes t
+          WHERE t.linha_id = l.id${filtroJoinTransacoesLinhas}
+         ) tx ON true
          LEFT JOIN LATERAL (
            SELECT pc.*
              FROM planos_comissao pc
-            WHERE pc.plano_id::text = COALESCE(NULLIF(l.plano_id,''), '')::text
-               OR UPPER(TRIM(pc.plano_nome)) = UPPER(TRIM(COALESCE(NULLIF(l.plano_nome,''), '')))
+            WHERE pc.plano_id::text = COALESCE(NULLIF(l.plano_id,''), tx.plano_id_ref, '')::text
+               OR UPPER(TRIM(pc.plano_nome)) = UPPER(TRIM(COALESCE(NULLIF(l.plano_nome,''), tx.plano_nome_ref, '')))
+            ORDER BY CASE WHEN pc.plano_id::text = COALESCE(NULLIF(l.plano_id,''), tx.plano_id_ref, '')::text THEN 0 ELSE 1 END
             LIMIT 1
          ) pc ON true
-         LEFT JOIN transacoes t ON t.linha_id = l.id${filtroJoinTransacoesLinhas}
         WHERE l.${campoEscopo} = $1${filtroLinhas}
-        GROUP BY l.id, pc.plano_valor
         ORDER BY l.data_ativacao DESC`,
       paramsLinhas
     );
