@@ -672,13 +672,26 @@ function localizarPlanoComissao(mapas, planId, planNome) {
 
 function sqlFiltroPeriodoTransacoes(alias = 't', startParam = '$2', endParam = '$3') {
   const pref = alias ? `${alias}.` : '';
+  // Mantém todas as comparações como DATE para evitar o erro PostgreSQL:
+  // "operator does not exist: text >= date".
+  // periodo_referencia pode vir como 'AAAA-MM' (retroativo mensal), 'AAAA-MM-DD' ou vazio.
   return ` AND (
-    (COALESCE(${pref}periodo_referencia,'') ~ '^\\d{4}-\\d{2}$'
+    (
+      COALESCE(${pref}periodo_referencia,'') ~ '^\d{4}-\d{2}$'
       AND (${pref}periodo_referencia || '-01')::date <= ${endParam}::date
-      AND ((${pref}periodo_referencia || '-01')::date + INTERVAL '1 month - 1 day') >= ${startParam}::date)
+      AND ((${pref}periodo_referencia || '-01')::date + INTERVAL '1 month - 1 day') >= ${startParam}::date
+    )
     OR
-    (NOT (COALESCE(${pref}periodo_referencia,'') ~ '^\\d{4}-\\d{2}$')
-      AND COALESCE(NULLIF(${pref}periodo_referencia,''), ${pref}data_transacao::date::text)::date BETWEEN ${startParam}::date AND ${endParam}::date)
+    (
+      NOT (COALESCE(${pref}periodo_referencia,'') ~ '^\d{4}-\d{2}$')
+      AND COALESCE(
+        CASE
+          WHEN COALESCE(${pref}periodo_referencia,'') ~ '^\d{4}-\d{2}-\d{2}$' THEN ${pref}periodo_referencia::date
+          ELSE NULL
+        END,
+        ${pref}data_transacao::date
+      ) BETWEEN ${startParam}::date AND ${endParam}::date
+    )
   )`;
 }
 
@@ -1154,7 +1167,7 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
     const paramsLinhas = [vendedorId];
     let filtroLinhas = '';
     if (data_inicio && data_fim) {
-      filtroLinhas = ' AND l.data_ativacao::date::text BETWEEN $2 AND $3';
+      filtroLinhas = ' AND l.data_ativacao::date BETWEEN $2::date AND $3::date';
       paramsLinhas.push(data_inicio, data_fim);
     }
 
