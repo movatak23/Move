@@ -1619,6 +1619,49 @@ app.get('/api/relatorio/geral', authMiddleware, adminOnly, async (req, res) => {
 // Receita da Move = mesmo valor da comissão do vendedor em cada ativação/recarga.
 // Observação: inadimplência/cancelamento usa o STATUS atual salvo na tabela linhas,
 // porque o schema atual não possui uma data específica de bloqueio/cancelamento.
+// Lista as ativações do período a partir do relatório Sales da Bora (inclui vendedor)
+app.get('/api/dashboard/ativacoes-periodo', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const XLSX = require('xlsx');
+    const dataInicio = req.query.data_inicio || '2023-01-01';
+    const dataFim = req.query.data_fim || dataHojeRecifeISO();
+
+    const token = await getBoraToken();
+    const resp = await axios.get(`${BORA_BASE}/api/Report/Sales`, {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { customerId: '', initialDate: dataInicio, finalDate: dataFim },
+      responseType: 'arraybuffer',
+      timeout: 60000,
+    });
+
+    const wb = XLSX.read(resp.data, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+    // Só ativações
+    const ativacoes = linhas
+      .filter(r => String(r['TIPO'] || '').toUpperCase().startsWith('ATIVA'))
+      .map(r => ({
+        msisdn:   String(r['MSISDN'] || ''),
+        data:     String(r['DATA'] || ''),
+        cliente:  String(r['NOME DO CLIENTE'] || ''),
+        documento:String(r['CPF/CNPJ'] || ''),
+        plano:    String(r['PLANO'] || ''),
+        tipo:     String(r['TIPO'] || ''),
+        tipoChip: String(r['TIPO DO ICCID'] || ''),
+        valor:    String(r['VALOR'] || ''),
+        vendedor: String(r['VENDEDOR'] || '').trim() || '—',
+        supervisor: String(r['SUPERVISOR'] || '').trim() || '',
+      }));
+
+    res.json({ ok: true, total: ativacoes.length, ativacoes });
+  } catch (e) {
+    console.error('[ATIVACOES PERIODO]', e.message);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// KPIs financeiros do dashboard admin (receita Move, inadimplência, etc.)
 app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (req, res) => {
   try {
     const dataInicio = req.query.data_inicio || null;
@@ -2219,10 +2262,11 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
   try {
     const { subscriber, cartPayload, paymentType, recorrencia, vendedor_id, plano_id, plano_nome, plano_valor } = req.body;
 
-    // Bloqueio por limite de eSIMs pendentes (não pagos) no mês — só para eSIM
+    // Bloqueio por limite de eSIMs pendentes (não pagos) no mês — só para eSIM.
+    // Administradores não são bloqueados por esse limite.
     const ehEsim = cartPayload?.tipoChip === 'esim' || cartPayload?.iccidType === 'E-SIM'
                 || (cartPayload?.iccid && await esimEhTipoEsim(cartPayload.iccid));
-    if (ehEsim) {
+    if (ehEsim && req.user.role !== 'admin') {
       const { vendedor_id: vendPrincipal } = await resolverEscopoVenda(req, vendedor_id);
       const limite = await contarEsimsPendentesVendedor(vendPrincipal);
       if (limite.bloqueado) {

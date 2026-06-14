@@ -687,6 +687,19 @@ select option { background: var(--bg3); }
           <tbody id="dash-tabela"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
         </table>
       </div>
+
+      <div class="table-card">
+        <div class="table-header">
+          <div class="table-title">Linhas Ativadas no Período</div>
+          <div class="table-sub" id="dash-ativacoes-count" style="font-size:12px;color:var(--text2)"></div>
+        </div>
+        <table>
+          <thead><tr>
+            <th>Data</th><th>Número</th><th>Cliente</th><th>Plano</th><th>Tipo</th><th>Vendedor</th>
+          </tr></thead>
+          <tbody id="dash-ativacoes"><tr><td colspan="6" class="loading">Carregando...</td></tr></tbody>
+        </table>
+      </div>
     </div>
 
 
@@ -1865,7 +1878,7 @@ function navegarPara(page) {
   document.getElementById(`nav-${page}`)?.classList.add('active');
   state.currentPage = page;
   updateCacheTimestamp();
-  if (page === 'ativar') { resetAtivacao(); carregarEsimsDisponiveis(); carregarLimiteEsim(); }
+  if (page === 'ativar') { resetAtivacao(); carregarEsimsDisponiveis(); if (state.user.role !== 'admin') carregarLimiteEsim(); }
   if (page === 'admins') loadAdmins();
   if (page === 'vendedores') loadVendedores();
   if (page === 'minha-marca') loadMinhaMarca();
@@ -1907,6 +1920,33 @@ async function loadDashboard() {
         document.getElementById('st-inadimplencia').textContent = '—';
         document.getElementById('st-cancelamentos').textContent = '—';
       });
+    // Linhas ativadas no período (do relatório Sales da Bora, com vendedor)
+    const tbodyAtiv = document.getElementById('dash-ativacoes');
+    tbodyAtiv.innerHTML = '<tr><td colspan="6" class="loading">Carregando da Bora...</td></tr>';
+    api('GET', `/api/dashboard/ativacoes-periodo?data_inicio=${ini}&data_fim=${fim}`, null, {cache: 5*60*1000})
+      .then(r => {
+        const lista = r.ativacoes || [];
+        document.getElementById('dash-ativacoes-count').textContent = lista.length ? `${lista.length} ativações` : '';
+        if (!lista.length) {
+          tbodyAtiv.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">📋</div><p>Nenhuma ativação no período</p></td></tr>`;
+          return;
+        }
+        tbodyAtiv.innerHTML = lista.map(a => {
+          const fone = String(a.msisdn).replace(/^55/,'').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+          return `<tr>
+            <td>${a.data}</td>
+            <td>${fone}</td>
+            <td>${a.cliente}</td>
+            <td>${a.plano}</td>
+            <td>${a.tipoChip || '—'}</td>
+            <td><strong>${a.vendedor}</strong></td>
+          </tr>`;
+        }).join('');
+      })
+      .catch(() => {
+        tbodyAtiv.innerHTML = `<tr><td colspan="6" class="empty-state"><div class="ico">⚠</div><p>Erro ao carregar ativações</p></td></tr>`;
+      });
+
     const totAtiv = dados.reduce((a,r)=>a+(parseInt(r.ativacoes)||0),0);
     const totRec = dados.reduce((a,r)=>a+(parseInt(r.recargas)||0),0);
     const totCom = dados.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
