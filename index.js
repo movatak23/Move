@@ -833,6 +833,81 @@ function dataDentroPeriodo(dataISO, inicio, fim) {
   return true;
 }
 
+// Calcula a Receita Move pelo relatório SALES da Bora (xlsx).
+// Esse relatório lista TODAS as transações (ativações, recargas, pacotes) que passaram
+// pela Bora no período — inclusive linhas sem vendedor cadastrado no nosso sistema.
+// Receita Move = soma da comissão configurada (ativacao/recarga) de cada transação.
+async function calcularReceitaMoveSalesBora({ dataInicio, dataFim }) {
+  const XLSX = require('xlsx');
+  const mapas = await carregarMapasComissaoPlanos();
+  const inicio = dataInicio || '2023-01-01';
+  const fim = dataFim || dataHojeRecifeISO();
+
+  // Baixa o relatório Sales como binário
+  const token = await getBoraToken();
+  const resp = await axios.get(
+    `${BORA_BASE}/api/Report/Sales`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { customerId: '', initialDate: inicio, finalDate: fim },
+      responseType: 'arraybuffer',
+      timeout: 60000,
+    }
+  );
+
+  const wb = XLSX.read(resp.data, { type: 'buffer' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+  let receitaMove = 0;
+  let ativacoes = 0, recargas = 0, pacotes = 0;
+  let semPlano = 0;
+  let totalTransacoes = linhas.length;
+  const planosNaoEncontrados = new Set();
+
+  for (const row of linhas) {
+    // Colunas reais do relatório Sales: PLANO, TIPO, VALOR
+    const plano = String(row['PLANO'] || row['Plano'] || '').trim();
+    const tipoRaw = String(row['TIPO'] || row['Tipo'] || '').toUpperCase().trim();
+    if (!plano) continue;
+
+    // Classifica: tudo que começa com "ATIVAÇÃO" = ativacao; RECARGA e PACOTE = recarga
+    const ehAtivacao = tipoRaw.startsWith('ATIVA');
+    const ehRecarga  = tipoRaw.includes('RECARGA') || tipoRaw.includes('PACOTE');
+
+    if (!ehAtivacao && !ehRecarga) continue;
+
+    // Localiza comissão do plano (por nome). Planos não cadastrados são ignorados.
+    const cfg = localizarPlanoComissao(mapas, null, plano);
+    if (!cfg) {
+      semPlano++;
+      planosNaoEncontrados.add(plano);
+      continue;
+    }
+
+    const comissao = ehAtivacao
+      ? Number(cfg.comissao_ativacao || 0)
+      : Number(cfg.comissao_recarga || 0);
+
+    if (comissao <= 0) continue;
+    receitaMove += comissao;
+
+    if (ehAtivacao) ativacoes++;
+    else if (tipoRaw.includes('PACOTE')) pacotes++;
+    else recargas++;
+  }
+
+  return {
+    receita_move_periodo: Number(receitaMove.toFixed(2)),
+    ativacoes_bora_periodo: ativacoes,
+    recargas_bora_periodo: recargas + pacotes,
+    total_transacoes_bora: totalTransacoes,
+    eventos_sem_plano_configurado: semPlano,
+    planos_nao_encontrados: Array.from(planosNaoEncontrados),
+    fonte_receita_move: 'bora_report_sales',
+  };
+}
+
 async function calcularReceitaMoveBoraPeriodo({ dataInicio, dataFim }) {
   const mapas = await carregarMapasComissaoPlanos();
   const inicio = dataInicio || null;
@@ -1549,10 +1624,16 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
     const dataInicio = req.query.data_inicio || null;
     const dataFim = req.query.data_fim || null;
 
-    // Receita Move no período deve vir da Bora, não apenas das transações locais.
-    // Regra: para cada ativação/recarga listada na Bora no período, a receita da Move
-    // é igual à comissão configurada daquele plano em Planos & Comissões.
-    const receitaBora = await calcularReceitaMoveBoraPeriodo({ dataInicio, dataFim });
+    // Receita Move no período: usa o relatório SALES da Bora (pega TODAS as transações,
+    // inclusive linhas sem vendedor cadastrado no nosso sistema). Fallback para o método
+    // antigo (via Subscription details) se o relatório falhar.
+    let receitaBora;
+    try {
+      receitaBora = await calcularReceitaMoveSalesBora({ dataInicio, dataFim });
+    } catch (e) {
+      console.error('[RECEITA SALES] falhou, usando fallback:', e.message);
+      receitaBora = await calcularReceitaMoveBoraPeriodo({ dataInicio, dataFim });
+    }
 
     const paramsLinhas = [];
     let filtroLinhasPeriodo = '';

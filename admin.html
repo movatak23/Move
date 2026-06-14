@@ -297,6 +297,17 @@ body {
   margin-bottom: 28px;
 }
 
+/* Dashboard admin: força 2 linhas — 5 cards em cima, 4 embaixo */
+.stats-grid.dash-2linhas {
+  grid-template-columns: repeat(5, 1fr);
+}
+@media (max-width: 1100px) {
+  .stats-grid.dash-2linhas { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 680px) {
+  .stats-grid.dash-2linhas { grid-template-columns: repeat(2, 1fr); }
+}
+
 .stat-card {
   background: var(--bg2);
   border: 1px solid var(--border);
@@ -654,7 +665,7 @@ select option { background: var(--bg3); }
           <button class="btn btn-secondary btn-sm" onclick="forcaPolling()" title="Forçar checagem de recargas agora">⟳ Polling</button>
         </div>
       </div>
-      <div class="stats-grid" id="dash-stats">
+      <div class="stats-grid dash-2linhas" id="dash-stats">
         <div class="stat-card"><div class="stat-label">Total Vendedores</div><div class="stat-value" id="st-vendedores">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Ativações</div><div class="stat-value" id="st-ativacoes">—</div></div>
         <div class="stat-card yellow"><div class="stat-label">Recargas</div><div class="stat-value" id="st-recargas">—</div></div>
