@@ -546,6 +546,69 @@ function adminOuVendedorPrincipal(req, res, next) {
   next();
 }
 
+// Verifica se um ICCID é do tipo eSIM consultando a Bora (iccicType: "E-SIM")
+async function esimEhTipoEsim(iccid) {
+  try {
+    const data = await boraGet(`/api/Subscriber/${encodeURIComponent(iccid)}/iccid`);
+    return String(data?.iccicType || data?.iccidType || '').toUpperCase().includes('E-SIM');
+  } catch {
+    return false;
+  }
+}
+
+// Limite de eSIMs ativados e NÃO PAGOS por vendedor principal, no mês corrente
+const LIMITE_ESIM_PENDENTE = parseInt(process.env.LIMITE_ESIM_PENDENTE || '3', 10);
+
+// Conta quantas linhas o vendedor principal ativou no mês que ainda NÃO estão ACTIVE na Bora.
+// Verifica em tempo real na Bora (fonte da verdade).
+async function contarEsimsPendentesVendedor(vendedorPrincipalId) {
+  // Linhas ativadas por este vendedor no mês corrente (BRT)
+  const { rows } = await pool.query(
+    `SELECT id, msisdn, iccid, status
+       FROM linhas
+      WHERE vendedor_id = $1
+        AND data_ativacao >= date_trunc('month', (NOW() AT TIME ZONE 'America/Recife'))
+        AND msisdn IS NOT NULL`,
+    [vendedorPrincipalId]
+  );
+
+  let pendentes = 0;
+  const pendentesDetalhe = [];
+
+  for (const linha of rows) {
+    // Já marcada como ativa/paga no nosso banco — não precisa consultar
+    if (String(linha.status || '').toLowerCase() === 'ativa') continue;
+
+    let ativaNaBora = false;
+    try {
+      const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+      const st = String(details?.status || '').toUpperCase();
+      ativaNaBora = (st === 'ACTIVE');
+      // Sincroniza nosso banco quando detecta que pagou
+      if (ativaNaBora && String(linha.status || '').toLowerCase() !== 'ativa') {
+        await pool.query("UPDATE linhas SET status='ativa' WHERE id=$1", [linha.id]).catch(() => null);
+      }
+    } catch {
+      // Sem details / erro: trata como pendente (conservador)
+      ativaNaBora = false;
+    }
+
+    if (!ativaNaBora) {
+      pendentes++;
+      pendentesDetalhe.push({ msisdn: linha.msisdn, iccid: linha.iccid });
+    }
+    await aguardar(120);
+  }
+
+  return {
+    pendentes,
+    limite: LIMITE_ESIM_PENDENTE,
+    bloqueado: pendentes >= LIMITE_ESIM_PENDENTE,
+    restantes: Math.max(0, LIMITE_ESIM_PENDENTE - pendentes),
+    detalhe: pendentesDetalhe,
+  };
+}
+
 async function resolverEscopoVenda(req, vendedorIdInformado = null) {
   if (req.user.role === 'subvendedor') {
     let parentId = req.user.parent_id || null;
@@ -1247,6 +1310,20 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
   try {
     const { subscriber, cartPayload, paymentType, recorrencia, vendedor_id, plano_id, plano_nome, plano_valor } = req.body;
 
+    // Bloqueio por limite de eSIMs pendentes (não pagos) no mês — só para eSIM
+    const ehEsim = cartPayload?.tipoChip === 'esim' || cartPayload?.iccidType === 'E-SIM'
+                || (cartPayload?.iccid && await esimEhTipoEsim(cartPayload.iccid));
+    if (ehEsim) {
+      const { vendedor_id: vendPrincipal } = await resolverEscopoVenda(req, vendedor_id);
+      const limite = await contarEsimsPendentesVendedor(vendPrincipal);
+      if (limite.bloqueado) {
+        return res.status(403).json({
+          erro: `Limite atingido: você tem ${limite.pendentes} ativações de eSIM não pagas este mês (máximo ${limite.limite}). Aguarde os clientes pagarem para liberar novas ativações.`,
+          limite_pendentes: limite
+        });
+      }
+    }
+
     let clientId = null;
     try {
       const existing = await boraGet(`/api/Subscriber/${subscriber.document}/document`);
@@ -1746,6 +1823,17 @@ async function sincronizarEstoqueEsim() {
   }
   return sincronizados;
 }
+
+// Status do limite de eSIMs pendentes do vendedor logado (para exibir aviso na tela)
+app.get('/api/esim/limite-pendentes', authMiddleware, async (req, res) => {
+  try {
+    const { vendedor_id } = await resolverEscopoVenda(req);
+    const status = await contarEsimsPendentesVendedor(vendedor_id);
+    res.json(status);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
 
 app.get('/api/esim/disponiveis', authMiddleware, async (req, res) => {
   try {

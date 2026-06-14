@@ -733,6 +733,8 @@ select option { background: var(--bg3); }
         </div>
       </div>
 
+      <div id="limite-esim-banner" style="display:none;margin-bottom:16px;border-radius:var(--r);padding:12px 16px;font-size:13px"></div>
+
       <div class="flow-steps" id="flow-steps">
         <div class="flow-step active" id="fs-1"><span class="step-num">01</span>ICCID</div>
         <div class="flow-step" id="fs-2"><span class="step-num">02</span>CLIENTE</div>
@@ -1753,7 +1755,7 @@ function navegarPara(page) {
   document.getElementById(`nav-${page}`)?.classList.add('active');
   state.currentPage = page;
   updateCacheTimestamp();
-  if (page === 'ativar') { resetAtivacao(); carregarEsimsDisponiveis(); }
+  if (page === 'ativar') { resetAtivacao(); carregarEsimsDisponiveis(); carregarLimiteEsim(); }
   if (page === 'admins') loadAdmins();
   if (page === 'vendedores') loadVendedores();
   if (page === 'minha-marca') loadMinhaMarca();
@@ -2096,6 +2098,38 @@ async function salvarPlanoComissao() {
 }
 
 // ── ATIVAÇÃO FLOW ─────────────────────────────────────────────────────────────
+async function carregarLimiteEsim() {
+  const banner = document.getElementById('limite-esim-banner');
+  if (!banner) return;
+  banner.style.display = 'block';
+  banner.style.background = 'var(--bg2)';
+  banner.style.border = '1px solid var(--border)';
+  banner.style.color = 'var(--text2)';
+  banner.innerHTML = '⏳ Verificando ativações pendentes...';
+  try {
+    const d = await api('GET', '/api/esim/limite-pendentes');
+    if (d.bloqueado) {
+      banner.style.background = 'var(--red-dim)';
+      banner.style.border = '1px solid var(--red)';
+      banner.style.color = 'var(--red)';
+      banner.innerHTML = `🚫 <strong>Cadastro bloqueado para novas ativações de eSIM.</strong> Você atingiu o limite de ${d.limite} ativações não pagas neste mês. Aguarde os clientes pagarem para liberar.`;
+    } else if (d.pendentes >= d.limite - 1) {
+      // 1 antes de bloquear
+      banner.style.background = '#1a1000';
+      banner.style.border = '1px solid #f59e0b';
+      banner.style.color = '#f59e0b';
+      banner.innerHTML = `⚠ <strong>Atenção:</strong> você tem <strong>${d.pendentes} de ${d.limite}</strong> ativações de eSIM não pagas neste mês. Falta <strong>${d.restantes}</strong> para o cadastro ser bloqueado. Oriente seus clientes a pagarem.`;
+    } else {
+      banner.style.background = 'var(--bg2)';
+      banner.style.border = '1px solid var(--border)';
+      banner.style.color = 'var(--text2)';
+      banner.innerHTML = `📊 Ativações de eSIM não pagas este mês: <strong>${d.pendentes} de ${d.limite}</strong>. Você ainda pode ativar <strong>${d.restantes}</strong> antes do bloqueio.`;
+    }
+  } catch(e) {
+    banner.style.display = 'none';
+  }
+}
+
 async function carregarEsimsDisponiveis() {
   const sel = document.getElementById('esim-select');
   if (!sel) return;
@@ -2451,6 +2485,7 @@ async function confirmarAtivacao() {
   } catch(e) {
     res.innerHTML = `<div class="info-card" style="border-color:var(--red)"><div class="info-row"><span class="k">Erro</span><span class="v" style="color:var(--red)">${e.message}</span></div></div>`;
     toast(e.message,'error');
+    if (String(e.message).toLowerCase().includes('limite')) carregarLimiteEsim();
   }
 }
 
