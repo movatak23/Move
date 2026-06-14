@@ -425,7 +425,10 @@ async function enviarWhatsAppMove(telefone, mensagem) {
       {
         headers: {
           'Content-Type': 'application/json',
-          ...(MOVE_ZAPI_CLIENT_TOKEN ? { 'Client-Token': MOVE_ZAPI_CLIENT_TOKEN } : {})
+          ...(MOVE_ZAPI_CLIENT_TOKEN ? {
+            'Client-Token': MOVE_ZAPI_CLIENT_TOKEN,
+            'client-token': MOVE_ZAPI_CLIENT_TOKEN
+          } : {})
         },
         timeout: 15000
       }
