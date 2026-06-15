@@ -3587,6 +3587,7 @@ function atualizarCampoConsulta() {
   document.getElementById('consulta-valor-plain').value = '';
 }
 
+let consultaLinhas = [];
 async function realizarConsulta() {
   const tipo = document.getElementById('consulta-tipo').value;
   const isNumero = tipo === 'numero';
@@ -3601,17 +3602,55 @@ async function realizarConsulta() {
     const data = await api('GET', `/api/consulta/linha?tipo=${tipo}&valor=${encodeURIComponent(valor.replace(/\D/g,'') || valor)}`);
     const linhas = data.linhas || [];
     if (!linhas.length) { res.innerHTML = '<div class="empty-state"><div class="ico">🔍</div><p>Nenhuma linha encontrada</p></div>'; return; }
-    // Busca consumo de cada linha em paralelo
-    const resultados = await Promise.all(linhas.map(async l => {
+    consultaLinhas = linhas;
+
+    // Uma única linha: mostra direto o detalhe (comportamento de sempre)
+    if (linhas.length === 1) {
       let cons = null;
-      const ms = l.msisdn;
-      if (ms) {
-        try { cons = await api('GET', `/api/bora/consumo/${ms}`); } catch {}
-      }
-      return { linha: l, consumo: cons };
-    }));
-    res.innerHTML = resultados.map(({ linha, consumo }) => renderLinhaConsulta(linha, consumo)).join('');
+      const ms = linhas[0].msisdn;
+      if (ms) { try { cons = await api('GET', `/api/bora/consumo/${ms}`); } catch {} }
+      res.innerHTML = renderLinhaConsulta(linhas[0], cons);
+      return;
+    }
+
+    // Várias linhas (ex.: CPF com vários chips): lista à esquerda, dados à direita
+    res.innerHTML = `
+      <div style="display:grid;grid-template-columns:300px 1fr;gap:16px;align-items:start">
+        <div class="table-card" style="padding:10px">
+          <div style="font-weight:700;color:var(--text);padding:6px 8px 10px;font-size:13px">${linhas.length} linhas neste CPF</div>
+          <div id="consulta-lista">
+            ${linhas.map((l, i) => {
+              const ms = l.msisdn ? l.msisdn.replace('55','').replace(/(\d{2})(\d{5})(\d{4})/,'($1) $2-$3') : '—';
+              const pl = (l.plan && l.plan.length ? l.plan[l.plan.length-1].name : null) || 'Sem plano';
+              const ativa = (l.status||'').toLowerCase().includes('active');
+              return `<div class="consulta-item" data-idx="${i}" onclick="selecionarLinhaConsulta(${i})" style="padding:10px;border-radius:8px;cursor:pointer;border:1px solid var(--border);margin-bottom:6px">
+                <div style="font-weight:700;color:var(--accent);font-family:var(--mono);font-size:14px">${ms}</div>
+                <div style="font-size:12px;color:var(--text2);margin-top:2px">${pl}</div>
+                <span class="badge ${ativa?'badge-green':'badge-red'}" style="margin-top:6px;display:inline-block">${l.status||'—'}</span>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>
+        <div id="consulta-detalhe"><div class="empty-state"><div class="ico">👈</div><p>Selecione uma linha para ver os dados</p></div></div>
+      </div>`;
+    selecionarLinhaConsulta(0);
   } catch(e) { res.innerHTML = `<div class="section-card" style="border-color:var(--red);color:var(--red)">${e.message}</div>`; }
+}
+
+// Mostra os dados da linha selecionada na lista, buscando o consumo só dela.
+async function selecionarLinhaConsulta(idx) {
+  const l = consultaLinhas[idx];
+  if (!l) return;
+  document.querySelectorAll('.consulta-item').forEach(el => { el.style.background = ''; el.style.borderColor = 'var(--border)'; });
+  const sel = document.querySelector(`.consulta-item[data-idx="${idx}"]`);
+  if (sel) { sel.style.background = 'var(--accent-dim)'; sel.style.borderColor = 'var(--accent)'; }
+  const box = document.getElementById('consulta-detalhe');
+  if (!box) return;
+  box.innerHTML = '<div class="loading">Carregando dados da linha...</div>';
+  let cons = null;
+  const ms = l.msisdn;
+  if (ms) { try { cons = await api('GET', `/api/bora/consumo/${ms}`); } catch {} }
+  box.innerHTML = renderLinhaConsulta(l, cons);
 }
 
 function renderLinhaConsulta(l, cons) {
