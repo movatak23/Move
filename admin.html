@@ -4633,10 +4633,18 @@ async function abrirTrocarPlano(msisdn) {
   document.getElementById('btn-confirmar-troca').style.display = 'none';
   document.getElementById('modal-trocar-plano').classList.add('open');
   try {
-    const data = await api('GET', `/api/bora/trocar-plano/${msisdn}`);
-    const planos = Array.isArray(data) ? data : (data.plans || data.items || []);
+    const [data, registrados] = await Promise.all([
+      api('GET', `/api/bora/trocar-plano/${msisdn}`),
+      api('GET', '/api/planos-comissao')
+    ]);
+    let planos = Array.isArray(data) ? data : (data.plans || data.items || []);
+    // Sincroniza a lista com os planos cadastrados e VISÍVEIS em Planos & Comissões
+    const habilitados = new Set((registrados || []).filter(p => p.habilitado).map(p => String(p.plano_id)));
+    if (habilitados.size > 0) {
+      planos = planos.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || '')));
+    }
     if (!planos.length) {
-      document.getElementById('trocar-plano-lista').innerHTML = '<div style="color:var(--text2);padding:12px">Nenhum plano disponível para troca</div>';
+      document.getElementById('trocar-plano-lista').innerHTML = '<div style="color:var(--text2);padding:12px">Nenhum plano cadastrado/visível disponível para troca</div>';
       return;
     }
     document.getElementById('trocar-plano-lista').innerHTML =
