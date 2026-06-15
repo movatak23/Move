@@ -855,6 +855,23 @@ function dataDentroPeriodo(dataISO, inicio, fim) {
   return true;
 }
 
+// Cache em memória do resultado de receita por período (evita re-baixar o relatório
+// Sales da Bora a cada abertura do dashboard). TTL configurável; ?nocache=true ignora.
+const RECEITA_CACHE_TTL_MS = parseInt(process.env.RECEITA_CACHE_TTL_MS || String(5 * 60 * 1000), 10);
+const receitaCache = new Map(); // chave: "inicio|fim" → { dados, expira }
+
+function receitaCacheGet(dataInicio, dataFim) {
+  const chave = `${dataInicio || ''}|${dataFim || ''}`;
+  const item = receitaCache.get(chave);
+  if (item && item.expira > Date.now()) return item.dados;
+  return null;
+}
+
+function receitaCacheSet(dataInicio, dataFim, dados) {
+  const chave = `${dataInicio || ''}|${dataFim || ''}`;
+  receitaCache.set(chave, { dados, expira: Date.now() + RECEITA_CACHE_TTL_MS });
+}
+
 // Calcula a Receita Move pelo relatório SALES da Bora (xlsx).
 // Esse relatório lista TODAS as transações (ativações, recargas, pacotes) que passaram
 // pela Bora no período — inclusive linhas sem vendedor cadastrado no nosso sistema.
@@ -1772,12 +1789,18 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
     // Receita Move no período: usa o relatório SALES da Bora (pega TODAS as transações,
     // inclusive linhas sem vendedor cadastrado no nosso sistema). Fallback para o método
     // antigo (via Subscription details) se o relatório falhar.
-    let receitaBora;
-    try {
-      receitaBora = await calcularReceitaMoveSalesBora({ dataInicio, dataFim });
-    } catch (e) {
-      console.error('[RECEITA SALES] falhou, usando fallback:', e.message);
-      receitaBora = await calcularReceitaMoveBoraPeriodo({ dataInicio, dataFim });
+    // Lê do cache em memória (TTL) para não re-baixar o relatório a cada abertura.
+    let receitaBora = (String(req.query.nocache || 'false') === 'true')
+      ? null
+      : receitaCacheGet(dataInicio, dataFim);
+    if (!receitaBora) {
+      try {
+        receitaBora = await calcularReceitaMoveSalesBora({ dataInicio, dataFim });
+      } catch (e) {
+        console.error('[RECEITA SALES] falhou, usando fallback:', e.message);
+        receitaBora = await calcularReceitaMoveBoraPeriodo({ dataInicio, dataFim });
+      }
+      receitaCacheSet(dataInicio, dataFim, receitaBora);
     }
 
     const paramsLinhas = [];
@@ -3071,24 +3094,37 @@ async function esimJaUsadoNaBora(iccid) {
 }
 
 // Sincroniza o estoque local com a Bora: marca como usado os que já estão em uso lá
+const SYNC_ESTOQUE_LOTE = parseInt(process.env.SYNC_ESTOQUE_LOTE || '200', 10);
+let syncEstoqueEmAndamento = false;
+
 async function sincronizarEstoqueEsim() {
-  const { rows } = await pool.query(
-    "SELECT iccid FROM esims WHERE status='disponivel' AND iccid IS NOT NULL"
-  );
-  let sincronizados = 0;
-  for (const { iccid } of rows) {
-    try {
-      if (await esimJaUsadoNaBora(iccid)) {
-        await pool.query(
-          "UPDATE esims SET status='usado', usado_em=NOW() WHERE iccid=$1 AND status='disponivel'",
-          [iccid]
-        );
-        sincronizados++;
-      }
-    } catch {}
-    await aguardar(150); // pausa leve entre consultas para não sobrecarregar a Bora
+  if (syncEstoqueEmAndamento) {
+    console.log('[ESTOQUE-SYNC] Ciclo anterior ainda em andamento — pulando.');
+    return 0;
   }
-  return sincronizados;
+  syncEstoqueEmAndamento = true;
+  try {
+    const { rows } = await pool.query(
+      "SELECT iccid FROM esims WHERE status='disponivel' AND iccid IS NOT NULL ORDER BY importado_em ASC LIMIT $1",
+      [SYNC_ESTOQUE_LOTE]
+    );
+    let sincronizados = 0;
+    for (const { iccid } of rows) {
+      try {
+        if (await esimJaUsadoNaBora(iccid)) {
+          await pool.query(
+            "UPDATE esims SET status='usado', usado_em=NOW() WHERE iccid=$1 AND status='disponivel'",
+            [iccid]
+          );
+          sincronizados++;
+        }
+      } catch {}
+      await aguardar(150); // pausa leve entre consultas para não sobrecarregar a Bora
+    }
+    return sincronizados;
+  } finally {
+    syncEstoqueEmAndamento = false;
+  }
 }
 
 // Status do limite de eSIMs pendentes do vendedor logado (para exibir aviso na tela)
@@ -3104,8 +3140,9 @@ app.get('/api/esim/limite-pendentes', authMiddleware, async (req, res) => {
 
 app.get('/api/esim/disponiveis', authMiddleware, async (req, res) => {
   try {
-    // Sincroniza com a Bora antes de listar (remove os já usados lá)
-    if (String(req.query.sync || 'true') !== 'false') {
+    // Leitura instantânea do estoque local. O sync com a Bora roda no job de fundo
+    // (cron a cada 10 min). Passe ?sync=true para forçar uma sincronização na hora.
+    if (String(req.query.sync || 'false') === 'true') {
       await sincronizarEstoqueEsim().catch(e => console.error('[esim-sync]', e.message));
     }
     const { rows } = await pool.query(
@@ -4450,6 +4487,11 @@ async function sincronizarCacheStatus() {
 
 // Roda a cada 5 minutos
 cron.schedule('*/5 * * * *', sincronizarCacheStatus);
+
+// Sincronização de estoque eSIM no fundo, a cada 10 min (fora do caminho da tela)
+cron.schedule('*/10 * * * *', () => {
+  sincronizarEstoqueEsim().catch(e => console.error('[ESTOQUE-SYNC] erro:', e.message));
+});
 
 // Endpoint para forçar um ciclo de sincronização manualmente
 app.post('/api/admin/cache-status/forcar', authMiddleware, adminOnly, async (req, res) => {
