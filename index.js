@@ -91,44 +91,61 @@ async function getBoraToken() {
   return token;
 }
 
-async function boraGet(endpoint, params = {}) {
-  const token = await getBoraToken();
-  const resp = await axios.get(`${BORA_BASE}${endpoint}`, {
-    headers: { Authorization: `Bearer ${token}` },
-    params
-  });
-  const novoToken = resp.headers['x-access-token'];
-  if (novoToken) {
-    boraTokenCache = novoToken;
-    boraTokenExpira = Date.now() + 50 * 60 * 1000;
+function boraTokenInvalido(e) {
+  const st = e?.response?.status;
+  if (st === 401) return true;
+  // A Bora às vezes devolve 500 com "Token invalido" no corpo (rotação concorrente)
+  if (st === 500) {
+    const corpo = JSON.stringify(e?.response?.data || '');
+    return /token\s*inv[aá]lid/i.test(corpo);
   }
-  return resp.data;
+  return false;
+}
+
+async function boraRequest(method, endpoint, { params, body } = {}) {
+  async function executar() {
+    const token = await getBoraToken();
+    const headers = { Authorization: `Bearer ${token}` };
+    let resp;
+    if (method === 'get') {
+      resp = await axios.get(`${BORA_BASE}${endpoint}`, { headers, params });
+    } else if (method === 'post') {
+      headers['Content-Type'] = 'application/json';
+      resp = await axios.post(`${BORA_BASE}${endpoint}`, body, { headers });
+    } else {
+      headers['Content-Type'] = 'application/json';
+      resp = await axios.put(`${BORA_BASE}${endpoint}`, body, { headers });
+    }
+    const novoToken = resp.headers['x-access-token'];
+    if (novoToken) {
+      boraTokenCache = novoToken;
+      boraTokenExpira = Date.now() + 50 * 60 * 1000;
+    }
+    return resp.data;
+  }
+  try {
+    return await executar();
+  } catch (e) {
+    if (boraTokenInvalido(e)) {
+      // Token rotacionado/invalidado por concorrência entre jobs: re-autentica e tenta 1x.
+      boraTokenCache = null;
+      boraTokenExpira = null;
+      return await executar();
+    }
+    throw e;
+  }
+}
+
+async function boraGet(endpoint, params = {}) {
+  return boraRequest('get', endpoint, { params });
 }
 
 async function boraPost(endpoint, body = {}) {
-  const token = await getBoraToken();
-  const resp = await axios.post(`${BORA_BASE}${endpoint}`, body, {
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  });
-  const novoToken = resp.headers['x-access-token'];
-  if (novoToken) {
-    boraTokenCache = novoToken;
-    boraTokenExpira = Date.now() + 50 * 60 * 1000;
-  }
-  return resp.data;
+  return boraRequest('post', endpoint, { body });
 }
 
 async function boraPut(endpoint, body = {}) {
-  const token = await getBoraToken();
-  const resp = await axios.put(`${BORA_BASE}${endpoint}`, body, {
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  });
-  const novoToken = resp.headers['x-access-token'];
-  if (novoToken) {
-    boraTokenCache = novoToken;
-    boraTokenExpira = Date.now() + 50 * 60 * 1000;
-  }
-  return resp.data;
+  return boraRequest('put', endpoint, { body });
 }
 
 
@@ -2572,9 +2589,24 @@ app.get('/api/bora/historic/:msisdn', authMiddleware, async (req, res) => {
 // ─── Calculadora: simula recargas por período com /details ────────────────────
 app.post('/api/calculadora/simular', authMiddleware, async (req, res) => {
   try {
-    const { msisdn, plano_id, data_inicio, data_fim } = req.body;
+    const { msisdn, plano_id, data_inicio, data_fim, vendedor_id } = req.body;
 
-    const numeros = msisdn.split(',')
+    // Permite calcular pelo vendedor: se não vier número mas vier vendedor_id,
+    // resolve os MSISDNs de todas as linhas desse vendedor (ou subvendedor).
+    let listaMsisdn = msisdn;
+    if ((!listaMsisdn || !String(listaMsisdn).trim()) && vendedor_id) {
+      // Não-admin só pode calcular pelo próprio cadastro
+      const vid = (req.user.role !== 'admin') ? req.user.id : parseInt(vendedor_id, 10);
+      const { rows } = await pool.query(
+        'SELECT msisdn FROM linhas WHERE (vendedor_id=$1 OR subvendedor_id=$1) AND msisdn IS NOT NULL',
+        [vid]
+      );
+      listaMsisdn = rows.map(r => r.msisdn).join(',');
+      if (!listaMsisdn) throw new Error('Este vendedor não possui linhas para calcular');
+    }
+    if (!listaMsisdn || !String(listaMsisdn).trim()) throw new Error('Informe um número ou selecione um vendedor');
+
+    const numeros = String(listaMsisdn).split(',')
       .map(n => n.trim())
       .filter(n => n.length >= 8)
       .map(n => n.startsWith('55') ? n : '55' + n);
