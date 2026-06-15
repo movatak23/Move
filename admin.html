@@ -1071,7 +1071,7 @@ select option { background: var(--bg3); }
       <div class="page-header">
         <div>
           <div class="page-title">Calculadora de Comissão</div>
-          <div class="page-sub">Calcula comissão retroativa por número</div>
+          <div class="page-sub">Calcula comissão retroativa por número ou por vendedor</div>
         </div>
       </div>
 
@@ -1093,7 +1093,7 @@ select option { background: var(--bg3); }
         </div>
         <div class="form-row" style="margin-bottom:16px">
           <div class="field">
-            <label>Vendedor (opcional)</label>
+            <label>Vendedor (deixe o número vazio para calcular por ele)</label>
             <select id="calc-vendedor">
               <option value="">Selecione o vendedor...</option>
             </select>
@@ -2195,7 +2195,7 @@ async function carregarDetalheVendedor() {
       linhasBody.innerHTML = dados.linhas.map(l => `<tr>
         <td class="mono">${l.iccid || '—'}</td>
         <td class="mono">${l.msisdn || '—'}</td>
-        <td>${l.nome_cliente || '—'}</td>
+        <td>${l.msisdn ? `<a href="javascript:void(0)" onclick="abrirCadastroCliente('${l.msisdn}')" style="color:var(--accent);text-decoration:none;cursor:pointer" title="Ver cadastro do cliente">${l.nome_cliente || '—'}</a>` : (l.nome_cliente || '—')}</td>
         <td>${l.plano_nome || '—'}</td>
         <td class="currency">R$ ${parseFloat(l.plano_valor||0).toFixed(2)}</td>
         <td class="currency">R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}</td>
@@ -3128,8 +3128,9 @@ function gerarMeses(inicio, fim) {
 
 async function calcularComissao(modo) {
   const msisdn = document.getElementById('calc-msisdn').value.trim();
-  if (!msisdn) { toast('Informe o número', 'error'); return; }
-  calcVendedorSelecionado = document.getElementById('calc-vendedor').value || (state.user.role !== 'admin' ? String(state.user.id) : '');
+  const vidSel = document.getElementById('calc-vendedor').value || (state.user.role !== 'admin' ? String(state.user.id) : '');
+  if (!msisdn && !vidSel) { toast('Informe o número ou selecione um vendedor', 'error'); return; }
+  calcVendedorSelecionado = vidSel;
   const planoOverride = document.getElementById('calc-plano').value || null;
   calcMsisdn = msisdn;
 
@@ -3159,6 +3160,7 @@ async function calcularComissao(modo) {
     const fimVal = document.getElementById('calc-fim').value;
     const data = await api('POST', '/api/calculadora/simular', {
       msisdn,
+      vendedor_id: msisdn ? null : (calcVendedorSelecionado || null),
       plano_id: planoOverride,
       data_inicio: modo === 'periodo' && iniVal ? iniVal : null,
       data_fim: modo === 'periodo' && fimVal ? fimVal : null
@@ -3560,6 +3562,19 @@ function renderGraficoConsumo(cons, msisdn) {
         </div>
       `).join('')}
     </div>`;
+}
+
+// Abre o "cadastro do cliente" (tela Consultar Linha) já buscando pelo MSISDN.
+function abrirCadastroCliente(msisdn) {
+  const ms = String(msisdn || '').replace(/\D/g, '');
+  if (!ms) { toast('Linha não disponível para este cliente', 'error'); return; }
+  navegarPara('consulta');
+  const tipoSel = document.getElementById('consulta-tipo');
+  if (tipoSel) tipoSel.value = 'numero';
+  atualizarCampoConsulta();
+  const campo = document.getElementById('consulta-valor');
+  if (campo) campo.value = ms.replace(/^55/, '');
+  realizarConsulta();
 }
 
 function atualizarCampoConsulta() {
