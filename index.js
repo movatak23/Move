@@ -182,6 +182,16 @@ async function garantirColunasEquipeVendedor() {
   }
 }
 
+async function garantirColunasCacheStatus() {
+  try {
+    await pool.query(`ALTER TABLE linhas ADD COLUMN IF NOT EXISTS status_bora VARCHAR(40)`);
+    await pool.query(`ALTER TABLE linhas ADD COLUMN IF NOT EXISTS ultima_sincronizacao TIMESTAMP`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_linhas_ultima_sincronizacao ON linhas(ultima_sincronizacao)`);
+  } catch (e) {
+    console.warn('[DB] Não foi possível garantir colunas de cache de status:', e.message);
+  }
+}
+
 async function consultarEsimPorIccid(iccid) {
   if (!iccid) throw new Error('ICCID não informado para consulta do eSIM');
   return await boraGet(`/api/Subscriber/${encodeURIComponent(iccid)}/iccid`);
@@ -591,11 +601,12 @@ async function esimEhTipoEsim(iccid) {
 const LIMITE_ESIM_PENDENTE = parseInt(process.env.LIMITE_ESIM_PENDENTE || '3', 10);
 
 // Conta quantas linhas o vendedor principal ativou no mês que ainda NÃO estão ACTIVE na Bora.
-// Verifica em tempo real na Bora (fonte da verdade).
+// Lê do cache local (status_bora), populado pelo job sincronizarCacheStatus a cada 5 min.
+// Sem chamadas síncronas à Bora — a tela responde instantâneo.
 async function contarEsimsPendentesVendedor(vendedorPrincipalId) {
   // Linhas ativadas por este vendedor no mês corrente (BRT)
   const { rows } = await pool.query(
-    `SELECT id, msisdn, iccid, status
+    `SELECT id, msisdn, iccid, status, status_bora
        FROM linhas
       WHERE vendedor_id = $1
         AND data_ativacao >= date_trunc('month', (NOW() AT TIME ZONE 'America/Recife'))
@@ -610,25 +621,19 @@ async function contarEsimsPendentesVendedor(vendedorPrincipalId) {
     // Já marcada como ativa/paga no nosso banco — não precisa consultar
     if (String(linha.status || '').toLowerCase() === 'ativa') continue;
 
-    let ativaNaBora = false;
-    try {
-      const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
-      const st = String(details?.status || '').toUpperCase();
-      ativaNaBora = (st === 'ACTIVE');
-      // Sincroniza nosso banco quando detecta que pagou
-      if (ativaNaBora && String(linha.status || '').toLowerCase() !== 'ativa') {
-        await pool.query("UPDATE linhas SET status='ativa' WHERE id=$1", [linha.id]).catch(() => null);
-      }
-    } catch {
-      // Sem details / erro: trata como pendente (conservador)
-      ativaNaBora = false;
+    // Lê do cache (status_bora). ACTIVE no cache = não pendente.
+    const ativaNaBora = String(linha.status_bora || '').toUpperCase() === 'ACTIVE';
+
+    // Sincroniza nosso banco quando o cache já indica que pagou
+    if (ativaNaBora && String(linha.status || '').toLowerCase() !== 'ativa') {
+      await pool.query("UPDATE linhas SET status='ativa' WHERE id=$1", [linha.id]).catch(() => null);
     }
 
     if (!ativaNaBora) {
+      // status_bora ainda não populado ou diferente de ACTIVE → conta como pendente (conservador)
       pendentes++;
       pendentesDetalhe.push({ msisdn: linha.msisdn, iccid: linha.iccid });
     }
-    await aguardar(120);
   }
 
   return {
@@ -4378,6 +4383,81 @@ app.post('/api/admin/reconciliar/forcar', authMiddleware, adminOnly, async (req,
   res.json({ ok: true, mensagem: 'Reconciliação iniciada em background' });
 });
 
+// ─── CACHE DE STATUS (Solução B) — job de fundo a cada 5 min ──────────────────
+// Percorre as linhas em lotes, da mais defasada para a mais recente, consulta a
+// Bora longe do usuário e grava status_bora + ultima_sincronizacao no banco. As
+// telas que precisam do status leem do cache (instantâneo), sem chamar a Bora.
+const SYNC_LOTE_MAX = parseInt(process.env.SYNC_CACHE_LOTE || '300', 10); // linhas por ciclo
+const SYNC_PAUSA_MS = parseInt(process.env.SYNC_CACHE_PAUSA_MS || '150', 10); // pausa entre chamadas
+let syncCacheEmAndamento = false;
+
+async function sincronizarCacheStatus() {
+  if (syncCacheEmAndamento) {
+    console.log('[CACHE-STATUS] Ciclo anterior ainda em andamento — pulando.');
+    return;
+  }
+  syncCacheEmAndamento = true;
+  const inicio = Date.now();
+  let verificadas = 0, atualizadas = 0, removidas = 0, erros = 0;
+  try {
+    // Mais defasadas primeiro (nunca sincronizadas no topo), só linhas com msisdn.
+    const { rows: linhas } = await pool.query(
+      `SELECT id, msisdn, status, status_bora FROM linhas
+        WHERE msisdn IS NOT NULL
+        ORDER BY ultima_sincronizacao ASC NULLS FIRST
+        LIMIT $1`,
+      [SYNC_LOTE_MAX]
+    );
+    for (const linha of linhas) {
+      verificadas++;
+      try {
+        const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+        const st = String(details?.status || details?.lineStatus || '').toUpperCase() || 'UNKNOWN';
+        await pool.query(
+          `UPDATE linhas SET status_bora=$1, ultima_sincronizacao=NOW(), ultima_checagem=NOW() WHERE id=$2`,
+          [st, linha.id]
+        );
+        // Mantém a coluna status alinhada quando a Bora confirma ACTIVE.
+        if (st === 'ACTIVE' && String(linha.status || '').toLowerCase() !== 'ativa') {
+          await pool.query("UPDATE linhas SET status='ativa' WHERE id=$1", [linha.id]).catch(() => null);
+        }
+        atualizadas++;
+      } catch (e) {
+        const code = e?.response?.status;
+        if (code === 404) {
+          // Linha não existe mais na Bora → marca como cancelada no cache e no status.
+          await pool.query(
+            `UPDATE linhas SET status_bora='NOT_FOUND', status='cancelada', ultima_sincronizacao=NOW(), ultima_checagem=NOW() WHERE id=$1`,
+            [linha.id]
+          ).catch(() => null);
+          removidas++;
+        } else {
+          // Erro transitório: só carimba a sincronização para a linha sair da fila e voltar no próximo ciclo.
+          await pool.query(`UPDATE linhas SET ultima_sincronizacao=NOW() WHERE id=$1`, [linha.id]).catch(() => null);
+          erros++;
+        }
+      }
+      await aguardar(SYNC_PAUSA_MS);
+    }
+    const seg = Math.round((Date.now() - inicio) / 1000);
+    console.log(`[CACHE-STATUS] Ciclo concluído em ${seg}s — ${verificadas} verificadas, ${atualizadas} atualizadas, ${removidas} canceladas, ${erros} erros.`);
+  } catch (err) {
+    console.error(`[CACHE-STATUS] Erro geral: ${err.message}`);
+  } finally {
+    syncCacheEmAndamento = false;
+  }
+}
+
+// Roda a cada 5 minutos
+cron.schedule('*/5 * * * *', sincronizarCacheStatus);
+
+// Endpoint para forçar um ciclo de sincronização manualmente
+app.post('/api/admin/cache-status/forcar', authMiddleware, adminOnly, async (req, res) => {
+  sincronizarCacheStatus().catch(console.error);
+  res.json({ ok: true, mensagem: 'Sincronização de cache iniciada em background' });
+});
+
+
 // Endpoint para forçar polling manualmente
 app.post('/api/admin/polling/forcar', authMiddleware, adminOnly, async (req, res) => {
   checarRecargas().catch(console.error);
@@ -4396,6 +4476,7 @@ async function rodarMigrations(tentativa = 1) {
   const migrations = [
     ['colunas eSIM', garantirColunasEsimQrCode],
     ['equipe de vendedores', garantirColunasEquipeVendedor],
+    ['cache de status', garantirColunasCacheStatus],
     ['tabela notif WhatsApp', garantirTabelaNotifWhatsapp],
     ['tabela vínculos vendedor', garantirTabelaVinculoVendedor],
   ];
