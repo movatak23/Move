@@ -1363,6 +1363,24 @@ app.delete('/api/vendedores/:id', authMiddleware, adminOnly, async (req, res) =>
       await client.query('UPDATE vinculos_msisdn_vendedor SET vendedor_id=$1, vendedor_nome=$2 WHERE vendedor_id=$3', [novoPrincipal, d.nome, id]).catch(()=>null);
     }
 
+    // Limpa os vínculos que referenciam o vendedor (e seus subvendedores) ANTES de
+    // remover, senão a FK vinculos_msisdn_vendedor_vendedor_id_fkey bloqueia a exclusão.
+    // Com destino: reaponta os vínculos pro vendedor de destino. Sem destino: remove.
+    if (transferirPara) {
+      const dst = await client.query('SELECT id, nome, role, parent_id FROM vendedores WHERE id=$1', [transferirPara]);
+      const npVinc = dst.rows.length ? (dst.rows[0].role === 'subvendedor' ? (dst.rows[0].parent_id || dst.rows[0].id) : dst.rows[0].id) : null;
+      const nomeVinc = dst.rows.length ? dst.rows[0].nome : null;
+      await client.query(
+        'UPDATE vinculos_msisdn_vendedor SET vendedor_id=$1, vendedor_nome=$2 WHERE vendedor_id IN (SELECT id FROM vendedores WHERE id=$3 OR parent_id=$3)',
+        [npVinc, nomeVinc, id]
+      );
+    } else {
+      await client.query(
+        'DELETE FROM vinculos_msisdn_vendedor WHERE vendedor_id IN (SELECT id FROM vendedores WHERE id=$1 OR parent_id=$1)',
+        [id]
+      );
+    }
+
     // Remove subvendedores vinculados (se houver) e o próprio vendedor
     await client.query('DELETE FROM vendedor_permissoes WHERE vendedor_id IN (SELECT id FROM vendedores WHERE id=$1 OR parent_id=$1)', [id]);
     await client.query('DELETE FROM vendedores WHERE parent_id=$1', [id]);
