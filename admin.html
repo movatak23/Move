@@ -1357,6 +1357,18 @@ select option { background: var(--bg3); }
           <tbody id="retro-orfaos"><tr><td colspan="3" class="loading">Nenhum órfão carregado</td></tr></tbody>
         </table>
       </div>
+
+      <div class="table-card" style="margin-top:20px">
+        <div class="table-header"><div class="table-title">4. Materializar linhas na carteira</div></div>
+        <div style="padding:4px;font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:10px">
+          Depois de importar e atribuir os órfãos, este passo cria as linhas na <strong>carteira de cada vendedor</strong> (a partir dos vínculos + planilha). É o que faz os chips aparecerem na conta deles. Pode rodar quantas vezes quiser — não duplica.
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="retroMaterializar()">Materializar carteira</button>
+          <span style="font-size:12px;color:var(--text3)">usa a mesma planilha selecionada acima</span>
+        </div>
+        <div id="retro-materializar-result" style="margin-top:14px"></div>
+      </div>
     </div>
 
   </div><!-- /main-content -->
@@ -3842,6 +3854,35 @@ async function retroCalcular() {
     }
   } catch(e) {
     tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Erro ao calcular</td></tr>';
+    toast(e.message, 'error');
+  }
+}
+
+async function retroMaterializar() {
+  const file = document.getElementById('retro-file').files[0];
+  if (!file) { toast('Selecione a planilha primeiro (passo 1)','error'); return; }
+  if (!confirm('Materializar as linhas na carteira dos vendedores?\n\nUsa os vínculos já atribuídos. Pode rodar várias vezes — não duplica.')) return;
+  const fd = new FormData();
+  fd.append('planilha', file);
+  const box = document.getElementById('retro-materializar-result');
+  box.innerHTML = '<div class="loading">Materializando linhas na carteira...</div>';
+  try {
+    const r = await apiForm('POST', '/api/retroativo/materializar', fd);
+    let html = `<div style="background:var(--bg3);border-radius:8px;padding:12px;font-size:13px;line-height:1.7">`;
+    html += `✅ <strong>${r.linhas_criadas}</strong> linhas criadas na carteira<br>`;
+    html += `♻ <strong>${r.linhas_atualizadas}</strong> linhas atualizadas<br>`;
+    html += `💳 <strong>${r.recargas_inseridas}</strong> recargas registradas`;
+    if (r.sem_dono) {
+      html += `<br>⚠ <strong>${r.sem_dono}</strong> chips ainda sem vendedor — atribua no passo 3 (órfãos) e rode de novo`;
+    }
+    if (r.planos_sem_comissao && r.planos_sem_comissao.length) {
+      html += `<div style="margin-top:8px;opacity:0.85">Planos sem comissão configurada (linha aparece, comissão fica R$ 0): ${r.planos_sem_comissao.join(', ')}</div>`;
+    }
+    html += `</div>`;
+    box.innerHTML = html;
+    toast('Linhas materializadas na carteira!');
+  } catch(e) {
+    box.innerHTML = '';
     toast(e.message, 'error');
   }
 }

@@ -2915,6 +2915,159 @@ app.post('/api/retroativo/atribuir-orfao', authMiddleware, adminOnly, async (req
 });
 
 
+// Materializa as linhas retroativas na tabela `linhas` a partir dos vínculos já
+// curados (vinculos_msisdn_vendedor) + dados da planilha. É a versão em massa do
+// /api/comissao/registrar-retroativo. Sem isso, os chips ficam só no mapa de
+// vínculos e não aparecem na carteira do vendedor (que lê de `linhas`).
+// Idempotente: upsert por MSISDN, recargas dedupe por período.
+function parseDataBR(s) {
+  const m = String(s || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!m) return null;
+  return { yyyy: parseInt(m[3], 10), mm: parseInt(m[2], 10), dd: parseInt(m[1], 10) };
+}
+
+app.post('/api/retroativo/materializar', authMiddleware, adminOnly, uploadMem.single('planilha'), async (req, res) => {
+  try {
+    const XLSX = require('xlsx');
+    if (!req.file) return res.status(400).json({ erro: 'Envie a planilha (campo "planilha")' });
+
+    const mapas = await carregarMapasComissaoPlanos();
+    const wb = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const linhasPlan = XLSX.utils.sheet_to_json(ws, { defval: '' });
+
+    // Vínculos curados: msisdn -> { vendedor_id, vendedor_nome }
+    const vinc = await pool.query('SELECT msisdn, vendedor_id, vendedor_nome FROM vinculos_msisdn_vendedor');
+    const vincMap = {};
+    for (const v of vinc.rows) vincMap[normMsisdn(v.msisdn)] = v;
+
+    // Agrupa as linhas da planilha por MSISDN
+    const porMsisdn = {};
+    for (const r of linhasPlan) {
+      const ms = normMsisdn(r['MSISDN']);
+      if (!ms) continue;
+      (porMsisdn[ms] = porMsisdn[ms] || []).push(r);
+    }
+
+    // Cache nome->vendedor (fallback quando não há vínculo)
+    const cacheNome = {};
+    async function vendedorPorNome(nome) {
+      const chave = String(nome || '').trim();
+      if (!chave) return null;
+      if (chave in cacheNome) return cacheNome[chave];
+      const email = emailFicticioVendedor(chave);
+      const { rows } = await pool.query('SELECT id FROM vendedores WHERE nome=$1 OR email=$2 LIMIT 1', [chave, email]);
+      const id = rows.length ? rows[0].id : null;
+      cacheNome[chave] = id;
+      return id;
+    }
+
+    // Resolve escopo (vendedor principal vs subvendedor) a partir de um id de vendedor
+    async function resolverEscopoPorId(vid) {
+      const { rows } = await pool.query('SELECT id, role, parent_id FROM vendedores WHERE id=$1', [vid]);
+      if (!rows.length) return null;
+      return rows[0].role === 'subvendedor'
+        ? { vendedor_id: rows[0].parent_id, subvendedor_id: rows[0].id }
+        : { vendedor_id: rows[0].id, subvendedor_id: null };
+    }
+
+    let linhasCriadas = 0, linhasAtualizadas = 0, recargasInseridas = 0;
+    const semDono = [];
+    const planosSemComissao = new Set();
+
+    for (const [ms, regs] of Object.entries(porMsisdn)) {
+      // 1) Dono: vínculo curado tem prioridade; fallback = coluna VENDEDOR da planilha
+      let vidBase = (vincMap[ms] && vincMap[ms].vendedor_id) || null;
+      if (!vidBase) {
+        const ativ = regs.find(r => String(r['TIPO'] || '').toUpperCase().startsWith('ATIVA'));
+        const nome = String((ativ || regs.find(r => String(r['VENDEDOR'] || '').trim()) || {})['VENDEDOR'] || '').trim();
+        vidBase = await vendedorPorNome(nome);
+      }
+      if (!vidBase) { semDono.push(ms); continue; }
+
+      const escopo = await resolverEscopoPorId(vidBase);
+      if (!escopo) { semDono.push(ms); continue; }
+
+      // 2) Metadados da linha — preferir a linha de ativação
+      const base = regs.find(r => String(r['TIPO'] || '').toUpperCase().startsWith('ATIVA')) || regs[0];
+      const planoNome = String(base['PLANO'] || '').trim() || null;
+      const documento = String(base['CPF/CNPJ'] || '').trim() || null;
+      const nomeCliente = String(base['NOME DO CLIENTE'] || '').trim() || null;
+      const dataBR = parseDataBR(base['DATA']);
+      const dataAtivacao = dataBR ? new Date(Date.UTC(dataBR.yyyy, dataBR.mm - 1, dataBR.dd, 3, 0, 0)) : null;
+
+      // 3) Upsert da linha (por MSISDN)
+      const { rows: existe } = await pool.query('SELECT id, iccid FROM linhas WHERE msisdn=$1', [ms]);
+      let linhaId;
+      if (!existe.length) {
+        const ins = await pool.query(
+          `INSERT INTO linhas (iccid, msisdn, vendedor_id, subvendedor_id, plano_id, plano_nome, documento_cliente, nome_cliente, status, data_ativacao)
+           VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,'ativa',$8) RETURNING id`,
+          [`retroativo-${ms}`, ms, escopo.vendedor_id, escopo.subvendedor_id, planoNome, documento, nomeCliente, dataAtivacao]
+        );
+        linhaId = ins.rows[0].id;
+        linhasCriadas++;
+      } else {
+        linhaId = existe[0].id;
+        await pool.query(
+          `UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2,
+                  plano_nome=COALESCE(NULLIF(plano_nome,''),$3),
+                  documento_cliente=COALESCE(NULLIF(documento_cliente,''),$4),
+                  nome_cliente=COALESCE(NULLIF(nome_cliente,''),$5),
+                  data_ativacao=COALESCE(data_ativacao,$6)
+             WHERE id=$7`,
+          [escopo.vendedor_id, escopo.subvendedor_id, planoNome, documento, nomeCliente, dataAtivacao, linhaId]
+        );
+        linhasAtualizadas++;
+      }
+
+      // 4) Transações de recarga por período (retroativo: só recarga, nunca ativação)
+      for (const r of regs) {
+        const tipo = String(r['TIPO'] || '').toUpperCase();
+        const ehRecarga = tipo.includes('RECARGA') || tipo.includes('PACOTE');
+        if (!ehRecarga) continue;
+
+        const dBR = parseDataBR(r['DATA']);
+        if (!dBR) continue;
+        const periodo = `${dBR.yyyy}-${String(dBR.mm).padStart(2, '0')}`;
+
+        const { rows: jaTem } = await pool.query(
+          "SELECT id FROM transacoes WHERE linha_id=$1 AND tipo='recarga' AND LEFT(periodo_referencia,7)=$2",
+          [linhaId, periodo]
+        );
+        if (jaTem.length) continue;
+
+        const planoR = String(r['PLANO'] || '').trim();
+        const cfg = localizarPlanoComissao(mapas, null, planoR);
+        if (!cfg) planosSemComissao.add(planoR);
+        const comissao = cfg ? Number(cfg.comissao_recarga || 0) : 0;
+
+        await pool.query(
+          `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, periodo_referencia, fonte)
+           VALUES ($1,$2,$3,'recarga',$4,$5,$6,$7,$8,'retroativo')
+           ON CONFLICT DO NOTHING`,
+          [linhaId, escopo.vendedor_id, escopo.subvendedor_id, cfg?.plano_id || null, cfg?.plano_nome || planoR || null, cfg?.plano_valor || null, comissao, periodo]
+        );
+        recargasInseridas++;
+      }
+    }
+
+    res.json({
+      ok: true,
+      linhas_criadas: linhasCriadas,
+      linhas_atualizadas: linhasAtualizadas,
+      recargas_inseridas: recargasInseridas,
+      sem_dono: semDono.length,
+      sem_dono_msisdns: semDono,
+      planos_sem_comissao: Array.from(planosSemComissao),
+    });
+  } catch (e) {
+    console.error('[RETROATIVO MATERIALIZAR]', e.message);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+
 // ─── MARCA DO VENDEDOR PRINCIPAL / APP ──────────────────────────────────────
 app.get('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, async (req, res) => {
   try {
