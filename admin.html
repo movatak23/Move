@@ -1951,6 +1951,8 @@ function construirNav() {
     { page: 'churn', icon: '📉', label: 'Churn' },
     { page: 'promocoes-admin', icon: '🎯', label: 'Promoções' },
     { page: 'retroativo', icon: '🧾', label: 'Comissão Retroativa' },
+    { section: 'Suporte' },
+    { link: '/ajuda.html', icon: '❓', label: 'Central de Ajuda' },
   ] : [
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
     ...(isVendedorPrincipal ? [
@@ -1965,14 +1967,17 @@ function construirNav() {
     ...(isVendedorPrincipal ? [{ page: 'calculadora', icon: '◎', label: 'Calculadora' }] : []),
     { section: 'Ferramentas' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
+    { section: 'Suporte' },
+    { link: '/ajuda.html', icon: '❓', label: 'Central de Ajuda' },
   ];
   nav.innerHTML = items.filter(i => {
     if (!i.perm) return true;
     return state.permissoes && state.permissoes.includes(i.perm);
-  }).map(i => i.section
-    ? `<div class="nav-section">${i.section}</div>`
-    : `<div class="nav-item" id="nav-${i.page}" onclick="navegarPara('${i.page}')"><span class="icon">${i.icon}</span>${i.label}</div>`
-  ).join('');
+  }).map(i => {
+    if (i.section) return `<div class="nav-section">${i.section}</div>`;
+    if (i.link) return `<div class="nav-item" onclick="window.open('${i.link}','_blank')"><span class="icon">${i.icon}</span>${i.label}</div>`;
+    return `<div class="nav-item" id="nav-${i.page}" onclick="navegarPara('${i.page}')"><span class="icon">${i.icon}</span>${i.label}</div>`;
+  }).join('');
 }
 
 function navegarPara(page) {

@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Central de Ajuda — Move</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #000000;
+  --bg2: #0a0a0a;
+  --bg3: #111111;
+  --bg4: #181818;
+  --border: #1e1e1e;
+  --border2: #2a2a2a;
+  --text: #f0f0f0;
+  --text2: #888888;
+  --text3: #444444;
+  --accent: #00bfff;
+  --accent2: #0099cc;
+  --accent-dim: rgba(0,191,255,0.08);
+  --accent-dim2: rgba(0,191,255,0.15);
+  --red: #e05a5a;
+  --red-dim: rgba(224,90,90,0.1);
+  --yellow: #f5b041;
+  --yellow-dim: rgba(245,176,65,0.1);
+  --r: 10px;
+  --mono: 'Space Mono', monospace;
+  --sans: 'DM Sans', sans-serif;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+  font-size: 14px;
+  line-height: 1.55;
+}
+a { color: var(--accent); text-decoration: none; }
+
+/* ── TOPBAR ───────────────────────────────────── */
+.topbar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 16px;
+  padding: 16px 28px;
+  background: rgba(0,0,0,0.88);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+.topbar .brand { display: flex; align-items: center; gap: 10px; }
+.topbar .brand-mark {
+  font-family: var(--mono); font-weight: 700; font-size: 16px;
+  color: var(--bg); background: var(--accent);
+  width: 30px; height: 30px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+}
+.topbar .brand-text { font-family: var(--mono); font-size: 15px; letter-spacing: 0.5px; }
+.topbar .brand-text span { color: var(--text2); font-weight: 400; }
+.topbar .back {
+  font-family: var(--mono); font-size: 12px; color: var(--text2);
+  border: 1px solid var(--border2); border-radius: 8px;
+  padding: 8px 14px; transition: 0.15s;
+  white-space: nowrap;
+}
+.topbar .back:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ── HERO / BUSCA ─────────────────────────────── */
+.hero {
+  padding: 56px 24px 28px;
+  text-align: center;
+  background:
+    radial-gradient(ellipse 700px 280px at 50% 0%, rgba(0,191,255,0.07) 0%, transparent 70%),
+    var(--bg);
+}
+.hero .eyebrow {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 2px;
+  color: var(--accent); text-transform: uppercase; margin-bottom: 14px;
+}
+.hero h1 {
+  font-size: clamp(26px, 4vw, 38px); font-weight: 700; letter-spacing: -0.5px;
+  margin-bottom: 10px;
+}
+.hero p.sub { color: var(--text2); font-size: 14.5px; max-width: 460px; margin: 0 auto 30px; }
+
+.search-wrap { max-width: 560px; margin: 0 auto; position: relative; }
+.search-wrap input {
+  width: 100%; padding: 16px 50px 16px 20px;
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: 14px; color: var(--text); font-size: 15px; font-family: var(--sans);
+  outline: none; transition: 0.15s;
+}
+.search-wrap input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.search-wrap input::placeholder { color: var(--text3); }
+.search-wrap .ico {
+  position: absolute; right: 18px; top: 50%; transform: translateY(-50%);
+  color: var(--text3); font-size: 17px; pointer-events: none;
+}
+.search-meta {
+  max-width: 560px; margin: 12px auto 0; font-family: var(--mono);
+  font-size: 11.5px; color: var(--text3); min-height: 16px;
+}
+
+/* ── PÍLULAS DE CATEGORIA ─────────────────────── */
+.pills {
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
+  max-width: 920px; margin: 26px auto 0; padding: 0 20px;
+}
+.pill {
+  font-family: var(--mono); font-size: 11.5px; color: var(--text2);
+  border: 1px solid var(--border2); border-radius: 999px;
+  padding: 7px 14px; cursor: pointer; transition: 0.15s; user-select: none;
+  background: var(--bg2);
+}
+.pill:hover { color: var(--text); border-color: var(--text3); }
+.pill.active { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+
+/* ── CONTEÚDO ─────────────────────────────────── */
+.wrap { max-width: 920px; margin: 0 auto; padding: 44px 20px 100px; }
+
+.category { margin-bottom: 46px; scroll-margin-top: 90px; }
+.category.hidden { display: none; }
+.cat-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+.cat-num {
+  font-family: var(--mono); font-size: 12px; color: var(--accent);
+  border: 1px solid var(--accent-dim2); background: var(--accent-dim);
+  border-radius: 6px; padding: 3px 8px;
+}
+.cat-head h2 { font-size: 19px; font-weight: 700; }
+.cat-desc { color: var(--text2); font-size: 13px; margin: -6px 0 18px 0; }
+
+.item {
+  border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--bg2); margin-bottom: 10px; overflow: hidden;
+  transition: border-color 0.15s;
+}
+.item.hidden { display: none; }
+.item.match { border-color: var(--accent-dim2); }
+.item summary {
+  list-style: none; cursor: pointer; padding: 16px 18px;
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  font-weight: 500; font-size: 14.5px;
+}
+.item summary::-webkit-details-marker { display: none; }
+.item summary .plus {
+  font-family: var(--mono); color: var(--text3); font-size: 17px; flex-shrink: 0;
+  transition: transform 0.2s;
+}
+.item[open] summary .plus { transform: rotate(45deg); color: var(--accent); }
+.item .body {
+  padding: 0 18px 18px; color: var(--text2); font-size: 13.5px;
+}
+.item .body p { margin: 0 0 10px; }
+.item .body p:last-child { margin-bottom: 0; }
+.item .body ul { margin: 0 0 10px 18px; }
+.item .body li { margin-bottom: 6px; }
+.item .body strong { color: var(--text); }
+.item .body code {
+  font-family: var(--mono); background: var(--bg4); padding: 2px 6px;
+  border-radius: 4px; color: var(--accent); font-size: 12.5px;
+}
+.path {
+  font-family: var(--mono); font-size: 12px; color: var(--accent);
+  background: var(--accent-dim); border-radius: 6px; padding: 8px 12px;
+  margin: 10px 0; display: inline-block;
+}
+.warn {
+  border-left: 3px solid var(--yellow); background: var(--yellow-dim);
+  border-radius: 0 8px 8px 0; padding: 10px 14px; margin: 10px 0;
+  color: var(--text); font-size: 13px;
+}
+.tip {
+  border-left: 3px solid var(--accent); background: var(--accent-dim);
+  border-radius: 0 8px 8px 0; padding: 10px 14px; margin: 10px 0;
+  color: var(--text); font-size: 13px;
+}
+mark { background: var(--accent-dim2); color: var(--accent); border-radius: 3px; padding: 0 2px; }
+
+.empty-state {
+  text-align: center; padding: 60px 20px; color: var(--text3);
+  font-family: var(--mono); font-size: 13px; display: none;
+}
+
+footer {
+  text-align: center; padding: 30px 20px 50px; color: var(--text3);
+  font-family: var(--mono); font-size: 11.5px;
+}
+
+@media (max-width: 640px) {
+  .topbar { padding: 14px 16px; }
+  .hero { padding: 40px 16px 22px; }
+  .wrap { padding: 32px 14px 80px; }
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <div class="brand-mark">M</div>
+    <div class="brand-text">MOVE <span>· central de ajuda</span></div>
+  </div>
+  <a class="back" href="/">← Voltar ao painel</a>
+</div>
+
+<div class="hero">
+  <div class="eyebrow">Manual interno · Operação Move</div>
+  <h1>Central de Ajuda</h1>
+  <p class="sub">Consulta rápida para quem ativa, atende e resolve ocorrências no dia a dia da Move.</p>
+  <div class="search-wrap">
+    <input id="busca" type="text" placeholder="Busque por um assunto, ex: APN, portabilidade, reembolso...">
+    <span class="ico">⌕</span>
+  </div>
+  <div class="search-meta" id="busca-meta"></div>
+</div>
+
+<div class="pills" id="pills"></div>
+
+<div class="wrap" id="conteudo"></div>
+<div class="empty-state" id="empty">Nada encontrado para esse termo.</div>
+
+<footer>Move · conteúdo interno para a equipe e parceiros de venda</footer>
+
+<script>
+const DADOS = [
+  {
+    icon: '◇',
+    titulo: 'Planos & Funcionamento',
+    desc: 'Como o plano Move funciona na prática, do dia a dia ao ciclo de cobrança.',
+    itens: [
+      {
+        q: 'Como funciona o plano Move',
+        a: `<p>O plano Move trabalha no formato <strong>Controle</strong>: o cliente paga um valor fixo todo mês e recebe uma franquia de internet, ligações e SMS conforme o pacote escolhido.</p>
+            <p>Isso garante previsibilidade — o cliente sempre sabe quanto vai pagar, sem cobranças extras automáticas durante o ciclo.</p>
+            <p>Se a franquia acabar antes do fim do ciclo, existem duas saídas:</p>
+            <ul>
+              <li>Contratar um <strong>pacote adicional</strong> (válido por 7 dias) para continuar usando;</li>
+              <li>Aguardar a renovação automática no início do próximo ciclo.</li>
+            </ul>`
+      },
+      {
+        q: 'WhatsApp sem consumir o pacote de dados',
+        a: `<p>Mensagens, áudios e arquivos enviados pelo WhatsApp não descontam da franquia de internet — é um dos principais diferenciais do plano.</p>
+            <div class="warn">⚠️ Chamadas de <strong>voz e vídeo</strong> pelo WhatsApp consomem dados normalmente. Avise o cliente para evitar surpresa no consumo.</div>
+            <p>O benefício só funciona com o plano ativo e a APN <code>bora.br</code> corretamente configurada no aparelho.</p>`
+      },
+      {
+        q: 'Dupla conectividade: TIM e Vivo no mesmo chip',
+        a: `<p>Com um único chip e plano, o cliente acessa duas redes móveis — <strong>TIM e Vivo</strong> — o que amplia a cobertura, principalmente em regiões onde uma das operadoras tem sinal fraco.</p>
+            <p>O chip prioriza a rede TIM; quando o sinal está indisponível, o aparelho pode buscar a rede Vivo automaticamente, ou o cliente pode trocar manualmente nas configurações do celular.</p>
+            <ul>
+              <li>Cobertura nacional ampliada;</li>
+              <li>Menos áreas sem sinal;</li>
+              <li>Liberdade para escolher a rede mais estável na região.</li>
+            </ul>
+            <p>Para funcionar bem, o roaming de dados precisa estar ativado e a APN <code>bora.br</code> configurada.</p>`
+      },
+      {
+        q: 'Bloqueio temporário de linha',
+        a: `<p>Indicado quando o cliente vai viajar, muda de rotina ou perde/tem o aparelho furtado. O bloqueio "congela" a linha sem cancelar a recorrência e sem perder o número.</p>
+            <ul>
+              <li>Permitido <strong>uma vez por ano</strong>;</li>
+              <li>Duração entre <strong>30 e 120 dias</strong> (regra Anatel);</li>
+              <li>Não cancela o plano nem a recorrência — só suspende o uso até a reativação.</li>
+            </ul>
+            <div class="path">Painel → Consultar Linha → buscar cliente → 🔒 Bloquear</div>`
+      },
+      {
+        q: 'Como a recorrência é renovada',
+        a: `<p>O plano renova automaticamente a cada 30 dias, conforme a forma de pagamento definida na ativação:</p>
+            <ul>
+              <li><strong>Cartão de crédito:</strong> cobrança na data de renovação. Se for recusada, o sistema suspende o plano e tenta novamente 3 dias depois;</li>
+              <li><strong>Boleto:</strong> enviado de 7 a 8 dias antes do vencimento, com compensação em até 3 dias úteis — tempo pensado para evitar bloqueio por atraso.</li>
+            </ul>
+            <div class="warn">⚠️ Pagamento não realizado = a linha entra na régua de bloqueio. Manter a recorrência em dia é o que garante a continuidade dos benefícios.</div>`
+      },
+      {
+        q: 'Como discar uma ligação interurbana (DDD)',
+        a: `<p>Para ligações fora do DDD local, o cliente deve discar o código da operadora antes do número:</p>
+            <div class="path">081 + DDD + número</div>
+            <p>Exemplo: <code>081 11 91234-5678</code>.</p>`
+      }
+    ]
+  },
+  {
+    icon: '⊕',
+    titulo: 'Ativação',
+    desc: 'Passo a passo de ativação de chip físico e eSIM, e os erros mais comuns no cadastro.',
+    itens: [
+      {
+        q: 'Ativação com chip físico',
+        a: `<p>Etapas comuns de ativação:</p>
+            <ul>
+              <li>Cadastro do cliente (CPF ou CNPJ);</li>
+              <li>Escolha do plano;</li>
+              <li>ICCID (código do chip) e DDD;</li>
+              <li>Forma de pagamento;</li>
+              <li>Ativação com ou sem portabilidade.</li>
+            </ul>
+            <div class="path">Painel → Ativar Chip</div>
+            <p>Normalmente a ativação é imediata, mas pode levar até 1 hora em casos de instabilidade da plataforma.</p>`
+      },
+      {
+        q: 'Ativação com eSIM',
+        a: `<p>Segue o mesmo fluxo do chip físico, com uma diferença: ao final, é gerado um <strong>QR Code</strong> para o cliente escanear e ativar o serviço no próprio aparelho.</p>
+            <ul>
+              <li>Confirme antes que o aparelho do cliente é compatível com eSIM;</li>
+              <li>O QR Code fica disponível na tela de consulta do cliente, na aba <strong>E-SIM</strong>;</li>
+              <li>Pode haver instabilidade nas primeiras horas após a ativação — é normal.</li>
+            </ul>`
+      },
+      {
+        q: 'Erros comuns na ativação e como evitar',
+        a: `<ul>
+              <li><strong>Telefone sem o "9" inicial:</strong> o cadastro é negado se faltar o dígito;</li>
+              <li><strong>Excesso de caracteres:</strong> campos como rua e bairro têm limite de 41 caracteres — use abreviações;</li>
+              <li><strong>Campos obrigatórios em branco:</strong> mesmo sem complemento, preencha com "N/A" ou "não tem".</li>
+            </ul>
+            <p>Sempre confira se o <strong>ICCID</strong> foi digitado certo e se o <strong>DDD</strong> corresponde à região do cliente — evita retrabalho.</p>`
+      }
+    ]
+  },
+  {
+    icon: '↔',
+    titulo: 'Portabilidade',
+    desc: 'Regras, prazos e o que fazer quando a portabilidade não conclui.',
+    itens: [
+      {
+        q: 'O que é portabilidade',
+        a: `<p>É o direito do cliente de manter o número de telefone ao trocar de operadora. Na Move, o processo é <strong>gratuito</strong> tanto para o cliente quanto para o parceiro.</p>
+            <p>Manter o número antigo reduz a resistência à troca — é um forte argumento de fidelização na hora da venda.</p>`
+      },
+      {
+        q: 'Regras e etapas da portabilidade',
+        a: `<p>O processo é conduzido pela ABR Telecom, com supervisão da Anatel. A Move apenas solicita; o restante é automático.</p>
+            <ul>
+              <li>Solicitação feita na aba <strong>Portabilidade</strong> do painel;</li>
+              <li>SMS de confirmação enviado ao chip antigo;</li>
+              <li>Cliente responde "SIM" em até 24 horas;</li>
+              <li>Conclusão em até 72 horas úteis.</li>
+            </ul>
+            <p>Regras essenciais: o DDD do número portado deve ser o mesmo do novo chip, o titular (CPF/CNPJ) precisa ser igual nas duas operadoras, o número não pode ter débitos pendentes, e o cliente precisa estar com o chip antigo em mãos para receber o SMS.</p>`
+      },
+      {
+        q: 'O que verificar antes de iniciar uma portabilidade',
+        a: `<ul>
+              <li>Se a portabilidade for feita junto da ativação, ela só começa depois do pagamento confirmado;</li>
+              <li>O SMS de confirmação pode demorar até 24h em alguns casos;</li>
+              <li>Se for cancelada ou negada, uma nova tentativa é possível depois de resolver a causa — o chip continua ativo com o número Move enquanto isso;</li>
+              <li>Se o chip Move estiver em um CPF/CNPJ diferente do número a portar, uma <strong>troca de titularidade</strong> resolve;</li>
+              <li>Pode haver instabilidade de rede no dia da conclusão — é esperado.</li>
+            </ul>
+            <p>Para acompanhar o status oficial: <a href="https://consultanumero.abrtelecom.com.br/consultanumero/" target="_blank" rel="noopener">consultanumero.abrtelecom.com.br</a>.</p>`
+      },
+      {
+        q: 'Códigos de erro mais comuns na recusa',
+        a: `<ul>
+              <li><strong>Código 5</strong> — cliente não respondeu ao SMS. Confirme se está com o chip antigo pronto para receber e repita a solicitação;</li>
+              <li><strong>Código 53</strong> — número não está ativo na operadora de origem;</li>
+              <li><strong>Códigos 55/57</strong> — divergência de titularidade (CPF/CNPJ). Resolver via troca de titularidade;</li>
+              <li><strong>Código 59</strong> — erro no CPF/CNPJ informado. Mesma solução do anterior.</li>
+            </ul>`
+      },
+      {
+        q: 'Ocorrência: portabilidade não concluída ou SMS não recebido',
+        a: `<p><strong>Cliente não recebeu o SMS:</strong></p>
+            <ul>
+              <li>Verifique se o chip antigo ainda está no aparelho e habilitado para SMS;</li>
+              <li>Confira o status da portabilidade no painel;</li>
+              <li>Aguarde até 24h pelo SMS;</li>
+              <li>Se foi cancelada por falta de confirmação, será preciso solicitar de novo.</li>
+            </ul>
+            <p><strong>Portabilidade não concluída:</strong></p>
+            <ul>
+              <li>Confira o prazo (até 3 dias úteis) e o status atual em <strong>Portabilidade</strong>, buscando por número ou CPF;</li>
+              <li>Se estiver dentro do prazo, oriente o cliente a aguardar;</li>
+              <li>Se foi negada, identifique o código de erro e siga a solução correspondente.</li>
+            </ul>
+            <p>Se o problema persistir, registre: DDD e número da linha, e CPF do cliente, antes de escalar.</p>`
+      }
+    ]
+  },
+  {
+    icon: '📦',
+    titulo: 'Recarga & Troca de Plano',
+    desc: 'Pacotes adicionais, mudança de franquia e como reverter bloqueios por atraso.',
+    itens: [
+      {
+        q: 'Quando usar o pacote adicional',
+        a: `<p>É a solução emergencial para quem ficou sem internet antes da renovação. Libera um pacote temporário com validade de <strong>7 dias</strong>, sem recorrência automática.</p>
+            <ul>
+              <li>Disponível só para linhas com plano ativo;</li>
+              <li>Não acumula com outro pacote adicional;</li>
+              <li>Deve ser usado dentro do prazo, ou se perde.</li>
+            </ul>
+            <div class="path">Painel → Pacotes Adicionais</div>`
+      },
+      {
+        q: 'Diferença entre pacote adicional e troca de plano',
+        a: `<p>São soluções diferentes: o <strong>pacote adicional</strong> é temporário (7 dias) e não muda o plano principal do cliente. Já a <strong>troca de plano</strong> contrata uma nova franquia mensal, com nova recorrência e novo ciclo de cobrança.</p>
+            <p>Se o cliente quer mais GB de forma recorrente — não pontual — o caminho certo é a troca de plano, não o pacote adicional.</p>`
+      },
+      {
+        q: 'Como cancelar a recorrência',
+        a: `<p>Interrompe as próximas cobranças. O cliente continua usando o plano até o fim do ciclo atual; depois, o serviço é suspenso e entra na régua de bloqueio se não houver nova ativação.</p>
+            <div class="path">Painel → Consultar Linha → buscar cliente → cancelar recorrência</div>
+            <p>Útil quando o cliente quer trocar de plano ou pausar o serviço — depois é possível ativar de novo com outro plano ou forma de pagamento.</p>`
+      },
+      {
+        q: 'Como reativar uma linha suspensa ou bloqueada',
+        a: `<p>Se o cliente atrasou o pagamento e a linha foi suspensa, ela ainda pode ser reativada enquanto estiver dentro do prazo da régua de bloqueio.</p>
+            <div class="path">Painel → Consultar Linha → buscar (CPF, número ou ICCID) → ▶ Reativar</div>
+            <p>É possível manter a forma de pagamento atual ou trocar por outra na hora da reativação.</p>`
+      },
+      {
+        q: 'Como trocar de plano',
+        a: `<p>Indicado quando o cliente quer uma franquia maior ou mais econômica.</p>
+            <div class="path">Painel → Consultar Linha → buscar cliente → 🔄 Trocar Plano → selecionar o novo plano</div>
+            <p>A troca substitui a franquia atual — não é cumulativa com pacotes adicionais.</p>`
+      }
+    ]
+  },
+  {
+    icon: '⚙',
+    titulo: 'Configuração do Aparelho',
+    desc: 'APN, roaming e como forçar uma rede específica quando o sinal estiver instável.',
+    itens: [
+      {
+        q: 'O que é APN e por que configurar',
+        a: `<p>A APN (Access Point Name) é a configuração que permite ao celular acessar a internet móvel da operadora. Sem ela corretamente definida, o chip não navega — mesmo com o plano ativo.</p>
+            <p>A APN da Move é <code>bora.br</code>. A maioria dos aparelhos configura automaticamente ao detectar o chip; configuração manual só é necessária em casos específicos:</p>
+            <ul>
+              <li>Aparelhos importados ou com sistema modificado;</li>
+              <li>Modelos que não reconhecem a rede automaticamente;</li>
+              <li>Clientes com dificuldade de conexão após a ativação.</li>
+            </ul>`
+      },
+      {
+        q: 'Configurar APN no Android',
+        a: `<ol style="margin-left:18px">
+              <li>Configurações → Rede e Internet;</li>
+              <li>Rede Móvel → Nomes dos Pontos de Acesso;</li>
+              <li>Toque em "+" para adicionar uma nova APN;</li>
+              <li>No campo Nome, digite "Move";</li>
+              <li>No campo APN, digite <code>bora.br</code>;</li>
+              <li>Salve e selecione essa APN como padrão.</li>
+            </ol>
+            <p>Se a conexão não voltar, reinicie o aparelho ou force a rede para 3G/4G.</p>`
+      },
+      {
+        q: 'Configurar APN no iOS',
+        a: `<ol style="margin-left:18px">
+              <li>Ajustes → Celular → Rede de Dados Celulares;</li>
+              <li>No campo APN, digite <code>bora.br</code> em Dados Celulares, Configurações LTE e Acesso Pessoal;</li>
+              <li>Volte para a tela anterior e aguarde a reconexão.</li>
+            </ol>
+            <div class="tip">💡 Ative o VoLTE para melhorar a qualidade das chamadas, e confirme que o roaming de dados está ativo — essencial para aproveitar a dupla conectividade.</div>`
+      },
+      {
+        q: 'Roaming de dados: automático ou manual',
+        a: `<p>É o que permite o aparelho alternar entre as redes TIM e Vivo.</p>
+            <ul>
+              <li><strong>Automático:</strong> o celular busca a rede Vivo sozinho quando o sinal da TIM cai. Ideal para quem se desloca entre regiões;</li>
+              <li><strong>Manual:</strong> o cliente escolhe a rede preferida — bom para quem já sabe qual operadora cobre melhor sua área.</li>
+            </ul>`
+      },
+      {
+        q: 'Como forçar a rede TIM ou Vivo manualmente',
+        a: `<ol style="margin-left:18px">
+              <li>Acesse as configurações de rede do aparelho;</li>
+              <li>Vá em "Seleção de Rede";</li>
+              <li>Desative a busca automática;</li>
+              <li>Escolha manualmente a operadora desejada na lista.</li>
+            </ol>
+            <p>Depois é possível reativar a busca automática para o aparelho voltar a alternar conforme a melhor cobertura.</p>`
+      }
+    ]
+  },
+  {
+    icon: '🔍',
+    titulo: 'Dúvidas Gerais',
+    desc: 'ICCID, plataforma e o app Move para o cliente final.',
+    itens: [
+      {
+        q: 'O que é ICCID',
+        a: `<p>É o número único do chip (Integrated Circuit Card Identifier), com 19 a 20 dígitos. Contém informações sobre país, operadora e o cartão SIM.</p>
+            <p>Fica impresso no verso do chip, abaixo do código de barras.</p>`
+      },
+      {
+        q: 'Quando solicitar a limpeza de um ICCID',
+        a: `<p>A limpeza só se aplica em casos específicos — solicite ao gestor de conta quando:</p>
+            <ul>
+              <li>Houve instabilidade da plataforma no momento da ativação;</li>
+              <li>O cliente escolheu ativação por boleto, não pagou e desistiu do chip.</li>
+            </ul>
+            <div class="warn">⚠️ Erro humano no preenchimento não é motivo válido para limpeza de ICCID, conforme regra do fornecedor.</div>`
+      },
+      {
+        q: 'O que o cliente faz no app Move',
+        a: `<ul>
+              <li>Ver o plano ativo e o consumo acumulado;</li>
+              <li>Recarregar com pacote adicional;</li>
+              <li>Alterar a forma de pagamento da recorrência;</li>
+              <li>Consultar histórico de consumo;</li>
+              <li>Emitir boletos e acompanhar vencimentos.</li>
+            </ul>`
+      },
+      {
+        q: 'Como o cliente acessa o app Move',
+        a: `<ol style="margin-left:18px">
+              <li>Baixar o app na loja (Android ou iOS);</li>
+              <li>Abrir e informar o número da linha;</li>
+              <li>Confirmar com o código recebido por SMS.</li>
+            </ol>
+            <p>Depois do login, o cliente tem acesso ao plano ativo, consumo, recarga e histórico, tudo pelo celular.</p>`
+      }
+    ]
+  },
+  {
+    icon: '☎',
+    titulo: 'Atendimento & Suporte',
+    desc: 'Prazos, escalonamento e o que fazer em cada tipo de ocorrência.',
+    itens: [
+      {
+        q: 'Fluxo de atendimento e prazos (SLA)',
+        a: `<ul>
+              <li>Retorno do fornecedor (Bora): até <strong>1 dia útil</strong>;</li>
+              <li>Resolução do chamado: até <strong>5 dias úteis</strong>;</li>
+              <li>Média histórica de resolução: em torno de <strong>3 dias úteis</strong>.</li>
+            </ul>
+            <p>Esses são os prazos oficiais da rede Bora, que sustenta a operação da Move — bom alinhar a expectativa do cliente com base neles.</p>`
+      },
+      {
+        q: 'Como conduzir um problema técnico com o cliente',
+        a: `<ol style="margin-left:18px">
+              <li><strong>Explique com clareza e tranquilize:</strong> diga que é um problema técnico que será acionado junto ao fornecedor e que o caso será acompanhado;</li>
+              <li><strong>Nem sempre uma visita resolve:</strong> diferente de internet fibra, aqui o atendimento é remoto — visitar o cliente raramente ajuda, salvo casos bem específicos;</li>
+              <li><strong>Alinhe um prazo realista:</strong> o oficial é até 5 dias úteis, mas na prática a resposta costuma vir em 1 dia e a solução em até 4 — é melhor dar um prazo realista do que deixar o cliente ansioso;</li>
+              <li><strong>Cliente insatisfeito:</strong> avalie se cabe algum tipo de compensação, dentro da política de reembolso vigente.</li>
+            </ol>`
+      },
+      {
+        q: 'Política de reembolso',
+        a: `<p>A Move tem liberdade para definir sua própria política de reembolso ao cliente final. Para que o valor seja repassado pela Bora, dois critérios precisam ser atendidos:</p>
+            <ul>
+              <li><strong>Problema técnico comprovado</strong> e de responsabilidade da rede — erro de configuração, aparelho mal ajustado ou área sem cobertura não se qualificam;</li>
+              <li><strong>Serviço indisponível por pelo menos 4 dias corridos</strong>, ou chamado que ultrapassou 5 dias úteis sem solução.</li>
+            </ul>
+            <p>Quando aprovado, o valor retorna à Move via desconto na mensalidade ou ajuste de comissão — o que for mais adequado ao caso.</p>`
+      },
+      {
+        q: 'Canais de suporte com a Bora',
+        a: `<p>Além do atendimento direto da Move ao cliente final, a rede Bora oferece canais de suporte para a equipe Move escalar problemas técnicos:</p>
+            <ul>
+              <li>Canal 0800 para emergências (ex: bloqueio por roubo ou furto fora do horário comercial);</li>
+              <li>Suporte automatizado para triagem de configurações e dúvidas de plataforma, com encaminhamento a atendimento humano quando necessário.</li>
+            </ul>
+            <div class="tip">💡 Confirme com o gestor de conta Bora os contatos oficiais (telefone/WhatsApp) vigentes para a Move — eles podem ser atualizados periodicamente pelo fornecedor.</div>`
+      },
+      {
+        q: 'Estrutura de atendimento: Nível 1 e Nível 2',
+        a: `<p><strong>Nível 1 — Move ao cliente final:</strong> é a própria equipe Move o primeiro ponto de contato, responsável por ativação, portabilidade, configuração de APN, recargas, troca de plano e bloqueios, além das orientações básicas.</p>
+            <p><strong>Nível 2 — Bora à Move:</strong> suporte técnico e estratégico nos bastidores, intermediando problemas com o fornecedor de rede e apoiando a equipe Move quando o Nível 1 não resolve.</p>`
+      },
+      {
+        q: 'Ocorrência de voz: chamadas não funcionam',
+        a: `<p>Perguntas para o diagnóstico inicial:</p>
+            <ul>
+              <li>A voz já funcionou alguma vez desde a ativação?</li>
+              <li>O cliente já testou o chip em outro endereço?</li>
+              <li>É possível testar esse chip em outro aparelho?</li>
+            </ul>
+            <p>Testes a fazer:</p>
+            <ul>
+              <li>Confirmar que o número está sendo discado sem DDD/"0" para chamadas locais, e com <code>081 + DDD</code> para interurbanas;</li>
+              <li>Verificar se o chip Move está selecionado como preferencial para chamadas;</li>
+              <li>Desativar o VoLTE, se estiver ativo;</li>
+              <li>Forçar a rede para 3G ou 2G no aparelho e testar de novo.</li>
+            </ul>`
+      },
+      {
+        q: 'Ocorrência de dados: internet não funciona',
+        a: `<p>Checklist antes de escalar:</p>
+            <ul>
+              <li>Confirmar no painel se a linha está ativa e com dados disponíveis — recarregar ou reativar se necessário;</li>
+              <li>Verificar se a APN está configurada como <code>bora.br</code>;</li>
+              <li>Confirmar se o chip Move está selecionado na rede de dados do aparelho;</li>
+              <li>Checar cobertura da TIM na região do cliente.</li>
+            </ul>
+            <p>Se persistir, registre antes de escalar: CPF do cliente, número da linha, se a APN está configurada corretamente, se o problema é geral ou só em um site/app específico, e o endereço aproximado do cliente.</p>`
+      },
+      {
+        q: 'Ocorrência de pagamento',
+        a: `<p><strong>Cliente não recebeu o boleto:</strong> oriente a verificar a caixa de spam e solicite o reenvio.</p>
+            <p><strong>Pagou via boleto, mas não foi ativado/renovado:</strong> confira o comprovante e o prazo de compensação (até 3 dias úteis). Se pago após o vencimento, a compensação pode ocorrer, mas sem garantia de prazo.</p>
+            <p><strong>Pagou via cartão, mas não teve ativação/renovação:</strong> verifique se havia limite disponível ou se a compra foi recusada pela instituição financeira — oriente o cliente a checar com o banco.</p>`
+      },
+      {
+        q: 'Ocorrência de plataforma (erro ao ativar ou logar)',
+        a: `<p><strong>Falha no pagamento</strong> (PIX, boleto ou cartão não gerou/processou): oriente o cliente a tentar de novo, se possível com outra forma de pagamento.</p>
+            <p><strong>Não consegue logar no painel:</strong> feche o navegador, limpe o cache, abra de novo e repita o login/ativação.</p>
+            <p>Se o erro persistir, registre antes de escalar: data e horário do problema, descrição da etapa onde ocorreu, ICCID do chip (se aplicável) e um print da tela com a mensagem de erro visível.</p>`
+      }
+    ]
+  }
+];
+
+const pillsEl = document.getElementById('pills');
+const conteudoEl = document.getElementById('conteudo');
+const emptyEl = document.getElementById('empty');
+const buscaEl = document.getElementById('busca');
+const buscaMetaEl = document.getElementById('busca-meta');
+
+function slug(s) { return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''); }
+
+function render() {
+  pillsEl.innerHTML = DADOS.map((cat, i) => `<div class="pill" data-target="cat-${i}">${cat.icon} ${cat.titulo}</div>`).join('');
+
+  conteudoEl.innerHTML = DADOS.map((cat, ci) => `
+    <div class="category" id="cat-${ci}">
+      <div class="cat-head">
+        <span class="cat-num">${String(ci + 1).padStart(2, '0')}</span>
+        <h2>${cat.titulo}</h2>
+      </div>
+      <p class="cat-desc">${cat.desc}</p>
+      ${cat.itens.map((it, ii) => `
+        <details class="item" id="item-${ci}-${ii}" data-q="${it.q.toLowerCase()}" data-a="${it.a.replace(/<[^>]+>/g, ' ').toLowerCase().replace(/"/g, '&quot;')}">
+          <summary><span>${it.q}</span><span class="plus">+</span></summary>
+          <div class="body">${it.a}</div>
+        </details>
+      `).join('')}
+    </div>
+  `).join('');
+
+  pillsEl.querySelectorAll('.pill').forEach(p => {
+    p.addEventListener('click', () => {
+      document.getElementById(p.dataset.target).scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+}
+
+function aplicarBusca() {
+  const termo = buscaEl.value.trim().toLowerCase();
+  let totalVisivel = 0;
+
+  document.querySelectorAll('.category').forEach(cat => {
+    let algumVisivelNaCategoria = false;
+    cat.querySelectorAll('.item').forEach(item => {
+      const texto = item.dataset.q + ' ' + item.dataset.a;
+      const bate = !termo || texto.includes(termo);
+      item.classList.toggle('hidden', !bate);
+      item.classList.toggle('match', !!termo && bate);
+      if (bate) { algumVisivelNaCategoria = true; totalVisivel++; }
+      if (termo && bate) item.open = true;
+      if (!termo) item.open = false;
+    });
+    cat.classList.toggle('hidden', !algumVisivelNaCategoria);
+  });
+
+  emptyEl.style.display = (termo && totalVisivel === 0) ? 'block' : 'none';
+  buscaMetaEl.textContent = termo ? `${totalVisivel} resultado${totalVisivel === 1 ? '' : 's'} para "${termo}"` : '';
+}
+
+buscaEl.addEventListener('input', aplicarBusca);
+render();
+</script>
+</body>
+</html>
