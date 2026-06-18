@@ -463,6 +463,29 @@ async function garantirTabelaVinculoVendedor() {
   `);
 }
 
+// Migration: recargas manuais (Pacotes Adicionais) com pagamento ainda não confirmado.
+// A comissão só é creditada em transacoes quando sincronizarCacheStatus() detectar que
+// o details.plan da linha cresceu além de plan_count_antes (sinal de que a Bora processou
+// o pagamento) — mesmo princípio usado pra comissão de ativação.
+async function garantirTabelaRecargasPendentes() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS recargas_pendentes (
+      id SERIAL PRIMARY KEY,
+      linha_id INTEGER REFERENCES linhas(id),
+      vendedor_id INTEGER REFERENCES vendedores(id),
+      subvendedor_id INTEGER REFERENCES vendedores(id),
+      plano_id VARCHAR(100),
+      plano_nome VARCHAR(200),
+      valor_plano NUMERIC(10,2),
+      comissao NUMERIC(10,2) NOT NULL DEFAULT 0,
+      plan_count_antes INTEGER NOT NULL DEFAULT 0,
+      periodo_referencia VARCHAR(20),
+      solicitado_em TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_recargas_pendentes_linha ON recargas_pendentes(linha_id)`).catch(() => null);
+}
+
 // Email de PIX enviado ao cliente após ativação
 async function enviarEmailPix({ email, nome, pixCode, planoNome, planoValor }) {
   const destino = limparEmail(email);
@@ -887,6 +910,28 @@ function receitaCacheGet(dataInicio, dataFim) {
 function receitaCacheSet(dataInicio, dataFim, dados) {
   const chave = `${dataInicio || ''}|${dataFim || ''}`;
   receitaCache.set(chave, { dados, expira: Date.now() + RECEITA_CACHE_TTL_MS });
+}
+
+// Cache em memória do relatório Sales "bruto" (linhas do xlsx), usado pela busca por
+// DDD em Consultar Linha. TTL curto só pra evitar rebaixar a planilha em buscas seguidas.
+const SALES_REPORT_CACHE_TTL_MS = 3 * 60 * 1000;
+let salesReportCache = null; // { linhas, expira }
+
+async function baixarSalesReportBora() {
+  if (salesReportCache && salesReportCache.expira > Date.now()) return salesReportCache.linhas;
+  const XLSX = require('xlsx');
+  const token = await getBoraToken();
+  const resp = await axios.get(`${BORA_BASE}/api/Report/Sales`, {
+    headers: { Authorization: `Bearer ${token}` },
+    params: { customerId: '', initialDate: '2023-01-01', finalDate: dataHojeRecifeISO() },
+    responseType: 'arraybuffer',
+    timeout: 60000,
+  });
+  const wb = XLSX.read(resp.data, { type: 'buffer' });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
+  salesReportCache = { linhas, expira: Date.now() + SALES_REPORT_CACHE_TTL_MS };
+  return linhas;
 }
 
 // Calcula a Receita Move pelo relatório SALES da Bora (xlsx).
@@ -2371,9 +2416,6 @@ app.post('/api/app/ativar', authApp, async (req, res) => {
     const pixData = pagamento?.pix || null;
 
     // Salva no banco (vendedor_id = 1 = operação própria Move)
-    const { rows: planoRows } = await pool.query('SELECT comissao_ativacao FROM planos_comissao WHERE plano_id=$1', [plano_id]);
-    const comissao = planoRows[0]?.comissao_ativacao || 0;
-
     const { rows: linhaRows } = await pool.query(
       `INSERT INTO linhas (iccid, msisdn, vendedor_id, plano_id, plano_nome, documento_cliente, nome_cliente)
        VALUES ($1,$2,1,$3,$4,$5,$6)
@@ -2381,11 +2423,8 @@ app.post('/api/app/ativar', authApp, async (req, res) => {
        RETURNING id`,
       [iccid, msisdnFinal, plano_id, plano_nome, subscriber.document, subscriber.name]
     );
-    await pool.query(
-      `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
-       VALUES ($1,1,'ativacao',$2,$3,$4,$5,'app')`,
-      [linhaRows[0].id, plano_id, plano_nome, plano_valor, comissao]
-    );
+    // Comissão de ativação NÃO é creditada aqui (ver sincronizarCacheStatus) — só é
+    // gravada em transacoes quando a Bora confirmar essa linha como ACTIVE.
 
     // Marca eSIM como usado
     await pool.query(
@@ -2420,7 +2459,7 @@ app.post('/api/app/ativar', authApp, async (req, res) => {
 
 app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
   try {
-    const { subscriber, cartPayload, paymentType, recorrencia, vendedor_id, plano_id, plano_nome, plano_valor } = req.body;
+    const { subscriber, cartPayload, paymentType, recorrencia, vendedor_id, plano_id, plano_nome } = req.body;
 
     // Bloqueio por limite de eSIMs pendentes (não pagos) no mês — só para eSIM.
     // Administradores não são bloqueados por esse limite.
@@ -2520,11 +2559,12 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
     );
     const linhaId = linhaRows[0].id;
 
-    await pool.query(
-      `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
-       VALUES ($1,$2,$3,'ativacao',$4,$5,$6,$7,'sistema')`,
-      [linhaId, vendedorPrincipalId, subvendedorId, plano_id, plano_nome, plano_valor, comissao]
-    );
+    // IMPORTANTE: a comissão de ativação NÃO é creditada aqui. Gerar o PIX/boleto não
+    // significa que o cliente pagou — o chip só fica ativo de fato quando a Bora confirma
+    // o pagamento dessa primeira recarga. O crédito real (INSERT em transacoes) acontece em
+    // sincronizarCacheStatus(), no momento em que o status_bora dessa linha vira ACTIVE.
+    // `comissao` aqui é só o valor estimado, devolvido na resposta pra exibir na tela.
+
 
     const pixData = pagamento?.pix || null;
     const msisdnFinal = pagamento?.msisdn || pagamento?.pmsisdn || cartPayload.msisdn || null;
@@ -3564,6 +3604,7 @@ app.post('/api/bora/recarregar', authMiddleware, async (req, res) => {
 
     const subDetails = await boraGet(`/api/Subscription/${msisdn}/details`);
     const clientId = subDetails?.boraIntegration?.customerId || subDetails?.boraData?.customerId || subDetails?.customerId || null;
+    const planCountAntes = Array.isArray(subDetails?.plan) ? subDetails.plan.length : 0;
     const cart = await boraPost('/api/Cart/recharge', { msisdn, planId: plano_id, clientId });
     const cartId = cart.cartId || cart.id;
     if (!cartId) throw new Error('cartId não retornado pela Bora');
@@ -3577,21 +3618,20 @@ app.post('/api/bora/recarregar', authMiddleware, async (req, res) => {
       throw new Error('Forma de pagamento inválida');
     }
 
-    // Registra comissão quando a linha estiver vinculada a um vendedor
+    // IMPORTANTE: a comissão de recarga NÃO é creditada aqui — gerar o PIX/boleto não
+    // significa que o cliente pagou. Registramos a intenção em recargas_pendentes com o
+    // tamanho atual de details.plan; sincronizarCacheStatus() confirma e credita em
+    // transacoes quando esse array crescer (sinal de que a Bora processou o pagamento).
     const linha = linhaRows[0] || null;
     if (linha?.id && linha?.vendedor_id) {
       const mesRef = new Date().toISOString().substring(0, 7);
-      const { rows: existe } = await pool.query(
-        `SELECT id FROM transacoes WHERE linha_id=$1 AND tipo='recarga' AND periodo_referencia=$2`,
-        [linha.id, mesRef]
-      );
-      if (!existe.length) {
-        const { rows: planoRows } = await pool.query('SELECT comissao_recarga, plano_nome, plano_valor FROM planos_comissao WHERE plano_id=$1', [plano_id]);
-        const comissao = parseFloat(planoRows[0]?.comissao_recarga || 0);
+      const { rows: planoRows } = await pool.query('SELECT comissao_recarga, plano_nome, plano_valor FROM planos_comissao WHERE plano_id=$1', [plano_id]);
+      const comissao = parseFloat(planoRows[0]?.comissao_recarga || 0);
+      if (comissao > 0) {
         await pool.query(
-          `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, periodo_referencia, fonte)
-           VALUES ($1,$2,$3,'recarga',$4,$5,$6,$7,$8,'sistema')`,
-          [linha.id, linha.vendedor_id, escopo.subvendedor_id, plano_id, plano_nome || planoRows[0]?.plano_nome || null, plano_valor || planoRows[0]?.plano_valor || null, comissao, mesRef]
+          `INSERT INTO recargas_pendentes (linha_id, vendedor_id, subvendedor_id, plano_id, plano_nome, valor_plano, comissao, plan_count_antes, periodo_referencia)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [linha.id, linha.vendedor_id, escopo.subvendedor_id, plano_id, plano_nome || planoRows[0]?.plano_nome || null, plano_valor || planoRows[0]?.plano_valor || null, comissao, planCountAntes, mesRef]
         );
       }
     }
@@ -3615,6 +3655,68 @@ app.post('/api/bora/recarregar', authMiddleware, async (req, res) => {
 app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
   try {
     const { tipo, valor } = req.query;
+
+    // Busca por DDD: lê o relatório Sales da Bora (TUDO que já passou pela conta,
+    // não só o que está no nosso cache local) e filtra pelo prefixo do DDD.
+    if (tipo === 'ddd') {
+      const ddd = String(valor || '').replace(/\D/g, '');
+      if (ddd.length !== 2) return res.status(400).json({ erro: 'Informe um DDD com 2 dígitos' });
+
+      const linhasReport = await baixarSalesReportBora();
+
+      // Agrega por MSISDN: guarda o registro mais recente (cliente/plano) e quem
+      // ativou (linha do tipo ATIVAÇÃO), pra poder limitar por vendedor depois.
+      const porMsisdn = {};
+      for (const r of linhasReport) {
+        const ms = normMsisdn(r['MSISDN']);
+        if (!ms || !ms.replace(/^55/, '').startsWith(ddd)) continue;
+        const tipoLinha = String(r['TIPO'] || '').toUpperCase();
+        const data = String(r['DATA'] || '');
+        if (!porMsisdn[ms]) porMsisdn[ms] = { msisdn: ms, cliente: '', documento: '', plano: '', vendedorAtivacao: '', data: '' };
+        const acc = porMsisdn[ms];
+        if (tipoLinha.startsWith('ATIVA') && String(r['VENDEDOR'] || '').trim()) {
+          acc.vendedorAtivacao = String(r['VENDEDOR']).trim();
+        }
+        if (!acc.data || data >= acc.data) {
+          acc.data = data;
+          acc.cliente = String(r['NOME DO CLIENTE'] || acc.cliente);
+          acc.documento = String(r['CPF/CNPJ'] || acc.documento);
+          acc.plano = String(r['PLANO'] || acc.plano);
+        }
+      }
+      let resultado = Object.values(porMsisdn);
+
+      // Vendedor só vê o que ele (ou sua equipe) ativou — cruza com o cadastro local
+      // de linhas/vínculos e, pra linhas antigas sem cadastro aqui, com o nome na coluna VENDEDOR do relatório.
+      if (req.user.role !== 'admin') {
+        const { rows: vinc } = await pool.query(
+          `SELECT msisdn FROM linhas WHERE vendedor_id=$1 OR subvendedor_id=$1
+           UNION
+           SELECT msisdn FROM vinculos_msisdn_vendedor WHERE vendedor_id=$1`,
+          [req.user.id]
+        );
+        const permitidos = new Set(vinc.map(v => v.msisdn));
+        const nomeLogado = String(req.user.nome || '').trim().toUpperCase();
+        resultado = resultado.filter(l =>
+          permitidos.has(l.msisdn) || (l.vendedorAtivacao && l.vendedorAtivacao.toUpperCase() === nomeLogado)
+        );
+      }
+
+      // Enriquece com status do cache local quando existir (sem chamar a Bora linha a linha)
+      if (resultado.length) {
+        const { rows: statusRows } = await pool.query(
+          `SELECT msisdn, status, status_bora FROM linhas WHERE msisdn = ANY($1)`,
+          [resultado.map(l => l.msisdn)]
+        );
+        const statusMap = {};
+        statusRows.forEach(s => { statusMap[s.msisdn] = s.status_bora || s.status || null; });
+        resultado.forEach(l => { l.status = statusMap[l.msisdn] || null; });
+      }
+
+      resultado.sort((a, b) => (b.data || '').localeCompare(a.data || ''));
+      return res.json({ ddd: true, linhas: resultado });
+    }
+
     if (req.user.role !== 'admin') {
       const { rows: carteira } = await pool.query(
         'SELECT * FROM linhas WHERE vendedor_id=$1', [req.user.id]
@@ -4312,6 +4414,31 @@ app.get('/api/relatorio/churn', authMiddleware, adminOnly, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ─── Auditoria: comissões de ativação creditadas pelo bug antigo ──────────────
+// Antes da correção, /api/bora/ativar e /api/app/ativar gravavam a comissão de
+// ativação assim que o PIX/boleto era gerado (fonte='sistema'/'app'), sem esperar
+// a Bora confirmar o pagamento. Esse relatório lista esses créditos antigos cuja
+// linha HOJE não está confirmada ACTIVE na Bora — candidatas a terem sido pagas
+// sem o cliente nunca ter realmente pago. Não apaga nada, só lista pra revisão manual.
+app.get('/api/admin/auditoria/comissoes-ativacao-suspeitas', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT t.id AS transacao_id, t.linha_id, l.msisdn, l.iccid, l.nome_cliente, l.documento_cliente,
+              v.nome AS vendedor_nome, t.comissao, t.data_transacao, t.fonte,
+              l.status AS status_local, l.status_bora, l.ultima_sincronizacao
+       FROM transacoes t
+       JOIN linhas l ON l.id = t.linha_id
+       LEFT JOIN vendedores v ON v.id = t.vendedor_id
+       WHERE t.tipo = 'ativacao'
+         AND t.fonte IN ('sistema', 'app')
+         AND l.status_bora IS DISTINCT FROM 'ACTIVE'
+       ORDER BY t.data_transacao DESC`
+    );
+    const totalComissaoSuspeita = rows.reduce((a, r) => a + parseFloat(r.comissao || 0), 0);
+    res.json({ total: rows.length, total_comissao: Number(totalComissaoSuspeita.toFixed(2)), linhas: rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ─── Reenvio de boleto ────────────────────────────────────────────────────────
 app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, async (req, res) => {
   try {
@@ -4638,11 +4765,11 @@ async function sincronizarCacheStatus() {
   }
   syncCacheEmAndamento = true;
   const inicio = Date.now();
-  let verificadas = 0, atualizadas = 0, removidas = 0, erros = 0;
+  let verificadas = 0, atualizadas = 0, removidas = 0, erros = 0, comissoesAtivacao = 0, comissoesRecarga = 0;
   try {
     // Mais defasadas primeiro (nunca sincronizadas no topo), só linhas com msisdn.
     const { rows: linhas } = await pool.query(
-      `SELECT id, msisdn, status, status_bora FROM linhas
+      `SELECT id, msisdn, status, status_bora, vendedor_id, subvendedor_id, plano_id, plano_nome FROM linhas
         WHERE msisdn IS NOT NULL
         ORDER BY ultima_sincronizacao ASC NULLS FIRST
         LIMIT $1`,
@@ -4661,6 +4788,59 @@ async function sincronizarCacheStatus() {
         if (st === 'ACTIVE' && String(linha.status || '').toLowerCase() !== 'ativa') {
           await pool.query("UPDATE linhas SET status='ativa' WHERE id=$1", [linha.id]).catch(() => null);
         }
+
+        // Comissão de ativação: só é creditada AQUI, quando a Bora confirma a linha como
+        // ACTIVE — ou seja, quando o pagamento da primeira recarga (a que acompanha toda
+        // ativação) foi de fato aprovado. Gerar o PIX/boleto na ativação não paga nada por
+        // si só; uma linha que nunca é paga nunca gera essa transação.
+        if (st === 'ACTIVE' && linha.vendedor_id) {
+          const { rows: jaCreditada } = await pool.query(
+            `SELECT id FROM transacoes WHERE linha_id=$1 AND tipo='ativacao' LIMIT 1`,
+            [linha.id]
+          );
+          if (!jaCreditada.length) {
+            const { rows: planoRows } = await pool.query(
+              'SELECT comissao_ativacao, plano_valor FROM planos_comissao WHERE plano_id=$1',
+              [linha.plano_id]
+            );
+            const comissaoAtiv = parseFloat(planoRows[0]?.comissao_ativacao || 0);
+            if (comissaoAtiv > 0) {
+              await pool.query(
+                `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
+                 VALUES ($1,$2,$3,'ativacao',$4,$5,$6,$7,'bora_confirmado')`,
+                [linha.id, linha.vendedor_id, linha.subvendedor_id, linha.plano_id, linha.plano_nome, planoRows[0]?.plano_valor || null, comissaoAtiv]
+              );
+              comissoesAtivacao++;
+              console.log(`[CACHE-STATUS] Comissão de ativação creditada: ${linha.msisdn} (vendedor ${linha.vendedor_id}) comissão=R$${comissaoAtiv}`);
+            }
+          }
+        }
+
+        // Comissão de recarga manual (Pacotes Adicionais): mesmo princípio da ativação.
+        // /api/bora/recarregar só registra a intenção em recargas_pendentes; aqui a gente
+        // confirma comparando o tamanho do array "plan" antes/depois — se cresceu, a Bora
+        // processou o pagamento daquele pacote.
+        const { rows: pendentes } = await pool.query(
+          `SELECT * FROM recargas_pendentes WHERE linha_id=$1 ORDER BY solicitado_em ASC`,
+          [linha.id]
+        );
+        if (pendentes.length) {
+          const planCountAtual = Array.isArray(details?.plan) ? details.plan.length : 0;
+          let confirmadosNestaVolta = 0;
+          for (const p of pendentes) {
+            if ((planCountAtual - p.plan_count_antes) <= confirmadosNestaVolta) break; // ainda sem pagamento confirmado pra essa (e as próximas são mais novas)
+            await pool.query(
+              `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, periodo_referencia, fonte)
+               VALUES ($1,$2,$3,'recarga',$4,$5,$6,$7,$8,'bora_confirmado')`,
+              [p.linha_id, p.vendedor_id, p.subvendedor_id, p.plano_id, p.plano_nome, p.valor_plano, p.comissao, p.periodo_referencia]
+            );
+            await pool.query('DELETE FROM recargas_pendentes WHERE id=$1', [p.id]);
+            confirmadosNestaVolta++;
+            comissoesRecarga++;
+            console.log(`[CACHE-STATUS] Comissão de recarga confirmada: ${linha.msisdn} (vendedor ${p.vendedor_id}) comissão=R$${p.comissao}`);
+          }
+        }
+
         atualizadas++;
       } catch (e) {
         const code = e?.response?.status;
@@ -4680,7 +4860,7 @@ async function sincronizarCacheStatus() {
       await aguardar(SYNC_PAUSA_MS);
     }
     const seg = Math.round((Date.now() - inicio) / 1000);
-    console.log(`[CACHE-STATUS] Ciclo concluído em ${seg}s — ${verificadas} verificadas, ${atualizadas} atualizadas, ${removidas} canceladas, ${erros} erros.`);
+    console.log(`[CACHE-STATUS] Ciclo concluído em ${seg}s — ${verificadas} verificadas, ${atualizadas} atualizadas, ${removidas} canceladas, ${comissoesAtivacao} comissões de ativação, ${comissoesRecarga} comissões de recarga, ${erros} erros.`);
   } catch (err) {
     console.error(`[CACHE-STATUS] Erro geral: ${err.message}`);
   } finally {
@@ -4724,6 +4904,7 @@ async function rodarMigrations(tentativa = 1) {
     ['cache de status', garantirColunasCacheStatus],
     ['tabela notif WhatsApp', garantirTabelaNotifWhatsapp],
     ['tabela vínculos vendedor', garantirTabelaVinculoVendedor],
+    ['tabela recargas pendentes', garantirTabelaRecargasPendentes],
   ];
   let falhas = [];
   for (const [nome, fn] of migrations) {
