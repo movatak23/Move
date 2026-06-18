@@ -413,6 +413,22 @@ tbody td { padding: 13px 20px; font-size: 13px; }
 .badge-red { background: var(--red-dim); color: var(--red); }
 .badge-yellow { background: var(--yellow-dim); color: var(--yellow); }
 
+.ddd-chip {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border2);
+  cursor: pointer;
+  transition: 0.15s;
+  margin: 2px 0;
+}
+.ddd-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.ddd-chip.ativa { color: var(--text); }
+.ddd-chip.inativa { color: var(--text3); }
+.ddd-sep { color: var(--text3); }
+
 /* ── FORMS & INPUTS ────────────────────────────── */
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
 .form-row.single { grid-template-columns: 1fr; }
@@ -1217,7 +1233,7 @@ select option { background: var(--bg3); }
     <!-- ── CONSULTA DE LINHA ──────────────── -->
     <div class="page" id="page-consulta">
       <div class="page-header">
-        <div><div class="page-title">Consultar Linha</div><div class="page-sub">Busca por CPF, Número, IMSI ou ICCID</div></div>
+        <div><div class="page-title">Consultar Linha</div><div class="page-sub">Busca por CPF, Número, DDD, IMSI ou ICCID</div></div>
       </div>
       <div class="section-card">
         <div class="form-row">
@@ -1226,6 +1242,7 @@ select option { background: var(--bg3); }
             <select id="consulta-tipo" onchange="atualizarCampoConsulta()">
               <option value="cpf">CPF/CNPJ</option>
               <option value="numero">Número</option>
+              <option value="ddd">DDD</option>
               <option value="iccid">ICCID</option>
               <option value="imsi">IMSI</option>
             </select>
@@ -2977,7 +2994,8 @@ async function confirmarAtivacao() {
     let html = '<div class="info-card" style="border-color:var(--accent)">' +
       '<div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">✓ Linha Ativada</span></span></div>' +
       (data.msisdn ? '<div class="info-row"><span class="k">Número</span><span class="v mono">' + data.msisdn + '</span></div>' : '') +
-      '<div class="info-row"><span class="k">Comissão Registrada</span><span class="v currency">R$ ' + parseFloat(data.comissao||0).toFixed(2) + '</span></div>' +
+      '<div class="info-row"><span class="k">Comissão Prevista</span><span class="v currency">R$ ' + parseFloat(data.comissao||0).toFixed(2) + '</span></div>' +
+      '<div style="font-size:11px;color:var(--text3);margin-top:-4px;padding:0 4px">Creditada após a Bora confirmar o pagamento da linha (próxima sincronização, em até 5 min)</div>' +
     '</div>';
 
     if (data.esim) {
@@ -3590,6 +3608,37 @@ function atualizarCampoConsulta() {
   // limpa ambos ao trocar tipo
   document.getElementById('consulta-valor').value = '';
   document.getElementById('consulta-valor-plain').value = '';
+  const plain = document.getElementById('consulta-valor-plain');
+  plain.placeholder = tipo === 'ddd' ? 'Ex: 81' : 'Digite o valor...';
+  plain.maxLength = tipo === 'ddd' ? 2 : 30;
+}
+
+// Lista compacta de números de um DDD, lado a lado e separados por vírgula,
+// pra selecionar/copiar tudo e colar direto no campo da Calculadora de Comissão.
+function renderListaDdd(linhas) {
+  const textoCopia = linhas.map(l => (l.msisdn || '').replace(/^55/, '')).join(', ');
+  const chips = linhas.map(l => {
+    const numFmt = (l.msisdn || '').replace(/^55/, '');
+    const ativa = String(l.status || '').toUpperCase().includes('ACTIVE');
+    const temStatus = !!l.status;
+    const titulo = [l.cliente, l.plano].filter(Boolean).join(' · ');
+    return `<span class="ddd-chip ${temStatus ? (ativa ? 'ativa' : 'inativa') : ''}" title="${titulo}" onclick="abrirCadastroCliente('${l.msisdn}')">${numFmt}</span>`;
+  }).join('<span class="ddd-sep">, </span>');
+
+  return `<div class="section-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div style="font-weight:700;color:var(--text)">${linhas.length} linha${linhas.length === 1 ? '' : 's'} encontrada${linhas.length === 1 ? '' : 's'} na Bora</div>
+      <button class="btn btn-secondary btn-sm" onclick="copiarNumerosDdd('${textoCopia.replace(/'/g, "\\'")}')">📋 Copiar números</button>
+    </div>
+    <div style="line-height:2.4">${chips}</div>
+    <div style="margin-top:10px;color:var(--text3);font-size:12px">Clique em um número pra abrir o cadastro completo dessa linha.</div>
+  </div>`;
+}
+
+function copiarNumerosDdd(texto) {
+  navigator.clipboard.writeText(texto)
+    .then(() => toast('Números copiados — cole na Calculadora de Comissão'))
+    .catch(() => toast('Não foi possível copiar automaticamente', 'error'));
 }
 
 let consultaLinhas = [];
@@ -3607,6 +3656,10 @@ async function realizarConsulta() {
     const data = await api('GET', `/api/consulta/linha?tipo=${tipo}&valor=${encodeURIComponent(valor.replace(/\D/g,'') || valor)}`);
     const linhas = data.linhas || [];
     if (!linhas.length) { res.innerHTML = '<div class="empty-state"><div class="ico">🔍</div><p>Nenhuma linha encontrada</p></div>'; return; }
+
+    // Busca por DDD: lista compacta lado a lado, pra copiar direto na Calculadora.
+    if (data.ddd) { res.innerHTML = renderListaDdd(linhas); return; }
+
     consultaLinhas = linhas;
 
     // Uma única linha: mostra direto o detalhe (comportamento de sempre)
