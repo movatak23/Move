@@ -3802,27 +3802,30 @@ app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
       return res.json({ ddd: true, linhas: resultado });
     }
 
-    if (req.user.role !== 'admin') {
-      const { rows: carteira } = await pool.query(
-        'SELECT * FROM linhas WHERE vendedor_id=$1', [req.user.id]
+    const ehAdmin = req.user.role === 'admin';
+
+    // Escopo do vendedor: conjunto de MSISDNs que pertencem a ele (carteira local + vínculos).
+    // Usado pra filtrar os resultados da Bora, em vez de limitar a busca a uma única linha.
+    let permitidosVendedor = null;
+    if (!ehAdmin) {
+      const { rows: vinc } = await pool.query(
+        `SELECT msisdn FROM linhas WHERE vendedor_id=$1 OR subvendedor_id=$1
+         UNION
+         SELECT msisdn FROM vinculos_msisdn_vendedor WHERE vendedor_id=$1`,
+        [req.user.id]
       );
-      const linha = carteira.find(l =>
-        l.msisdn === valor || l.iccid === valor ||
-        l.documento_cliente === valor.replace(/\D/g,'')
-      );
-      if (!linha) return res.status(403).json({ erro: 'Linha não encontrada na sua carteira' });
-      const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
-      return res.json({ linhas: [details] });
+      permitidosVendedor = new Set(vinc.map(v => normMsisdn(v.msisdn)));
     }
 
     let detalhes = [];
 
     if (tipo === 'cpf') {
-      // Busca todas as assinaturas do CPF e depois busca details de cada uma
+      // Busca TODAS as assinaturas do CPF (mesmo caminho pra admin e vendedor) e depois
+      // busca details de cada uma.
       const cpf = valor.replace(/\D/g, '');
       const subs = await boraGet(`/api/Subscription/${cpf}`);
       const lista = Array.isArray(subs) ? subs : (subs?.subscriptions || subs?.items || [subs]);
-      detalhes = await Promise.all(lista.slice(0, 10).map(async s => {
+      detalhes = await Promise.all(lista.slice(0, 20).map(async s => {
         try {
           const ms = s.msisdn || s.phoneNumber || s.number;
           if (!ms) return s;
@@ -3834,6 +3837,15 @@ app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
       // numero, iccid ou imsi — busca details diretamente
       const data = await boraGet(`/api/Subscription/${valor}/details`);
       detalhes = [data];
+    }
+
+    // Vendedor só enxerga as linhas que são da carteira dele.
+    if (!ehAdmin) {
+      detalhes = detalhes.filter(d => {
+        const ms = normMsisdn(d?.msisdn || d?.phoneNumber || d?.number);
+        return ms && permitidosVendedor.has(ms);
+      });
+      if (!detalhes.length) return res.status(403).json({ erro: 'Nenhuma linha deste CPF está na sua carteira' });
     }
 
     res.json({ linhas: detalhes });
