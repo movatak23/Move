@@ -1207,6 +1207,50 @@ select option { background: var(--bg3); }
     </div>
 
 
+    <!-- ── SUPORTE: ADMIN (gerencia todos os tickets) ─────────── -->
+    <div class="page" id="page-suporte-admin">
+      <div class="page-header">
+        <div><div class="page-title">🎫 Tickets de Suporte</div><div class="page-sub">Solicitações abertas pelos vendedores</div></div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px" id="suporte-filtros">
+        <button class="btn btn-secondary btn-sm sup-filtro" data-status="" onclick="filtrarSuporte('')">Todos</button>
+        <button class="btn btn-secondary btn-sm sup-filtro" data-status="aberto" onclick="filtrarSuporte('aberto')">Abertos</button>
+        <button class="btn btn-secondary btn-sm sup-filtro" data-status="em_andamento" onclick="filtrarSuporte('em_andamento')">Em andamento</button>
+        <button class="btn btn-secondary btn-sm sup-filtro" data-status="resolvido" onclick="filtrarSuporte('resolvido')">Resolvidos</button>
+        <button class="btn btn-secondary btn-sm sup-filtro" data-status="fechado" onclick="filtrarSuporte('fechado')">Fechados</button>
+      </div>
+      <div id="suporte-admin-lista"></div>
+    </div>
+
+
+    <!-- ── SUPORTE: VENDEDOR (acompanha os próprios tickets) ──── -->
+    <div class="page" id="page-suporte-vendedor">
+      <div class="page-header">
+        <div><div class="page-title">🎫 Meus Tickets</div><div class="page-sub">Reporte problemas na sua região e acompanhe o status</div></div>
+        <button class="btn btn-primary" onclick="abrirModalNovoTicket()">+ Novo Ticket</button>
+      </div>
+      <div id="suporte-vendedor-lista"></div>
+    </div>
+
+
+    <!-- ── SUPORTE: DETALHE DO TICKET (thread) ────────────────── -->
+    <div class="page" id="page-suporte-detalhe">
+      <div class="page-header">
+        <div>
+          <button class="btn btn-secondary btn-sm" onclick="voltarListaSuporte()" style="margin-bottom:8px">← Voltar</button>
+          <div class="page-title" id="sup-det-titulo">Ticket</div>
+          <div class="page-sub" id="sup-det-sub"></div>
+        </div>
+        <div id="sup-det-acoes"></div>
+      </div>
+      <div id="sup-det-thread"></div>
+      <div class="section-card" style="margin-top:16px">
+        <div class="field"><label>Responder</label><textarea id="sup-det-msg" rows="3" placeholder="Escreva uma mensagem..."></textarea></div>
+        <button class="btn btn-primary btn-sm" onclick="enviarMensagemTicket()">Enviar mensagem</button>
+      </div>
+    </div>
+
+
     <!-- ── RECARGA ─────────────────────────── -->
     <div class="page" id="page-recarga">
       <div class="page-header">
@@ -1740,6 +1784,37 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- Modal Novo Ticket de Suporte -->
+<div class="modal-overlay" id="modal-ticket">
+  <div class="modal" style="width:520px">
+    <div class="modal-title">Abrir Ticket de Suporte</div>
+    <div class="form-row">
+      <div class="field"><label>Categoria</label>
+        <select id="tk-categoria">
+          <option value="Dados">Dados / Internet</option>
+          <option value="Voz">Voz / Ligações</option>
+          <option value="SMS">SMS</option>
+          <option value="Rede">Rede / Sinal</option>
+          <option value="Pagamento">Pagamento</option>
+          <option value="Plataforma">Plataforma</option>
+          <option value="Outro" selected>Outro</option>
+        </select>
+      </div>
+      <div class="field"><label>Região / Cidade (opcional)</label><input type="text" id="tk-regiao" placeholder="Ex: Olinda - PE"></div>
+    </div>
+    <div class="form-row single">
+      <div class="field"><label>Assunto</label><input type="text" id="tk-assunto" placeholder="Resumo do problema" maxlength="160"></div>
+    </div>
+    <div class="form-row single">
+      <div class="field"><label>Descrição</label><textarea id="tk-descricao" rows="4" placeholder="Descreva o problema na sua região com o máximo de detalhes..."></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-ticket')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarTicket()">Abrir Ticket</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal Administrador -->
 <div class="modal-overlay" id="modal-admin">
   <div class="modal">
@@ -2007,6 +2082,7 @@ function construirNav() {
     { page: 'promocoes-admin', icon: '🎯', label: 'Promoções' },
     { page: 'retroativo', icon: '🧾', label: 'Comissão Retroativa' },
     { section: 'Suporte' },
+    { page: 'suporte-admin', icon: '🎫', label: 'Tickets de Suporte' },
     { link: '/ajuda.html', icon: '❓', label: 'Central de Ajuda' },
   ] : [
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
@@ -2024,6 +2100,7 @@ function construirNav() {
     { section: 'Ferramentas' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
     { section: 'Suporte' },
+    { page: 'suporte-vendedor', icon: '🎫', label: 'Meus Tickets' },
     { link: '/ajuda.html', icon: '❓', label: 'Central de Ajuda' },
   ];
   nav.innerHTML = items.filter(i => {
@@ -2057,6 +2134,8 @@ function navegarPara(page) {
   if (page === 'churn') loadChurn(60);
   if (page === 'retroativo') loadRetroativoOrfaos();
   if (page === 'publicidade') loadPublicidade();
+  if (page === 'suporte-admin') loadSuporteAdmin();
+  if (page === 'suporte-vendedor') loadSuporteVendedor();
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -3822,6 +3901,7 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,this)">📄 Encaminhar Boleto</button>
       <button class="btn btn-secondary btn-sm" id="btn-ver-pix-${l.msisdn?.replace(/\D/g,'')}" onclick="abrirPixPendente('${l.msisdn||''}',this)">⚡ Ver PIX</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirWhatsappCliente('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">💬 WhatsApp</button>
+      ${l.recurrence && l.recurrence.paymentType ? `<button class="btn btn-danger btn-sm" onclick="cancelarRecorrenciaLinha('${l.msisdn||''}')">🚫 Cancelar Recorrência</button>` : ''}
       ${state.user.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTransferirVenda('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">🔀 Transferir Venda</button>` : ''}
       ${renderBotoesBloqueio(l)}
     </div>
@@ -4404,6 +4484,151 @@ async function deletarMaterial(id) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
+// ── SUPORTE / TICKETS ─────────────────────────────────────────────────────────
+const SUP_STATUS_INFO = {
+  aberto:       { label: 'Aberto',       cor: 'badge-yellow', ico: '🟡' },
+  em_andamento: { label: 'Em andamento', cor: 'badge-blue',   ico: '🔵' },
+  resolvido:    { label: 'Resolvido',    cor: 'badge-green',   ico: '🟢' },
+  fechado:      { label: 'Fechado',      cor: 'badge-red',     ico: '⚫' },
+};
+let _supFiltroStatus = '';
+let _supTicketAtual = null;
+let _supOrigem = 'suporte-vendedor';
+
+function supStatusBadge(status) {
+  const info = SUP_STATUS_INFO[status] || { label: status, cor: 'badge-yellow' };
+  return `<span class="badge ${info.cor}">${info.label}</span>`;
+}
+
+function renderListaTickets(tickets, ehAdmin) {
+  if (!tickets.length) {
+    return '<div class="empty-state"><div class="ico">🎫</div><p>Nenhum ticket por aqui.</p></div>';
+  }
+  return `<div class="table-card"><table>
+    <thead><tr><th>Status</th><th>#</th><th>Assunto</th>${ehAdmin ? '<th>Vendedor</th>' : ''}<th>Região</th><th>Atualizado</th><th></th></tr></thead>
+    <tbody>${tickets.map(t => {
+      const dt = t.atualizado_em ? new Date(t.atualizado_em).toLocaleString('pt-BR', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '—';
+      return `<tr style="cursor:pointer" onclick="abrirTicket(${t.id})">
+        <td>${supStatusBadge(t.status)}</td>
+        <td class="mono">#${t.id}</td>
+        <td>${t.assunto || '—'}${t.categoria ? `<div style="font-size:11px;color:var(--text3)">${t.categoria}</div>` : ''}</td>
+        ${ehAdmin ? `<td>${t.vendedor_nome || '—'}</td>` : ''}
+        <td class="text-muted">${t.regiao || '—'}</td>
+        <td class="text-muted">${dt}</td>
+        <td><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();abrirTicket(${t.id})">Abrir →</button></td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div>`;
+}
+
+async function loadSuporteAdmin() {
+  _supOrigem = 'suporte-admin';
+  document.querySelectorAll('#suporte-filtros .sup-filtro').forEach(b => {
+    b.classList.toggle('btn-primary', b.dataset.status === _supFiltroStatus);
+  });
+  const lista = document.getElementById('suporte-admin-lista');
+  lista.innerHTML = '<div class="loading">Carregando...</div>';
+  try {
+    const qs = _supFiltroStatus ? `?status=${_supFiltroStatus}` : '';
+    const tickets = await api('GET', `/api/suporte/tickets${qs}`);
+    lista.innerHTML = renderListaTickets(tickets, true);
+  } catch(e) { lista.innerHTML = `<div class="section-card" style="color:var(--red)">${e.message}</div>`; }
+}
+
+function filtrarSuporte(status) { _supFiltroStatus = status; loadSuporteAdmin(); }
+
+async function loadSuporteVendedor() {
+  _supOrigem = 'suporte-vendedor';
+  const lista = document.getElementById('suporte-vendedor-lista');
+  lista.innerHTML = '<div class="loading">Carregando...</div>';
+  try {
+    const tickets = await api('GET', '/api/suporte/tickets');
+    lista.innerHTML = renderListaTickets(tickets, false);
+  } catch(e) { lista.innerHTML = `<div class="section-card" style="color:var(--red)">${e.message}</div>`; }
+}
+
+function abrirModalNovoTicket() {
+  document.getElementById('tk-categoria').value = 'Outro';
+  document.getElementById('tk-regiao').value = '';
+  document.getElementById('tk-assunto').value = '';
+  document.getElementById('tk-descricao').value = '';
+  document.getElementById('modal-ticket').classList.add('open');
+}
+
+async function salvarTicket() {
+  const body = {
+    categoria: document.getElementById('tk-categoria').value,
+    regiao: document.getElementById('tk-regiao').value.trim() || null,
+    assunto: document.getElementById('tk-assunto').value.trim(),
+    descricao: document.getElementById('tk-descricao').value.trim(),
+  };
+  if (!body.assunto || !body.descricao) { toast('Preencha assunto e descrição', 'error'); return; }
+  try {
+    await api('POST', '/api/suporte/tickets', body);
+    toast('Ticket aberto! Em breve responderemos.');
+    fecharModal('modal-ticket');
+    loadSuporteVendedor();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function abrirTicket(id) {
+  _supTicketAtual = id;
+  navegarPara('suporte-detalhe');
+  const thread = document.getElementById('sup-det-thread');
+  thread.innerHTML = '<div class="loading">Carregando...</div>';
+  try {
+    const t = await api('GET', `/api/suporte/tickets/${id}`);
+    const ehAdmin = state.user.role === 'admin';
+    document.getElementById('sup-det-titulo').textContent = `#${t.id} — ${t.assunto}`;
+    document.getElementById('sup-det-sub').innerHTML =
+      `${supStatusBadge(t.status)} &nbsp; ${t.categoria || ''}${t.regiao ? ' · ' + t.regiao : ''}${ehAdmin && t.vendedor_nome ? ' · ' + t.vendedor_nome : ''}`;
+
+    // Admin pode mudar status; vendedor só vê.
+    const acoes = document.getElementById('sup-det-acoes');
+    if (ehAdmin) {
+      acoes.innerHTML = `<select onchange="mudarStatusTicket(${t.id}, this.value)" style="min-width:160px">
+        ${Object.keys(SUP_STATUS_INFO).map(s => `<option value="${s}" ${t.status===s?'selected':''}>${SUP_STATUS_INFO[s].label}</option>`).join('')}
+      </select>`;
+    } else { acoes.innerHTML = ''; }
+
+    thread.innerHTML = `<div class="section-card"><div style="display:flex;flex-direction:column;gap:10px">${
+      (t.mensagens || []).map(m => {
+        const ehMinha = (m.autor_tipo === 'admin') === ehAdmin;
+        const dt = m.criado_em ? new Date(m.criado_em).toLocaleString('pt-BR', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}) : '';
+        const corBorda = m.autor_tipo === 'admin' ? 'var(--accent)' : 'var(--text3)';
+        const nome = m.autor_tipo === 'admin' ? 'Suporte Move' : (m.autor_nome || 'Vendedor');
+        return `<div style="align-self:${ehMinha?'flex-end':'flex-start'};max-width:80%;background:var(--bg3);border-left:3px solid ${corBorda};border-radius:8px;padding:10px 12px">
+          <div style="font-size:11px;color:var(--text3);margin-bottom:4px">${nome} · ${dt}</div>
+          <div style="font-size:13.5px;color:var(--text);white-space:pre-wrap">${String(m.mensagem||'').split('&').join('&amp;').split('<').join('&lt;')}</div>
+        </div>`;
+      }).join('')
+    }</div></div>`;
+  } catch(e) { thread.innerHTML = `<div class="section-card" style="color:var(--red)">${e.message}</div>`; }
+}
+
+async function mudarStatusTicket(id, status) {
+  try {
+    await api('PUT', `/api/suporte/tickets/${id}/status`, { status });
+    toast('Status atualizado');
+    abrirTicket(id);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function enviarMensagemTicket() {
+  const campo = document.getElementById('sup-det-msg');
+  const mensagem = campo.value.trim();
+  if (!mensagem) { toast('Escreva uma mensagem', 'error'); return; }
+  try {
+    await api('POST', `/api/suporte/tickets/${_supTicketAtual}/mensagem`, { mensagem });
+    campo.value = '';
+    abrirTicket(_supTicketAtual);
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+function voltarListaSuporte() {
+  navegarPara(_supOrigem);
+}
+
 // ── RANKING ───────────────────────────────────────────────────────────────────
 async function loadRanking(periodo = 'mes') {
   ['hoje','semana','mes'].forEach(p => {
@@ -4711,6 +4936,16 @@ async function desbloquearLinha(msisdn) {
   try {
     await api('POST', `/api/bora/linha/${msisdn}/desbloquear`);
     toast(`Linha ${msisdn} desbloqueada`);
+    realizarConsulta();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function cancelarRecorrenciaLinha(msisdn) {
+  if (!msisdn || msisdn === '—') { toast('MSISDN inválido', 'error'); return; }
+  if (!confirm(`Cancelar a recorrência (cobrança automática) da linha ${msisdn}?\n\nA linha continua ativa até o fim do ciclo atual e não será renovada automaticamente.`)) return;
+  try {
+    await api('POST', `/api/bora/linha/${msisdn}/cancelar-recorrencia`);
+    toast('Recorrência cancelada');
     realizarConsulta();
   } catch(e) { toast(e.message, 'error'); }
 }

@@ -478,6 +478,36 @@ async function garantirTabelaMateriaisPublicidade() {
     )
   `);
 }
+
+// Tickets de suporte: o vendedor abre reportando problema na região dele, o admin
+// administra (muda status / responde) e o vendedor acompanha o status e a conversa.
+async function garantirTabelasSuporte() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS suporte_tickets (
+      id SERIAL PRIMARY KEY,
+      vendedor_id INTEGER REFERENCES vendedores(id),
+      vendedor_nome VARCHAR(160),
+      categoria VARCHAR(40) DEFAULT 'Outro',
+      regiao VARCHAR(120),
+      assunto VARCHAR(160) NOT NULL,
+      descricao TEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'aberto',
+      criado_em TIMESTAMPTZ DEFAULT NOW(),
+      atualizado_em TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS suporte_mensagens (
+      id SERIAL PRIMARY KEY,
+      ticket_id INTEGER REFERENCES suporte_tickets(id) ON DELETE CASCADE,
+      autor_tipo VARCHAR(10) NOT NULL,
+      autor_nome VARCHAR(160),
+      mensagem TEXT NOT NULL,
+      criado_em TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_suporte_msg_ticket ON suporte_mensagens(ticket_id)`).catch(() => null);
+}
 // A comissão só é creditada em transacoes quando sincronizarCacheStatus() detectar que
 // o details.plan da linha cresceu além de plan_count_antes (sinal de que a Bora processou
 // o pagamento) — mesmo princípio usado pra comissão de ativação.
@@ -3943,6 +3973,108 @@ app.delete('/api/publicidade/:id', authMiddleware, adminOnly, async (req, res) =
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ─── SUPORTE — tickets do vendedor administrados pelo admin ───────────────────
+const SUPORTE_STATUS = ['aberto', 'em_andamento', 'resolvido', 'fechado'];
+
+// Lista tickets: admin vê todos (com filtro opcional ?status=), vendedor vê só os dele.
+app.get('/api/suporte/tickets', authMiddleware, async (req, res) => {
+  try {
+    const ehAdmin = req.user.role === 'admin';
+    const params = [];
+    let where = '';
+    if (!ehAdmin) { params.push(req.user.id); where = `WHERE t.vendedor_id = $${params.length}`; }
+    else if (req.query.status && SUPORTE_STATUS.includes(req.query.status)) {
+      params.push(req.query.status); where = `WHERE t.status = $${params.length}`;
+    }
+    const { rows } = await pool.query(
+      `SELECT t.*,
+        (SELECT COUNT(*) FROM suporte_mensagens m WHERE m.ticket_id = t.id) AS total_mensagens
+       FROM suporte_tickets t
+       ${where}
+       ORDER BY CASE t.status WHEN 'aberto' THEN 0 WHEN 'em_andamento' THEN 1 WHEN 'resolvido' THEN 2 ELSE 3 END,
+                t.atualizado_em DESC`,
+      params
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Detalhe de um ticket + thread de mensagens (vendedor só acessa o próprio).
+app.get('/api/suporte/tickets/:id', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM suporte_tickets WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ erro: 'Ticket não encontrado' });
+    const ticket = rows[0];
+    if (req.user.role !== 'admin' && ticket.vendedor_id !== req.user.id) {
+      return res.status(403).json({ erro: 'Sem permissão para este ticket' });
+    }
+    const { rows: mensagens } = await pool.query(
+      'SELECT * FROM suporte_mensagens WHERE ticket_id=$1 ORDER BY criado_em ASC',
+      [req.params.id]
+    );
+    res.json({ ...ticket, mensagens });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Vendedor (ou admin) abre um ticket. A descrição inicial vira a 1ª mensagem da thread.
+app.post('/api/suporte/tickets', authMiddleware, async (req, res) => {
+  try {
+    const { categoria, regiao, assunto, descricao } = req.body;
+    if (!assunto || !descricao) return res.status(400).json({ erro: 'Assunto e descrição são obrigatórios' });
+    const { rows } = await pool.query(
+      `INSERT INTO suporte_tickets (vendedor_id, vendedor_nome, categoria, regiao, assunto, descricao, status)
+       VALUES ($1,$2,$3,$4,$5,$6,'aberto') RETURNING *`,
+      [req.user.id, req.user.nome || null, categoria || 'Outro', regiao || null, assunto, descricao]
+    );
+    const ticket = rows[0];
+    await pool.query(
+      `INSERT INTO suporte_mensagens (ticket_id, autor_tipo, autor_nome, mensagem)
+       VALUES ($1,'vendedor',$2,$3)`,
+      [ticket.id, req.user.nome || null, descricao]
+    );
+    res.json(ticket);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Adiciona uma mensagem à thread (vendedor dono ou admin).
+app.post('/api/suporte/tickets/:id/mensagem', authMiddleware, async (req, res) => {
+  try {
+    const { mensagem } = req.body;
+    if (!mensagem || !mensagem.trim()) return res.status(400).json({ erro: 'Mensagem vazia' });
+    const { rows } = await pool.query('SELECT * FROM suporte_tickets WHERE id=$1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ erro: 'Ticket não encontrado' });
+    const ticket = rows[0];
+    const ehAdmin = req.user.role === 'admin';
+    if (!ehAdmin && ticket.vendedor_id !== req.user.id) {
+      return res.status(403).json({ erro: 'Sem permissão para este ticket' });
+    }
+    await pool.query(
+      `INSERT INTO suporte_mensagens (ticket_id, autor_tipo, autor_nome, mensagem)
+       VALUES ($1,$2,$3,$4)`,
+      [ticket.id, ehAdmin ? 'admin' : 'vendedor', req.user.nome || null, mensagem.trim()]
+    );
+    // Resposta do admin num ticket recém-aberto move pra "em andamento" automaticamente.
+    let novoStatus = ticket.status;
+    if (ehAdmin && ticket.status === 'aberto') novoStatus = 'em_andamento';
+    await pool.query('UPDATE suporte_tickets SET atualizado_em=NOW(), status=$2 WHERE id=$1', [ticket.id, novoStatus]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Só admin muda o status do ticket.
+app.put('/api/suporte/tickets/:id/status', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!SUPORTE_STATUS.includes(status)) return res.status(400).json({ erro: 'Status inválido' });
+    const { rows } = await pool.query(
+      'UPDATE suporte_tickets SET status=$1, atualizado_em=NOW() WHERE id=$2 RETURNING *',
+      [status, req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ erro: 'Ticket não encontrado' });
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ─── RANKING ──────────────────────────────────────────────────────────────────
 app.get('/api/ranking', authMiddleware, async (req, res) => {
   try {
@@ -4280,6 +4412,20 @@ app.post('/api/bora/linha/:msisdn/desbloquear', authMiddleware, async (req, res)
     if (!accountId) throw new Error('accountId não encontrado para esta linha');
     const data = await boraPut(`/api/Subscription/release/${accountId}`, {});
     await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [req.params.msisdn]);
+    res.json({ ok: true, data });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// Cancela a recorrência (cobrança automática) da linha. A Bora cancela ao receber
+// enabled=false no PUT de recurrence. A linha continua ativa até o fim do ciclo atual.
+app.post('/api/bora/linha/:msisdn/cancelar-recorrencia', authMiddleware, async (req, res) => {
+  try {
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    const accountId = details?.accountId;
+    if (!accountId) throw new Error('accountId não encontrado para esta linha');
+    const data = await boraPut(`/api/Subscription/${accountId}/recurrence`, { enabled: false });
     res.json({ ok: true, data });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
@@ -5046,6 +5192,7 @@ async function rodarMigrations(tentativa = 1) {
     ['tabela vínculos vendedor', garantirTabelaVinculoVendedor],
     ['tabela recargas pendentes', garantirTabelaRecargasPendentes],
     ['tabela materiais publicidade', garantirTabelaMateriaisPublicidade],
+    ['tabelas suporte', garantirTabelasSuporte],
   ];
   let falhas = [];
   for (const [nome, fn] of migrations) {
