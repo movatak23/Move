@@ -738,7 +738,8 @@ select option { background: var(--bg3); }
         <div class="stat-card yellow"><div class="stat-label">Recargas</div><div class="stat-value" id="st-recargas">—</div></div>
         <div class="stat-card"><div class="stat-label">Comissões Pagas</div><div class="stat-value" id="st-comissoes">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Linhas Ativas no Período</div><div class="stat-value" id="st-linhas-ativas-dia">—</div></div>
-        <div class="stat-card yellow"><div class="stat-label">Vencimentos no Dia</div><div class="stat-value" id="st-vencimentos-dia">—</div></div>
+        <div class="stat-card blue"><div class="stat-label">Linhas Ativas</div><div class="stat-value" id="st-linhas-ativas-total">—</div></div>
+        <div class="stat-card yellow"><div class="stat-label">Vencimentos na Data Fim</div><div class="stat-value" id="st-vencimentos-dia">—</div></div>
         <div class="stat-card"><div class="stat-label">Receita Move no Período</div><div class="stat-value" id="st-receita-move">—</div></div>
         <div class="stat-card red"><div class="stat-label">Inadimplência</div><div class="stat-value" id="st-inadimplencia">—</div></div>
         <div class="stat-card red"><div class="stat-label">Cancelamentos</div><div class="stat-value" id="st-cancelamentos">—</div></div>
@@ -794,8 +795,7 @@ select option { background: var(--bg3); }
         <div class="stat-card yellow"><div class="stat-label">Total Comissão</div><div class="stat-value" id="vd-com">—</div></div>
         <div class="stat-card"><div class="stat-label">Linhas Vinculadas</div><div class="stat-value" id="vd-linhas-total">—</div></div>
         <div class="stat-card red"><div class="stat-label">Linhas Canceladas/Inativas</div><div class="stat-value" id="vd-canceladas" style="cursor:pointer" onclick="toggleCanceladasDetalhe()">—</div></div>
-        <div class="stat-card blue"><div class="stat-label">Linhas Ativas no Dia</div><div class="stat-value" id="vd-linhas-ativas-dia">—</div></div>
-        <div class="stat-card yellow"><div class="stat-label">Vencimentos no Dia</div><div class="stat-value" id="vd-vencimentos-dia">—</div></div>
+        <div class="stat-card blue"><div class="stat-label">Receita Move no Período</div><div class="stat-value" id="vd-receita-move">—</div></div>
       </div>
       <div id="vd-canceladas-detalhe" style="display:none;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:12px 16px;margin-bottom:20px;font-size:13px"></div>
       <div class="table-card">
@@ -1038,8 +1038,8 @@ select option { background: var(--bg3); }
         <div class="stat-card"><div class="stat-label">Ativações</div><div class="stat-value" id="mp-ativ">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Recargas Detectadas</div><div class="stat-value" id="mp-rec">—</div></div>
         <div class="stat-card yellow"><div class="stat-label">Total Comissão</div><div class="stat-value" id="mp-com">—</div></div>
-        <div class="stat-card blue"><div class="stat-label">Linhas Ativas no Dia</div><div class="stat-value" id="mp-linhas-ativas-dia">—</div></div>
-        <div class="stat-card yellow"><div class="stat-label">Vencimentos no Dia</div><div class="stat-value" id="mp-vencimentos-dia">—</div></div>
+        <div class="stat-card"><div class="stat-label">Linhas Vinculadas</div><div class="stat-value" id="mp-linhas-total">—</div></div>
+        <div class="stat-card blue"><div class="stat-label">Receita Move no Período</div><div class="stat-value" id="mp-receita-move">—</div></div>
       </div>
       <div class="table-card">
         <div class="table-header"><div class="table-title">Histórico de Transações</div></div>
@@ -2220,12 +2220,14 @@ async function loadDashboard() {
     api('GET', `/api/dashboard/financeiro-periodo?data_inicio=${ini}&data_fim=${fim}`, null, {cache: 5*60*1000})
       .then(kpi => {
         document.getElementById('st-linhas-ativas-dia').textContent = kpi.linhas_ativas_base ?? 0;
+        document.getElementById('st-linhas-ativas-total').textContent = kpi.linhas_ativas_total ?? 0;
         document.getElementById('st-receita-move').textContent = 'R$' + parseFloat(kpi.receita_move_periodo || 0).toFixed(2);
         document.getElementById('st-inadimplencia').textContent = `${kpi.linhas_inadimplentes || 0} (${parseFloat(kpi.taxa_inadimplencia || 0).toFixed(1)}%)`;
         document.getElementById('st-cancelamentos').textContent = `${kpi.linhas_canceladas || 0} (${parseFloat(kpi.taxa_cancelamento || 0).toFixed(1)}%)`;
       })
       .catch(() => {
         document.getElementById('st-linhas-ativas-dia').textContent = '—';
+        document.getElementById('st-linhas-ativas-total').textContent = '—';
         document.getElementById('st-receita-move').textContent = '—';
         document.getElementById('st-inadimplencia').textContent = '—';
         document.getElementById('st-cancelamentos').textContent = '—';
@@ -2362,8 +2364,7 @@ async function carregarDetalheVendedor() {
     document.getElementById('vd-com').textContent = 'R$'+totalComissao.toFixed(2);
     document.getElementById('vd-linhas-total').textContent = dados.linhas?.length || 0;
     document.getElementById('vd-canceladas').textContent = dados.linhas_canceladas_inativas ?? 0;
-    document.getElementById('vd-linhas-ativas-dia').textContent = dados.indicadores_dia?.linhas_ativas_dia ?? 0;
-    document.getElementById('vd-vencimentos-dia').textContent = dados.indicadores_dia?.linhas_vencimento_dia ?? 0;
+    document.getElementById('vd-receita-move').textContent = 'R$'+(totalComissao*2).toFixed(2);
 
     // Detalhe dos números cancelados/inativos (mostrado ao clicar no card)
     const detBox = document.getElementById('vd-canceladas-detalhe');
@@ -3264,6 +3265,8 @@ async function loadMeuPainel() {
     document.getElementById('mp-ativ').textContent = ativ?.quantidade||0;
     document.getElementById('mp-rec').textContent = rec?.quantidade||0;
     document.getElementById('mp-com').textContent = 'R$'+totCom.toFixed(2);
+    document.getElementById('mp-linhas-total').textContent = dados.linhas?.length || 0;
+    document.getElementById('mp-receita-move').textContent = 'R$'+(totCom*2).toFixed(2);
 
     const tbody = document.getElementById('mp-tabela');
     if (!dados.transacoes.length) {

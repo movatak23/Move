@@ -1994,6 +1994,15 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
       paramsLinhas
     );
 
+    // Total de linhas ativas no geral (sem filtro de período) — card "Linhas Ativas".
+    const { rows: ativasTotalRows } = await pool.query(
+      `SELECT COUNT(*)::int AS total
+         FROM linhas l
+        WHERE COALESCE(l.iccid, '') NOT ILIKE 'retroativo-%'
+          AND l.msisdn IS NOT NULL
+          AND LOWER(COALESCE(l.status,'')) IN ('ativa','active')`
+    );
+
     const base = Number(linhasRows[0]?.total_linhas || 0);
     const inad = Number(linhasRows[0]?.linhas_inadimplentes || 0);
     const canc = Number(linhasRows[0]?.linhas_canceladas || 0);
@@ -2007,6 +2016,7 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
       fonte_receita_move: receitaBora.fonte_receita_move,
       total_linhas_base: base,
       linhas_ativas_base: Number(linhasRows[0]?.linhas_ativas || 0),
+      linhas_ativas_total: Number(ativasTotalRows[0]?.total || 0),
       linhas_inadimplentes: inad,
       taxa_inadimplencia: base ? (inad / base) * 100 : 0,
       linhas_canceladas: canc,
