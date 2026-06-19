@@ -1712,29 +1712,55 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
-<!-- Modal Portabilidade -->
+<!-- Modal Portabilidade (fluxo de 3 passos, igual à Bora) -->
 <div class="modal-overlay" id="modal-portabilidade">
-  <div class="modal" style="width:500px">
+  <div class="modal" style="width:640px;max-width:94vw">
     <div class="modal-title">Nova Portabilidade</div>
-    <div class="form-row">
-      <div class="field"><label>Número a Portar (com DDI)</label>
-        <div class="field-prefix">
-          <span class="prefix-tag">55</span>
-          <input type="text" id="port-msisdn" placeholder="81999990000" maxlength="11">
+
+    <!-- Passo 1: CPF/CNPJ -->
+    <div id="port-step-1">
+      <div class="form-row single">
+        <div class="field"><label>CPF/CNPJ do cliente</label><input type="text" id="port-doc" placeholder="000.000.000-00"></div>
+      </div>
+      <p style="font-size:12px;color:var(--text2);margin:-4px 0 12px">Informe o CPF/CNPJ usado na ativação. A portabilidade é feita sobre uma linha Move já ativa do cliente.</p>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="fecharModal('modal-portabilidade')">Cancelar</button>
+        <button class="btn btn-primary" id="port-btn-buscar" onclick="portBuscarLinhas()">Buscar linhas</button>
+      </div>
+    </div>
+
+    <!-- Passo 2: selecionar linha -->
+    <div id="port-step-2" style="display:none">
+      <div style="font-size:13px;color:var(--text2);margin-bottom:10px">Selecione a linha que vai receber a portabilidade:</div>
+      <div id="port-linhas-lista" style="display:flex;flex-direction:column;gap:10px;max-height:320px;overflow:auto"></div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="portVoltarPasso(1)">← Voltar</button>
+      </div>
+    </div>
+
+    <!-- Passo 3: confirmar -->
+    <div id="port-step-3" style="display:none">
+      <div class="section-card" id="port-linha-resumo" style="margin-bottom:14px"></div>
+      <div class="form-row single">
+        <div class="field"><label>Número a ser portado (com DDD)</label>
+          <div class="field-prefix">
+            <span class="prefix-tag">55</span>
+            <input type="text" id="port-pmsisdn" placeholder="81999990000" maxlength="11">
+          </div>
         </div>
       </div>
-      <div class="field"><label>CPF/CNPJ do Titular</label><input type="text" id="port-doc" placeholder="000.000.000-00"></div>
-    </div>
-    <div class="form-row">
-      <div class="field"><label>Nome do Titular</label><input type="text" id="port-nome"></div>
-      <div class="field"><label>E-mail do Titular</label><input type="email" id="port-email" placeholder="cliente@email.com"></div>
-    </div>
-    <div class="form-row single">
-      <div class="field"><label>Operadora Atual (opcional)</label><input type="text" id="port-doadora" placeholder="Ex: TIM, CLARO, VIVO"></div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="fecharModal('modal-portabilidade')">Cancelar</button>
-      <button class="btn btn-primary" onclick="realizarPortabilidade()">Solicitar Portabilidade</button>
+      <div style="font-size:11.5px;color:var(--text3);background:var(--bg3);border-radius:8px;padding:10px 12px;margin-bottom:12px;line-height:1.7">
+        <strong style="color:var(--accent)">Atenção:</strong><br>
+        • O DDD do número a portar deve ser o mesmo da linha selecionada.<br>
+        • O CPF/CNPJ deve ser o mesmo titular nas duas operadoras.<br>
+        • O número a portar precisa estar ativo e sem débitos na operadora atual.<br>
+        • Após a solicitação, o processo é automático e pode levar até 72h úteis (confirmação por SMS).<br>
+        • Dá pra cancelar em até 24h após a solicitação.
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="portVoltarPasso(2)">← Voltar</button>
+        <button class="btn btn-primary" id="port-btn-iniciar" onclick="realizarPortabilidade()">Iniciar Portabilidade</button>
+      </div>
     </div>
   </div>
 </div>
@@ -4301,25 +4327,87 @@ async function loadPortabilidade() {
   } catch(e) { toast(e.message,'error'); }
 }
 
+let _portState = { documento: '', linhas: [], linhaSel: null };
+
 function abrirModalPortabilidade() {
+  _portState = { documento: '', linhas: [], linhaSel: null };
+  document.getElementById('port-doc').value = '';
+  document.getElementById('port-pmsisdn').value = '';
+  portVoltarPasso(1);
   document.getElementById('modal-portabilidade').classList.add('open');
 }
 
-async function realizarPortabilidade() {
-  const numero = document.getElementById('port-msisdn').value.trim().replace(/\D/g,'');
+function portMostrarPasso(n) {
+  [1,2,3].forEach(i => {
+    const el = document.getElementById('port-step-' + i);
+    if (el) el.style.display = (i === n) ? 'block' : 'none';
+  });
+}
+function portVoltarPasso(n) { portMostrarPasso(n); }
+
+function fmtTelLinha(n) {
+  return n ? String(n).replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})/, '($1) $2-$3') : '—';
+}
+
+async function portBuscarLinhas() {
   const doc = document.getElementById('port-doc').value.replace(/\D/g,'');
-  const nome = document.getElementById('port-nome').value.trim();
-  const email = document.getElementById('port-email').value.trim();
-  if (numero.length < 10) { toast('Número a portar inválido','error'); return; }
-  if (!doc) { toast('Informe o CPF/CNPJ do titular','error'); return; }
-  if (!nome) { toast('Informe o nome do titular','error'); return; }
-  if (!email || !email.includes('@')) { toast('Informe um e-mail válido do titular','error'); return; }
+  if (doc.length < 11) { toast('Informe um CPF/CNPJ válido','error'); return; }
+  const btn = document.getElementById('port-btn-buscar');
+  btn.disabled = true; btn.textContent = 'Buscando...';
   try {
-    await api('POST', '/api/portabilidade/realizar', { pmsisdn: '55' + numero, document: doc, name: nome, email });
-    toast('Portabilidade solicitada com sucesso');
+    const linhas = await api('GET', `/api/portabilidade/linhas-cliente/${doc}`);
+    if (!linhas.length) {
+      toast('Nenhuma linha ativa encontrada para esse CPF/CNPJ. A portabilidade só funciona após ativar o chip.','error');
+      return;
+    }
+    _portState.documento = doc;
+    _portState.linhas = linhas;
+    const lista = document.getElementById('port-linhas-lista');
+    lista.innerHTML = linhas.map((l, i) => {
+      const planoNome = l.plan ? [l.plan.title, l.plan.subtitle].filter(Boolean).join(' · ') : 'Plano';
+      const preco = l.plan && l.plan.price ? (' — R$ ' + (parseInt(l.plan.price,10)/100).toFixed(2).replace('.',',')) : '';
+      return `<div class="section-card" style="cursor:pointer;border:1px solid var(--border2)" onclick="portSelecionarLinha(${i})">
+        <div style="font-weight:700;color:var(--accent)">${planoNome}${preco}</div>
+        <div style="font-size:12.5px;color:var(--text2);margin-top:4px">📱 ${fmtTelLinha(l.msisdn)} &nbsp;·&nbsp; DDD ${l.areaCode || '—'}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:2px">ICCID: ${l.iccid || '—'}</div>
+      </div>`;
+    }).join('');
+    portMostrarPasso(2);
+  } catch(e) { toast(e.message,'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Buscar linhas'; }
+}
+
+function portSelecionarLinha(idx) {
+  const l = _portState.linhas[idx];
+  if (!l) return;
+  _portState.linhaSel = l;
+  const planoNome = l.plan ? [l.plan.title, l.plan.subtitle].filter(Boolean).join(' · ') : 'Plano';
+  document.getElementById('port-linha-resumo').innerHTML =
+    `<div style="font-size:12px;color:var(--text3);margin-bottom:4px">Linha selecionada</div>
+     <div style="font-weight:700;color:var(--accent)">${planoNome}</div>
+     <div style="font-size:12.5px;color:var(--text2);margin-top:4px">📱 ${fmtTelLinha(l.msisdn)} &nbsp;·&nbsp; DDD ${l.areaCode || '—'}</div>
+     <div style="font-size:11px;color:var(--text3);margin-top:2px">ICCID: ${l.iccid || '—'}</div>`;
+  document.getElementById('port-pmsisdn').value = '';
+  portMostrarPasso(3);
+}
+
+async function realizarPortabilidade() {
+  const numero = document.getElementById('port-pmsisdn').value.trim().replace(/\D/g,'');
+  if (numero.length < 10) { toast('Número a portar inválido','error'); return; }
+  if (!_portState.linhaSel) { toast('Selecione uma linha','error'); return; }
+  const btn = document.getElementById('port-btn-iniciar');
+  btn.disabled = true; btn.textContent = 'Solicitando...';
+  try {
+    await api('POST', '/api/portabilidade/realizar', {
+      pmsisdn: '55' + numero,
+      document: _portState.documento,
+      name: _portState.linhaSel.name || null,
+    });
+    toast('Portabilidade solicitada! O cliente vai receber um SMS de confirmação.');
     fecharModal('modal-portabilidade');
     loadPortabilidade();
   } catch(e) { toast(e.message,'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Iniciar Portabilidade'; }
 }
 
 
