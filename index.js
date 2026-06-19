@@ -570,6 +570,23 @@ function adminOnly(req, res, next) {
   next();
 }
 
+// Libera a rota para admin (sempre) ou para vendedor/subvendedor que tenha a permissão
+// marcada no painel (tabela vendedor_permissoes). Usado por recursos que o admin libera
+// individualmente, como churn e inadimplência.
+function requirePerm(permissao) {
+  return async (req, res, next) => {
+    try {
+      if (req.user.role === 'admin') return next();
+      const { rows } = await pool.query(
+        'SELECT 1 FROM vendedor_permissoes WHERE vendedor_id=$1 AND permissao=$2 LIMIT 1',
+        [req.user.id, permissao]
+      );
+      if (!rows.length) return res.status(403).json({ erro: 'Recurso não liberado para o seu acesso' });
+      next();
+    } catch (e) { res.status(500).json({ erro: e.message }); }
+  };
+}
+
 function vendedorPrincipalOnly(req, res, next) {
   if (req.user.role !== 'vendedor') return res.status(403).json({ erro: 'Acesso permitido apenas ao vendedor principal' });
   next();
@@ -4155,21 +4172,47 @@ app.get('/api/ranking', authMiddleware, async (req, res) => {
 });
 
 // ─── INADIMPLÊNCIA ────────────────────────────────────────────────────────────
-app.get('/api/inadimplencia', authMiddleware, adminOnly, async (req, res) => {
+app.get('/api/inadimplencia', authMiddleware, requirePerm('inadimplencia'), async (req, res) => {
+  const ehAdmin = req.user.role === 'admin';
+  // Documentos das linhas do vendedor — usado pra filtrar o resultado quando não for admin.
+  let docsPermitidos = null;
+  if (!ehAdmin) {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT documento_cliente FROM linhas
+       WHERE documento_cliente IS NOT NULL AND (vendedor_id=$1 OR subvendedor_id=$1)`,
+      [req.user.id]
+    );
+    docsPermitidos = new Set(rows.map(r => String(r.documento_cliente).replace(/\D/g, '')));
+    if (!docsPermitidos.size) return res.json([]);
+  }
+  const filtrar = (lista) => {
+    if (ehAdmin) return lista;
+    return lista.filter(b => {
+      const doc = String(b.documento || b.document || b.cpf || '').replace(/\D/g, '');
+      return doc && docsPermitidos.has(doc);
+    });
+  };
   try {
     const data = await boraGet('/api/Subscriber/billets/pending');
-    res.json(data);
+    res.json(filtrar(Array.isArray(data) ? data : (data?.items || data?.billets || [])));
   } catch {
     try {
-      const { rows: linhas } = await pool.query(
-        "SELECT DISTINCT documento_cliente FROM linhas WHERE status='ativa' AND documento_cliente IS NOT NULL LIMIT 50"
-      );
+      // Fallback: varre boletos por documento. Pro vendedor, varre só os documentos dele.
+      let documentos;
+      if (ehAdmin) {
+        const { rows: linhas } = await pool.query(
+          "SELECT DISTINCT documento_cliente FROM linhas WHERE status='ativa' AND documento_cliente IS NOT NULL LIMIT 50"
+        );
+        documentos = linhas.map(l => l.documento_cliente);
+      } else {
+        documentos = Array.from(docsPermitidos).slice(0, 50);
+      }
       const resultados = [];
-      for (const l of linhas.slice(0,20)) {
+      for (const doc of documentos.slice(0, 20)) {
         try {
-          const boletos = await boraGet(`/api/Subscriber/${l.documento_cliente}/billets`);
+          const boletos = await boraGet(`/api/Subscriber/${doc}/billets`);
           if (Array.isArray(boletos) && boletos.length) {
-            resultados.push(...boletos.map(b => ({ ...b, documento: l.documento_cliente })));
+            resultados.push(...boletos.map(b => ({ ...b, documento: doc })));
           }
         } catch {}
       }
@@ -4717,9 +4760,16 @@ app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
 });
 
 // ─── RELATÓRIO DE CHURN ───────────────────────────────────────────────────────
-app.get('/api/relatorio/churn', authMiddleware, adminOnly, async (req, res) => {
+app.get('/api/relatorio/churn', authMiddleware, requirePerm('churn'), async (req, res) => {
   try {
     const dias = parseInt(req.query.periodo) || 30;
+    const ehAdmin = req.user.role === 'admin';
+    const params = [dias];
+    let filtroVendedor = '';
+    if (!ehAdmin) {
+      params.push(req.user.id);
+      filtroVendedor = `AND (l.vendedor_id = $2 OR l.subvendedor_id = $2)`;
+    }
     const { rows } = await pool.query(
       `SELECT l.msisdn, l.iccid, l.nome_cliente, l.documento_cliente,
         l.plano_nome, l.status, l.data_ativacao, v.nome as vendedor_nome,
@@ -4728,8 +4778,9 @@ app.get('/api/relatorio/churn', authMiddleware, adminOnly, async (req, res) => {
        LEFT JOIN vendedores v ON v.id = l.vendedor_id
        WHERE l.status IN ('cancelada','suspensa','bloqueada','cancelled','suspended')
          AND l.data_ativacao >= NOW() - ($1 * INTERVAL '1 day')
+         ${filtroVendedor}
        ORDER BY l.data_ativacao DESC`,
-      [dias]
+      params
     );
     res.json({ total: rows.length, periodo: dias, linhas: rows });
   } catch (e) { res.status(500).json({ erro: e.message }); }

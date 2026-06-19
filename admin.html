@@ -1554,7 +1554,13 @@ select option { background: var(--bg3); }
           <input type="checkbox" id="perm-troca-plano" value="troca_plano"> Trocar Plano
         </label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="perm-ativar" value="ativacao"> Ativar Chip
+          <input type="checkbox" id="perm-ativacao" value="ativacao"> Ativar Chip
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
+          <input type="checkbox" id="perm-inadimplencia" value="inadimplencia"> Inadimplência
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
+          <input type="checkbox" id="perm-churn" value="churn"> Churn
         </label>
       </div>
     </div>
@@ -2154,6 +2160,8 @@ function construirNav() {
     ...(isVendedorPrincipal ? [{ page: 'calculadora', icon: '◎', label: 'Calculadora' }] : []),
     { page: 'publicidade', icon: '📣', label: 'Publicidade' },
     { section: 'Ferramentas' },
+    { page: 'inadimplencia', icon: '⚠', label: 'Inadimplência', perm: 'inadimplencia' },
+    { page: 'churn', icon: '📉', label: 'Churn', perm: 'churn' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
     { section: 'Suporte' },
     { page: 'suporte-vendedor', icon: '🎫', label: 'Meus Tickets' },
@@ -2573,7 +2581,7 @@ function abrirModalVendedor() {
 // editarVendedor substituído pela versão com permissões
 
 async function salvarVendedor() {
-  const permissoes = ['consulta','recarga','portabilidade','boleto_combado','troca_plano','ativacao']
+  const permissoes = ['consulta','recarga','portabilidade','boleto_combado','troca_plano','ativacao','inadimplencia','churn']
     .filter(p => {
       const el = document.getElementById('perm-'+p.replace('_','-'));
       return el && el.checked;
@@ -3661,7 +3669,7 @@ async function confirmarAtribuicao() {
 
 
 // ── PERMISSÕES ────────────────────────────────────────────────────────────────
-const PERMS = ['consulta','recarga','portabilidade','boleto_combado','troca_plano','ativacao'];
+const PERMS = ['consulta','recarga','portabilidade','boleto_combado','troca_plano','ativacao','inadimplencia','churn'];
 
 async function editarVendedor(id, nome, email, tel, ativo) {
   state.editVendedorId = id;
