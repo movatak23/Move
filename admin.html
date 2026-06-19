@@ -1283,7 +1283,7 @@ select option { background: var(--bg3); }
       <div class="table-card">
         <div class="table-header"><div class="table-title">Histórico de Portabilidades</div></div>
         <table>
-          <thead><tr><th>CPF/CNPJ</th><th>Nome</th><th>Doadora</th><th>Destino</th><th>Requisição</th><th>Prevista</th><th>Status</th></tr></thead>
+          <thead><tr><th>CPF/CNPJ</th><th>Nome</th><th>Número Portado</th><th>Linha Move (provisória)</th><th>Solicitado em</th><th>Previsão</th><th>Status</th></tr></thead>
           <tbody id="tbl-portabilidade"><tr><td colspan="7" class="loading">Carregando...</td></tr></tbody>
         </table>
       </div>
@@ -4119,25 +4119,34 @@ async function reenviarEsim(iccid, emailConhecido, nome, msisdn, btn) {
 async function loadPortabilidade() {
   try {
     const data = await api('GET', '/api/portabilidade/lista');
-    const lista = Array.isArray(data) ? data : (data.items || data.portabilities || []);
+    // A Bora paginava em "results" — o backend já devolve a lista pronta (ou array direto).
+    const lista = Array.isArray(data) ? data : (data.results || []);
     const tbody = document.getElementById('tbl-portabilidade');
     if (!lista.length) {
       tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><div class="ico">↔</div><p>Nenhuma portabilidade encontrada</p></td></tr>';
       return;
     }
+    const corStatus = (status) => {
+      const s = String(status || '').toUpperCase();
+      if (s.includes('SUCESSO') || s.includes('CONCLU') || s.includes('PORTAD')) return 'badge-green';
+      if (s.includes('CANCEL') || s.includes('NEGAD') || s.includes('ERRO') || s.includes('REJEIT') || s.includes('FALHA')) return 'badge-red';
+      if (s.includes('PENDENTE') || s.includes('AGUARD') || s.includes('ANDAMENTO')) return 'badge-yellow';
+      return 'badge-blue';
+    };
     tbody.innerHTML = lista.map(p => {
-      const reqData = p.requestDate || p.createdAt ? new Date(p.requestDate||p.createdAt).toLocaleDateString('pt-BR') : '—';
-      const prevData = p.scheduledDate || p.expectedDate ? new Date(p.scheduledDate||p.expectedDate).toLocaleDateString('pt-BR') : '—';
-      const status = p.description || p.status || '—';
-      const statusOk = status.toLowerCase().includes('sucesso') || status.toLowerCase().includes('success');
+      const reqData = p.requestDate ? new Date(p.requestDate).toLocaleDateString('pt-BR') : '—';
+      const prevData = p.forecast ? new Date(p.forecast).toLocaleDateString('pt-BR') : '—';
+      const status = p.status || '—';
+      const descricao = p.description || '';
+      const fmtNum = (n) => n ? String(n).replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})/, '($1) $2-$3') : '—';
       return `<tr>
-        <td class="mono">${p.document||p.cpf||'—'}</td>
-        <td>${p.name||p.nome||'—'}</td>
-        <td class="mono">${p.donor||p.doadora||'—'}</td>
-        <td class="mono">${p.destination||p.destino||p.msisdn||'—'}</td>
+        <td class="mono">${p.document || '—'}</td>
+        <td>${p.name || '—'}</td>
+        <td class="mono">${fmtNum(p.msisdn)}</td>
+        <td class="mono">${fmtNum(p.pmsisdn)}</td>
         <td class="text-muted">${reqData}</td>
         <td class="text-muted">${prevData}</td>
-        <td><span class="badge ${statusOk?'badge-green':'badge-yellow'}" style="max-width:200px;white-space:normal;font-size:10px">${status}</span></td>
+        <td><span class="badge ${corStatus(status)}" title="${descricao.replace(/"/g,'&quot;')}" style="max-width:200px;white-space:normal;font-size:10px">${status}</span></td>
       </tr>`;
     }).join('');
   } catch(e) { toast(e.message,'error'); }

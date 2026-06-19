@@ -3774,8 +3774,32 @@ app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
 // ─── PORTABILIDADE ────────────────────────────────────────────────────────────
 app.get('/api/portabilidade/lista', authMiddleware, async (req, res) => {
   try {
-    const data = await boraGet('/api/Portability/List');
-    res.json(data);
+    // A Bora pagina o resultado (results/page/pages/totalRecords) — busca todas as
+    // páginas (limite de segurança: 10 páginas x 100 = até 1000 registros).
+    let pagina = 1, totalPaginas = 1, todas = [];
+    do {
+      const data = await boraGet(`/api/Portability/List?Page=${pagina}&PageSize=100&OrderBy=requestDate&Order=DESC`);
+      todas = todas.concat(data?.results || []);
+      totalPaginas = data?.pages || 1;
+      pagina++;
+    } while (pagina <= totalPaginas && pagina <= 10);
+
+    let lista = todas;
+
+    // Vendedor só vê as portabilidades das linhas dele (ou da equipe) — cruza msisdn/pmsisdn
+    // com o cadastro local de linhas/vínculos, mesmo critério já usado na busca por DDD.
+    if (req.user.role !== 'admin') {
+      const { rows: vinc } = await pool.query(
+        `SELECT msisdn FROM linhas WHERE vendedor_id=$1 OR subvendedor_id=$1
+         UNION
+         SELECT msisdn FROM vinculos_msisdn_vendedor WHERE vendedor_id=$1`,
+        [req.user.id]
+      );
+      const permitidos = new Set(vinc.map(v => normMsisdn(v.msisdn)));
+      lista = lista.filter(p => permitidos.has(normMsisdn(p.msisdn)) || permitidos.has(normMsisdn(p.pmsisdn)));
+    }
+
+    res.json(lista);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
