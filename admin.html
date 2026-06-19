@@ -737,7 +737,7 @@ select option { background: var(--bg3); }
         <div class="stat-card blue"><div class="stat-label">Ativações</div><div class="stat-value" id="st-ativacoes">—</div></div>
         <div class="stat-card yellow"><div class="stat-label">Recargas</div><div class="stat-value" id="st-recargas">—</div></div>
         <div class="stat-card"><div class="stat-label">Comissões Pagas</div><div class="stat-value" id="st-comissoes">—</div></div>
-        <div class="stat-card blue"><div class="stat-label">Linhas Ativas no Dia</div><div class="stat-value" id="st-linhas-ativas-dia">—</div></div>
+        <div class="stat-card blue"><div class="stat-label">Linhas Ativas no Período</div><div class="stat-value" id="st-linhas-ativas-dia">—</div></div>
         <div class="stat-card yellow"><div class="stat-label">Vencimentos no Dia</div><div class="stat-value" id="st-vencimentos-dia">—</div></div>
         <div class="stat-card"><div class="stat-label">Receita Move no Período</div><div class="stat-value" id="st-receita-move">—</div></div>
         <div class="stat-card red"><div class="stat-label">Inadimplência</div><div class="stat-value" id="st-inadimplencia">—</div></div>
@@ -2211,21 +2211,21 @@ async function loadDashboard() {
     const diaRef = fim || new Date().toISOString().slice(0, 10);
     api('GET', `/api/dashboard/indicadores-dia?data=${diaRef}`, null, {cache: 5*60*1000})
       .then(ind => {
-        document.getElementById('st-linhas-ativas-dia').textContent = ind.linhas_ativas_dia ?? 0;
         document.getElementById('st-vencimentos-dia').textContent = ind.linhas_vencimento_dia ?? 0;
       })
       .catch(() => {
-        document.getElementById('st-linhas-ativas-dia').textContent = '—';
         document.getElementById('st-vencimentos-dia').textContent = '—';
       });
 
     api('GET', `/api/dashboard/financeiro-periodo?data_inicio=${ini}&data_fim=${fim}`, null, {cache: 5*60*1000})
       .then(kpi => {
+        document.getElementById('st-linhas-ativas-dia').textContent = kpi.linhas_ativas_base ?? 0;
         document.getElementById('st-receita-move').textContent = 'R$' + parseFloat(kpi.receita_move_periodo || 0).toFixed(2);
         document.getElementById('st-inadimplencia').textContent = `${kpi.linhas_inadimplentes || 0} (${parseFloat(kpi.taxa_inadimplencia || 0).toFixed(1)}%)`;
         document.getElementById('st-cancelamentos').textContent = `${kpi.linhas_canceladas || 0} (${parseFloat(kpi.taxa_cancelamento || 0).toFixed(1)}%)`;
       })
       .catch(() => {
+        document.getElementById('st-linhas-ativas-dia').textContent = '—';
         document.getElementById('st-receita-move').textContent = '—';
         document.getElementById('st-inadimplencia').textContent = '—';
         document.getElementById('st-cancelamentos').textContent = '—';

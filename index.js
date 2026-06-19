@@ -1948,22 +1948,32 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
     const dataInicio = req.query.data_inicio || null;
     const dataFim = req.query.data_fim || null;
 
-    // Receita Move no período: usa o relatório SALES da Bora (pega TODAS as transações,
-    // inclusive linhas sem vendedor cadastrado no nosso sistema). Fallback para o método
-    // antigo (via Subscription details) se o relatório falhar.
-    // Lê do cache em memória (TTL) para não re-baixar o relatório a cada abertura.
-    let receitaBora = (String(req.query.nocache || 'false') === 'true')
-      ? null
-      : receitaCacheGet(dataInicio, dataFim);
-    if (!receitaBora) {
-      try {
-        receitaBora = await calcularReceitaMoveSalesBora({ dataInicio, dataFim });
-      } catch (e) {
-        console.error('[RECEITA SALES] falhou, usando fallback:', e.message);
-        receitaBora = await calcularReceitaMoveBoraPeriodo({ dataInicio, dataFim });
-      }
-      receitaCacheSet(dataInicio, dataFim, receitaBora);
+    // Receita Move = 2x as comissões pagas no período. Regra do negócio: cada comissão
+    // configurada é o que o vendedor recebe, e a Move recebe um valor igual — então a
+    // Receita Move é sempre o dobro do total de comissões. Calculamos a partir da MESMA
+    // fonte do card "Comissões Pagas" (tabela transacoes) pra os dois cards baterem sempre.
+    const paramsCom = [];
+    let filtroComissao = 'WHERE 1=1';
+    if (dataInicio && dataFim) {
+      filtroComissao += ' AND t.data_transacao BETWEEN $1 AND $2';
+      paramsCom.push(dataInicio, dataFim + ' 23:59:59');
     }
+    const { rows: comRows } = await pool.query(
+      `SELECT COALESCE(SUM(t.comissao), 0) AS total_comissao,
+              COUNT(*) FILTER (WHERE t.tipo='ativacao') AS ativacoes,
+              COUNT(*) FILTER (WHERE t.tipo='recarga')  AS recargas
+         FROM transacoes t
+         JOIN vendedores v ON v.id = t.vendedor_id
+         ${filtroComissao}`,
+      paramsCom
+    );
+    const totalComissoes = Number(comRows[0]?.total_comissao || 0);
+    const receitaBora = {
+      receita_move_periodo: Number((totalComissoes * 2).toFixed(2)),
+      ativacoes_bora_periodo: Number(comRows[0]?.ativacoes || 0),
+      recargas_bora_periodo: Number(comRows[0]?.recargas || 0),
+      fonte_receita_move: 'comissoes_x2',
+    };
 
     const paramsLinhas = [];
     let filtroLinhasPeriodo = '';
@@ -1991,11 +2001,9 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
     res.json({
       ok: true,
       receita_move_periodo: Number(receitaBora.receita_move_periodo || 0),
+      total_comissoes_periodo: Number(totalComissoes.toFixed(2)),
       ativacoes_comissionadas: Number(receitaBora.ativacoes_bora_periodo || 0),
       recargas_comissionadas: Number(receitaBora.recargas_bora_periodo || 0),
-      linhas_consultadas_bora: Number(receitaBora.linhas_consultadas_bora || 0),
-      linhas_com_erro_bora: Number(receitaBora.linhas_com_erro_bora || 0),
-      eventos_sem_plano_configurado: Number(receitaBora.eventos_sem_plano_configurado || 0),
       fonte_receita_move: receitaBora.fonte_receita_move,
       total_linhas_base: base,
       linhas_ativas_base: Number(linhasRows[0]?.linhas_ativas || 0),
