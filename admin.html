@@ -250,29 +250,54 @@ body {
 .nav-item.active { color: var(--accent); background: var(--accent-dim); border-left-color: var(--accent); }
 .nav-item .icon { font-size: 16px; width: 18px; text-align: center; }
 
-.sidebar-bottom {
-  padding: 16px 20px;
-  border-top: 1px solid var(--border);
+/* Barra de ações fixa no canto superior direito do dashboard */
+.topbar-actions {
+  position: fixed;
+  top: 14px;
+  right: 20px;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
-
-.btn-logout {
-  width: 100%;
-  padding: 9px;
-  background: var(--bg3);
+.topbar-actions .cache-ts {
+  font-size: 11px;
+  color: var(--text3);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.topbar-actions .tb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg2);
   border: 1px solid var(--border);
   border-radius: var(--r);
   color: var(--text2);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 12.5px;
   font-family: var(--sans);
   transition: all 0.15s;
+  white-space: nowrap;
 }
-.btn-logout:hover { color: var(--red); border-color: var(--red); }
+.topbar-actions .tb-btn:hover { color: var(--text); border-color: var(--border2); background: var(--bg3); }
+.topbar-actions .tb-btn.tb-refresh:hover { color: var(--accent); border-color: var(--accent); }
+.topbar-actions .tb-btn.tb-logout:hover { color: var(--red); border-color: var(--red); }
+.topbar-actions .tb-btn .tb-label { display: inline; }
+
+/* Em telas estreitas, esconde os textos e deixa só os ícones, e some o "atualizado há" */
+@media (max-width: 900px) {
+  .topbar-actions .cache-ts { display: none; }
+  .topbar-actions .tb-btn .tb-label { display: none; }
+  .topbar-actions .tb-btn { padding: 8px 10px; }
+}
 
 .main-content {
   margin-left: 220px;
   min-height: 100vh;
   padding: 32px;
+  padding-top: 60px;
 }
 
 /* ── PAGES ─────────────────────────────────────── */
@@ -678,13 +703,15 @@ select option { background: var(--bg3); }
       <div class="role" id="sb-role">—</div>
     </div>
     <nav class="sidebar-nav" id="sidebar-nav"></nav>
-    <div class="sidebar-bottom">
-      <div id="cache-ts" style="font-size:11px;color:var(--text3);text-align:center;margin-bottom:6px;min-height:16px"></div>
-      <button class="btn-logout" onclick="atualizarPagina()" style="margin-bottom:8px;color:var(--accent)">🔄 Atualizar</button>
-      <button class="btn-logout" onclick="alternarTema()" id="btn-theme" style="margin-bottom:8px">☀ Modo claro</button>
-      <button class="btn-logout" onclick="abrirModalMinhaSenha()" style="margin-bottom:8px">🔐 Alterar senha</button>
-      <button class="btn-logout" onclick="doLogout()">↩ Sair</button>
-    </div>
+  </div>
+
+  <!-- Barra de ações no canto superior direito -->
+  <div class="topbar-actions">
+    <span class="cache-ts" id="cache-ts"></span>
+    <button class="tb-btn tb-refresh" onclick="atualizarPagina()" title="Atualizar">🔄<span class="tb-label">Atualizar</span></button>
+    <button class="tb-btn" onclick="alternarTema()" id="btn-theme" title="Alternar tema">☀<span class="tb-label">Modo claro</span></button>
+    <button class="tb-btn" onclick="abrirModalMinhaSenha()" title="Alterar senha">🔐<span class="tb-label">Alterar senha</span></button>
+    <button class="tb-btn tb-logout" onclick="doLogout()" title="Sair">↩<span class="tb-label">Sair</span></button>
   </div>
 
   <!-- Main -->
