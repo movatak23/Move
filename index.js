@@ -3878,10 +3878,31 @@ app.get('/api/portabilidade/lista', authMiddleware, async (req, res) => {
 
 app.post('/api/portabilidade/realizar', authMiddleware, async (req, res) => {
   try {
-    const data = await boraPost('/api/Portability', req.body);
+    // O frontend manda o número a portar como "msisdn"/"numero", mas a Bora chama esse
+    // campo de "pmsisdn" (o "msisdn" da Bora é o número ATUAL na Move, não o que vai entrar).
+    // Mandar os nomes errados fazia a Bora responder "não foi possível encontrar linha".
+    const numeroPortar = String(req.body.pmsisdn || req.body.msisdn || req.body.numero || '').replace(/\D/g, '');
+    const documento = String(req.body.document || req.body.documento || req.body.cpf || '').replace(/\D/g, '');
+    const nome = String(req.body.name || req.body.nome || '').trim();
+    const email = String(req.body.email || '').trim();
+
+    if (!numeroPortar) return res.status(400).json({ erro: 'Informe o número a portar' });
+    if (!documento) return res.status(400).json({ erro: 'Informe o CPF/CNPJ do titular' });
+    if (!nome) return res.status(400).json({ erro: 'Informe o nome do titular' });
+    if (!email) return res.status(400).json({ erro: 'E-mail é obrigatório para a portabilidade' });
+
+    // pmsisdn = número a ser portado (com DDI 55). document/name/email do titular.
+    const payload = {
+      pmsisdn: numeroPortar.startsWith('55') ? numeroPortar : '55' + numeroPortar,
+      document: documento,
+      name: nome,
+      email: email,
+    };
+
+    const data = await boraPost('/api/Portability', payload);
     res.json(data);
   } catch (e) {
-    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.response?.data?.title || e.message });
   }
 });
 

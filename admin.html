@@ -1727,7 +1727,10 @@ select option { background: var(--bg3); }
     </div>
     <div class="form-row">
       <div class="field"><label>Nome do Titular</label><input type="text" id="port-nome"></div>
-      <div class="field"><label>Operadora Atual (Doadora)</label><input type="text" id="port-doadora" placeholder="Ex: TIM, CLARO, VIVO"></div>
+      <div class="field"><label>E-mail do Titular</label><input type="email" id="port-email" placeholder="cliente@email.com"></div>
+    </div>
+    <div class="form-row single">
+      <div class="field"><label>Operadora Atual (opcional)</label><input type="text" id="port-doadora" placeholder="Ex: TIM, CLARO, VIVO"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="fecharModal('modal-portabilidade')">Cancelar</button>
@@ -4303,13 +4306,16 @@ function abrirModalPortabilidade() {
 }
 
 async function realizarPortabilidade() {
-  const msisdn = '55' + document.getElementById('port-msisdn').value.trim().replace(/\D/g,'');
+  const numero = document.getElementById('port-msisdn').value.trim().replace(/\D/g,'');
   const doc = document.getElementById('port-doc').value.replace(/\D/g,'');
   const nome = document.getElementById('port-nome').value.trim();
-  const doadora = document.getElementById('port-doadora').value.trim();
-  if (!msisdn || msisdn.length < 12 || !doc) { toast('Preencha número e CPF','error'); return; }
+  const email = document.getElementById('port-email').value.trim();
+  if (numero.length < 10) { toast('Número a portar inválido','error'); return; }
+  if (!doc) { toast('Informe o CPF/CNPJ do titular','error'); return; }
+  if (!nome) { toast('Informe o nome do titular','error'); return; }
+  if (!email || !email.includes('@')) { toast('Informe um e-mail válido do titular','error'); return; }
   try {
-    await api('POST', '/api/portabilidade/realizar', { msisdn, document: doc, name: nome, donor: doadora });
+    await api('POST', '/api/portabilidade/realizar', { pmsisdn: '55' + numero, document: doc, name: nome, email });
     toast('Portabilidade solicitada com sucesso');
     fecharModal('modal-portabilidade');
     loadPortabilidade();
