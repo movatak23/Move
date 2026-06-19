@@ -463,7 +463,21 @@ async function garantirTabelaVinculoVendedor() {
   `);
 }
 
-// Migration: recargas manuais (Pacotes Adicionais) com pagamento ainda não confirmado.
+// Migration: links de materiais promocionais (Canva, Google Drive etc.) exibidos
+// no menu "Publicidade" — visível para admin e vendedores.
+async function garantirTabelaMateriaisPublicidade() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS materiais_publicidade (
+      id SERIAL PRIMARY KEY,
+      titulo VARCHAR(120) NOT NULL,
+      descricao VARCHAR(255),
+      url TEXT NOT NULL,
+      icone VARCHAR(10) DEFAULT '🔗',
+      ordem INTEGER DEFAULT 0,
+      criado_em TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+}
 // A comissão só é creditada em transacoes quando sincronizarCacheStatus() detectar que
 // o details.plan da linha cresceu além de plan_count_antes (sinal de que a Bora processou
 // o pagamento) — mesmo princípio usado pra comissão de ativação.
@@ -3822,6 +3836,48 @@ app.delete('/api/promocoes/:id', authMiddleware, adminOnly, async (req, res) => 
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ─── PUBLICIDADE — links de materiais promocionais (Canva, Drive etc.) ────────
+app.get('/api/publicidade', authMiddleware, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM materiais_publicidade ORDER BY ordem ASC, id ASC');
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/publicidade', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { titulo, descricao, url, icone } = req.body;
+    if (!titulo || !url) return res.status(400).json({ erro: 'Título e link são obrigatórios' });
+    const { rows } = await pool.query(
+      `INSERT INTO materiais_publicidade (titulo, descricao, url, icone, ordem)
+       VALUES ($1,$2,$3,$4, (SELECT COALESCE(MAX(ordem),0)+1 FROM materiais_publicidade))
+       RETURNING *`,
+      [titulo, descricao || null, url, icone || '🔗']
+    );
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.put('/api/publicidade/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { titulo, descricao, url, icone } = req.body;
+    if (!titulo || !url) return res.status(400).json({ erro: 'Título e link são obrigatórios' });
+    const { rows } = await pool.query(
+      `UPDATE materiais_publicidade SET titulo=$1, descricao=$2, url=$3, icone=$4 WHERE id=$5 RETURNING *`,
+      [titulo, descricao || null, url, icone || '🔗', req.params.id]
+    );
+    if (!rows.length) return res.status(404).json({ erro: 'Material não encontrado' });
+    res.json(rows[0]);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.delete('/api/publicidade/:id', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM materiais_publicidade WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ─── RANKING ──────────────────────────────────────────────────────────────────
 app.get('/api/ranking', authMiddleware, async (req, res) => {
   try {
@@ -4905,6 +4961,7 @@ async function rodarMigrations(tentativa = 1) {
     ['tabela notif WhatsApp', garantirTabelaNotifWhatsapp],
     ['tabela vínculos vendedor', garantirTabelaVinculoVendedor],
     ['tabela recargas pendentes', garantirTabelaRecargasPendentes],
+    ['tabela materiais publicidade', garantirTabelaMateriaisPublicidade],
   ];
   let falhas = [];
   for (const [nome, fn] of migrations) {

@@ -625,6 +625,7 @@ select option { background: var(--bg3); }
 .plano-card .pcomissao { font-size: 11px; color: var(--text3); margin-top: 3px; }
 
 .planos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.materiais-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
 
 .section-card {
   background: var(--bg2);
@@ -1191,6 +1192,16 @@ select option { background: var(--bg3); }
     </div>
 
 
+    <!-- ── PUBLICIDADE ───────────────────── -->
+    <div class="page" id="page-publicidade">
+      <div class="page-header">
+        <div><div class="page-title">📣 Publicidade</div><div class="page-sub">Banco de imagens e materiais promocionais pra divulgação</div></div>
+        <button class="btn btn-primary" id="btn-novo-material" style="display:none" onclick="abrirModalMaterial()">+ Novo Material</button>
+      </div>
+      <div id="publicidade-lista"></div>
+    </div>
+
+
     <!-- ── RECARGA ─────────────────────────── -->
     <div class="page" id="page-recarga">
       <div class="page-header">
@@ -1703,6 +1714,27 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- Modal Material de Publicidade -->
+<div class="modal-overlay" id="modal-material">
+  <div class="modal" style="width:480px">
+    <div class="modal-title" id="modal-material-title">Novo Material</div>
+    <div class="form-row single">
+      <div class="field"><label>Título</label><input type="text" id="mat-titulo" placeholder="Ex: Banco de Artes — Canva"></div>
+    </div>
+    <div class="form-row single">
+      <div class="field"><label>Link</label><input type="text" id="mat-url" placeholder="https://canva.com/... ou https://drive.google.com/..."></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Ícone (emoji, opcional)</label><input type="text" id="mat-icone" placeholder="🎨" maxlength="4"></div>
+      <div class="field"><label>Descrição (opcional)</label><input type="text" id="mat-descricao" placeholder="Ex: Artes prontas pra Instagram e WhatsApp"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-material')">Cancelar</button>
+      <button class="btn btn-primary" onclick="salvarMaterial()">Salvar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal Administrador -->
 <div class="modal-overlay" id="modal-admin">
   <div class="modal">
@@ -1962,6 +1994,7 @@ function construirNav() {
     { page: 'portabilidade', icon: '↔', label: 'Portabilidade' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { page: 'esim', icon: '◈', label: 'E-SIM' },
+    { page: 'publicidade', icon: '📣', label: 'Publicidade' },
     { section: 'Ferramentas' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
     { page: 'inadimplencia', icon: '⚠', label: 'Inadimplência' },
@@ -1982,6 +2015,7 @@ function construirNav() {
     { page: 'consulta', icon: '🔍', label: 'Consultar Linha', perm: 'consulta' },
     { page: 'portabilidade', icon: '↔', label: 'Portabilidade', perm: 'portabilidade' },
     ...(isVendedorPrincipal ? [{ page: 'calculadora', icon: '◎', label: 'Calculadora' }] : []),
+    { page: 'publicidade', icon: '📣', label: 'Publicidade' },
     { section: 'Ferramentas' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
     { section: 'Suporte' },
@@ -2017,6 +2051,7 @@ function navegarPara(page) {
   if (page === 'promocoes-admin') loadPromocoesAdmin();
   if (page === 'churn') loadChurn(60);
   if (page === 'retroativo') loadRetroativoOrfaos();
+  if (page === 'publicidade') loadPublicidade();
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
@@ -4236,6 +4271,89 @@ async function deletarPromocao(id) {
     toast('Promoção excluída');
     loadPromocoesAdmin();
   } catch(e) { toast(e.message,'error'); }
+}
+
+// ── PUBLICIDADE ───────────────────────────────────────────────────────────────
+let editMaterialId = null;
+
+async function loadPublicidade() {
+  const isAdmin = state.user.role === 'admin';
+  document.getElementById('btn-novo-material').style.display = isAdmin ? 'inline-block' : 'none';
+  const lista = document.getElementById('publicidade-lista');
+  lista.innerHTML = '<div class="loading">Carregando...</div>';
+  try {
+    const materiais = await api('GET', '/api/publicidade');
+    if (!materiais.length) {
+      lista.innerHTML = isAdmin
+        ? '<div class="empty-state"><div class="ico">📣</div><p>Nenhum material cadastrado ainda. Clique em "+ Novo Material" pra adicionar o link do Canva, do Google Drive etc.</p></div>'
+        : '<div class="empty-state"><div class="ico">📣</div><p>Nenhum material disponível por aqui ainda.</p></div>';
+      return;
+    }
+    lista.innerHTML = '<div class="materiais-grid">' + materiais.map(m => `
+      <div class="section-card" style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:flex-start;gap:12px">
+          <span style="font-size:26px;line-height:1">${m.icone || '🔗'}</span>
+          <div style="flex:1">
+            <div style="font-weight:700;font-size:15px;color:var(--text)">${m.titulo}</div>
+            ${m.descricao ? `<div style="font-size:12.5px;color:var(--text2);margin-top:2px">${m.descricao}</div>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:auto">
+          <button class="btn btn-primary btn-sm" style="flex:1" onclick="window.open('${m.url}','_blank')">Abrir ↗</button>
+          ${isAdmin ? `
+            <button class="btn btn-secondary btn-sm" onclick='editarMaterial(${JSON.stringify(m).replace(/'/g, "&#39;")})'>Editar</button>
+            <button class="btn btn-danger btn-sm" onclick="deletarMaterial(${m.id})">Excluir</button>
+          ` : ''}
+        </div>
+      </div>
+    `).join('') + '</div>';
+  } catch(e) { lista.innerHTML = `<div class="section-card" style="color:var(--red)">${e.message}</div>`; }
+}
+
+function abrirModalMaterial() {
+  editMaterialId = null;
+  document.getElementById('modal-material-title').textContent = 'Novo Material';
+  document.getElementById('mat-titulo').value = '';
+  document.getElementById('mat-url').value = '';
+  document.getElementById('mat-icone').value = '';
+  document.getElementById('mat-descricao').value = '';
+  document.getElementById('modal-material').classList.add('open');
+}
+
+function editarMaterial(m) {
+  editMaterialId = m.id;
+  document.getElementById('modal-material-title').textContent = 'Editar Material';
+  document.getElementById('mat-titulo').value = m.titulo;
+  document.getElementById('mat-url').value = m.url;
+  document.getElementById('mat-icone').value = m.icone || '';
+  document.getElementById('mat-descricao').value = m.descricao || '';
+  document.getElementById('modal-material').classList.add('open');
+}
+
+async function salvarMaterial() {
+  const body = {
+    titulo: document.getElementById('mat-titulo').value.trim(),
+    url: document.getElementById('mat-url').value.trim(),
+    icone: document.getElementById('mat-icone').value.trim() || null,
+    descricao: document.getElementById('mat-descricao').value.trim() || null,
+  };
+  if (!body.titulo || !body.url) { toast('Preencha título e link', 'error'); return; }
+  try {
+    if (editMaterialId) await api('PUT', `/api/publicidade/${editMaterialId}`, body);
+    else await api('POST', '/api/publicidade', body);
+    toast('Material salvo!');
+    fecharModal('modal-material');
+    loadPublicidade();
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function deletarMaterial(id) {
+  if (!confirm('Excluir este material?')) return;
+  try {
+    await api('DELETE', `/api/publicidade/${id}`);
+    toast('Material excluído');
+    loadPublicidade();
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 // ── RANKING ───────────────────────────────────────────────────────────────────
