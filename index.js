@@ -2582,8 +2582,14 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
       });
     } else if (paymentType === 'billetcombo') {
       pagamento = await boraPost(`/api/Cart/subscription/${cartId}/BilletCombo`, {});
+    } else if (paymentType === 'credit') {
+      // Cartão de crédito: a Bora NUNCA recebe o número do cartão pela nossa API — esse
+      // endpoint só devolve um link (GoToPaymentApp) pra uma página hospedada pela própria
+      // Bora, onde o cliente digita o cartão diretamente com eles. O número da linha só é
+      // atribuído quando esse pagamento é concluído (por isso pode vir nulo aqui).
+      pagamento = await boraPost('/api/PaymentTransaction', { cartId, firstPaymentType: 'Credit' });
     } else {
-      throw new Error('paymentType inválido: use pix, billet ou billetcombo');
+      throw new Error('paymentType inválido: use pix, billet, billetcombo ou credit');
     }
 
     const { rows: planoRows } = await pool.query(
@@ -2613,6 +2619,9 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
 
     const pixData = pagamento?.pix || null;
     const msisdnFinal = pagamento?.msisdn || pagamento?.pmsisdn || cartPayload.msisdn || null;
+    const paymentLink = paymentType === 'credit'
+      ? (pagamento?.actions?.find(a => a.rel === 'GoToPaymentApp')?.href || pagamento?.actions?.[0]?.href || null)
+      : null;
 
     try {
       await pool.query(
@@ -2637,6 +2646,7 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
       msisdn: msisdnFinal,
       esim,
       isPortability: pagamento?.isPortability || false,
+      paymentLink,
       pix: pixData ? {
         code: pixData.code || null,
         qrCodeUrl: pixData.qrCodeUrl || null,
@@ -4878,19 +4888,34 @@ async function sincronizarCacheStatus() {
   const inicio = Date.now();
   let verificadas = 0, atualizadas = 0, removidas = 0, erros = 0, comissoesAtivacao = 0, comissoesRecarga = 0;
   try {
-    // Mais defasadas primeiro (nunca sincronizadas no topo), só linhas com msisdn.
+    // Mais defasadas primeiro (nunca sincronizadas no topo). Inclui linhas sem msisdn
+    // ainda (ativação por cartão aguardando o cliente concluir o pagamento no link da
+    // Bora) — pra essas, consulta por ICCID, que a Bora aceita como identificador.
     const { rows: linhas } = await pool.query(
-      `SELECT id, msisdn, status, status_bora, vendedor_id, subvendedor_id, plano_id, plano_nome FROM linhas
-        WHERE msisdn IS NOT NULL
+      `SELECT id, msisdn, iccid, status, status_bora, vendedor_id, subvendedor_id, plano_id, plano_nome FROM linhas
         ORDER BY ultima_sincronizacao ASC NULLS FIRST
         LIMIT $1`,
       [SYNC_LOTE_MAX]
     );
     for (const linha of linhas) {
       verificadas++;
+      const identificador = linha.msisdn || linha.iccid;
+      if (!identificador) continue;
       try {
-        const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+        const details = await boraGet(`/api/Subscription/${identificador}/details`);
         const st = String(details?.status || details?.lineStatus || '').toUpperCase() || 'UNKNOWN';
+
+        // Ativação por cartão: a Bora só atribui o número quando o cliente termina o
+        // pagamento no link hospedado por eles. Assim que aparecer, grava aqui.
+        if (!linha.msisdn) {
+          const msisdnConfirmado = details?.msisdn || details?.pmsisdn || null;
+          if (msisdnConfirmado) {
+            await pool.query('UPDATE linhas SET msisdn=$1 WHERE id=$2', [msisdnConfirmado, linha.id]).catch(() => null);
+            linha.msisdn = msisdnConfirmado;
+            console.log(`[CACHE-STATUS] Número confirmado pra ativação por cartão: ${msisdnConfirmado} (iccid ${linha.iccid})`);
+          }
+        }
+
         await pool.query(
           `UPDATE linhas SET status_bora=$1, ultima_sincronizacao=NOW(), ultima_checagem=NOW() WHERE id=$2`,
           [st, linha.id]
@@ -4955,13 +4980,17 @@ async function sincronizarCacheStatus() {
         atualizadas++;
       } catch (e) {
         const code = e?.response?.status;
-        if (code === 404) {
-          // Linha não existe mais na Bora → marca como cancelada no cache e no status.
+        if (code === 404 && linha.msisdn) {
+          // Linha que já tinha número e deixou de existir na Bora → marca como cancelada.
           await pool.query(
             `UPDATE linhas SET status_bora='NOT_FOUND', status='cancelada', ultima_sincronizacao=NOW(), ultima_checagem=NOW() WHERE id=$1`,
             [linha.id]
           ).catch(() => null);
           removidas++;
+        } else if (code === 404 && !linha.msisdn) {
+          // Ativação por cartão ainda sem número: 404 aqui só significa que o cliente
+          // ainda não concluiu o pagamento no link da Bora — não é erro nem cancelamento.
+          await pool.query(`UPDATE linhas SET ultima_sincronizacao=NOW() WHERE id=$1`, [linha.id]).catch(() => null);
         } else {
           // Erro transitório: só carimba a sincronização para a linha sair da fila e voltar no próximo ciclo.
           await pool.query(`UPDATE linhas SET ultima_sincronizacao=NOW() WHERE id=$1`, [linha.id]).catch(() => null);

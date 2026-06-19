@@ -941,7 +941,7 @@ select option { background: var(--bg3); }
       <!-- Step 4: PAGAMENTO -->
       <div id="step-4" class="section-card" style="display:none">
         <div class="section-title">Forma de Pagamento</div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
           <div class="plano-card" id="pay-pix" onclick="selecionarPagamento('pix')">
             <div style="font-size:24px;margin-bottom:8px">⚡</div>
             <div class="pnome">PIX</div>
@@ -956,6 +956,11 @@ select option { background: var(--bg3); }
             <div style="font-size:24px;margin-bottom:8px">🔄</div>
             <div class="pnome">Boleto Combo</div>
             <div class="pcomissao">Ativação + recorrência boleto</div>
+          </div>
+          <div class="plano-card" id="pay-credit" onclick="selecionarPagamento('credit')">
+            <div style="font-size:24px;margin-bottom:8px">💳</div>
+            <div class="pnome">Cartão de Crédito</div>
+            <div class="pcomissao">Cliente paga num link da Bora</div>
           </div>
         </div>
         <div id="recorrencia-wrap" style="display:none;margin-top:20px">
@@ -2961,11 +2966,12 @@ function confirmarPlano() {
 }
 
 function selecionarPagamento(tipo) {
-  ['pix','billet','billetcombo'].forEach(t => document.getElementById('pay-'+t)?.classList.remove('selected'));
+  ['pix','billet','billetcombo','credit'].forEach(t => document.getElementById('pay-'+t)?.classList.remove('selected'));
   document.getElementById('pay-'+tipo)?.classList.add('selected');
   state.ativacao.pagamento = tipo;
   state.ativacao.recorrencia = null;
-  // BilletCombo já tem recorrência embutida — não precisa selecionar
+  // BilletCombo já tem recorrência embutida, e no Cartão a recorrência é escolhida
+  // dentro do próprio link de pagamento da Bora — nenhum dos dois precisa desse passo.
   const precisaRec = tipo === 'pix' || tipo === 'billet';
   document.getElementById('recorrencia-wrap').style.display = precisaRec ? 'block' : 'none';
   ['rec-billet','rec-credit'].forEach(id => document.getElementById(id)?.classList.remove('selected'));
@@ -2981,7 +2987,7 @@ function selecionarRecorrencia(tipo) {
 
 function irParaConfirmacao() {
   const a = state.ativacao;
-  const payLabels = { pix:'PIX', billet:'Boleto', billetcombo:'Boleto Combo' };
+  const payLabels = { pix:'PIX', billet:'Boleto', billetcombo:'Boleto Combo', credit:'Cartão de Crédito' };
   document.getElementById('resumo-ativacao').innerHTML = `
     <div class="info-row"><span class="k">ICCID</span><span class="v mono">${a.iccid}</span></div>
     <div class="info-row"><span class="k">Tipo do chip</span><span class="v">${a.tipoChip === 'eSIM' ? '📲 eSIM' : '📱 ' + (a.tipoChip || 'Físico')}</span></div>
@@ -3003,8 +3009,8 @@ function irParaConfirmacao() {
 async function confirmarAtivacao() {
   const a = state.ativacao;
   const res = document.getElementById('ativacao-result');
-  if (!['pix','billet','billetcombo'].includes(a.pagamento)) {
-    toast('Selecione uma forma de pagamento (PIX, Boleto ou Boleto Combo) antes de ativar', 'error');
+  if (!['pix','billet','billetcombo','credit'].includes(a.pagamento)) {
+    toast('Selecione uma forma de pagamento (PIX, Boleto, Boleto Combo ou Cartão) antes de ativar', 'error');
     return;
   }
   res.innerHTML = '<div class="loading">Ativando linha na Move...</div>';
@@ -3026,12 +3032,23 @@ async function confirmarAtivacao() {
       plano_nome: a.plano.nome,
       plano_valor: a.plano.valor
     });
+    const aguardandoCartao = a.pagamento === 'credit';
     let html = '<div class="info-card" style="border-color:var(--accent)">' +
-      '<div class="info-row"><span class="k">Status</span><span class="v"><span class="badge badge-green">✓ Linha Ativada</span></span></div>' +
+      '<div class="info-row"><span class="k">Status</span><span class="v">' + (aguardandoCartao
+        ? '<span class="badge badge-yellow">⏳ Aguardando Pagamento</span>'
+        : '<span class="badge badge-green">✓ Linha Ativada</span>') + '</span></div>' +
       (data.msisdn ? '<div class="info-row"><span class="k">Número</span><span class="v mono">' + data.msisdn + '</span></div>' : '') +
       '<div class="info-row"><span class="k">Comissão Prevista</span><span class="v currency">R$ ' + parseFloat(data.comissao||0).toFixed(2) + '</span></div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:-4px;padding:0 4px">Creditada após a Bora confirmar o pagamento da linha (próxima sincronização, em até 5 min)</div>' +
     '</div>';
+
+    if (data.paymentLink) {
+      html += '<div class="info-card" style="margin-top:16px;border-color:#9b59b6">' +
+        '<div class="section-title" style="color:#9b59b6;margin-bottom:12px">&#128179; Pagamento com Cartão</div>' +
+        '<div style="color:var(--text2);font-size:13px;margin-bottom:12px">O cliente preenche o cartão direto nessa página da Bora — a Move não recebe o número do cartão em nenhum momento. O número da linha e o QR do eSIM (se houver) só ficam prontos depois desse pagamento ser concluído.</div>' +
+        '<a href="' + data.paymentLink + '" target="_blank" class="btn btn-primary btn-sm">&#128279; Abrir Pagamento com Cartão</a>' +
+      '</div>';
+    }
 
     if (data.esim) {
       let esimHtml = '<div class="info-card" style="margin-top:16px;border-color:var(--accent)">';
