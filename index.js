@@ -1867,6 +1867,27 @@ app.get('/api/dashboard/ativacoes-periodo', authMiddleware, adminOnly, async (re
         supervisor: String(r['SUPERVISOR'] || '').trim() || '',
       }));
 
+    // O "VENDEDOR" do relatório Sales é o de quem ativou e nunca muda depois — se a linha
+    // for transferida, sobrepomos aqui pelo vendedor ATUAL (cadastro local, que a transferência
+    // sempre atualiza), pra essa lista do dashboard mostrar quem é o dono de hoje.
+    const msisdnsAtivacoes = ativacoes.map(a => normMsisdn(a.msisdn)).filter(Boolean);
+    if (msisdnsAtivacoes.length) {
+      const { rows: atuais } = await pool.query(
+        `SELECT l.msisdn, COALESCE(sv.nome, v.nome) AS vendedor_atual
+         FROM linhas l
+         LEFT JOIN vendedores v ON v.id = l.vendedor_id
+         LEFT JOIN vendedores sv ON sv.id = l.subvendedor_id
+         WHERE l.msisdn = ANY($1)`,
+        [msisdnsAtivacoes]
+      );
+      const vendedorAtualPorMsisdn = {};
+      atuais.forEach(r => { if (r.vendedor_atual) vendedorAtualPorMsisdn[r.msisdn] = r.vendedor_atual; });
+      ativacoes.forEach(a => {
+        const atual = vendedorAtualPorMsisdn[normMsisdn(a.msisdn)];
+        if (atual) a.vendedor = atual;
+      });
+    }
+
     res.json({ ok: true, total: ativacoes.length, ativacoes });
   } catch (e) {
     console.error('[ATIVACOES PERIODO]', e.message);
@@ -2156,6 +2177,16 @@ app.post('/api/linhas/transferir-vendedor', authMiddleware, adminOnly, async (re
     linhaRes = await pool.query(sqlMesmoMsisdn, [msisdnBora || digitosMsisdn, variantes]);
 
     const linhaIdsTransferidas = linhaRes.rows.map(r => Number(r.id)).filter(Boolean);
+
+    // Mantém vinculos_msisdn_vendedor em dia — esse mapa é usado como fallback de posse
+    // (busca por DDD, lista de Portabilidade) pra linhas antigas sem registro completo em
+    // "linhas". Sem isso, o vendedor antigo continuaria aparecendo como dono nessas telas.
+    await pool.query(
+      `INSERT INTO vinculos_msisdn_vendedor (msisdn, vendedor_id, vendedor_nome, origem, atualizado_em)
+       VALUES ($1,$2,$3,'transferencia',NOW())
+       ON CONFLICT (msisdn) DO UPDATE SET vendedor_id=$2, vendedor_nome=$3, origem='transferencia', atualizado_em=NOW()`,
+      [msisdnBora || digitosMsisdn, novoSubvendedor || novoVendedorPrincipal, vendedor.nome]
+    ).catch(() => null);
 
     let linhasAfetadas = 0, transacoesAfetadas = 0;
     let historicoInserido = 0;

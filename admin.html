@@ -2249,7 +2249,7 @@ async function carregarDetalheVendedor() {
     if (!dados.linhas || !dados.linhas.length) {
       linhasBody.innerHTML = `<tr><td colspan="11" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha vinculada no período</p></td></tr>`;
     } else {
-      linhasBody.innerHTML = dados.linhas.map(l => `<tr>
+      linhasBody.innerHTML = dados.linhas.map(l => `<tr data-msisdn="${l.msisdn || ''}">
         <td class="mono">${l.iccid || '—'}</td>
         <td class="mono">${l.msisdn || '—'}</td>
         <td>${l.msisdn ? `<a href="javascript:void(0)" onclick="abrirCadastroCliente('${l.msisdn}')" style="color:var(--accent);text-decoration:none;cursor:pointer" title="Ver cadastro do cliente">${l.nome_cliente || '—'}</a>` : (l.nome_cliente || '—')}</td>
@@ -3875,11 +3875,33 @@ async function confirmarTransferencia() {
     const r = await api('POST', '/api/linhas/transferir-vendedor', { msisdn: _transfMsisdn, novo_vendedor_id });
     toast(`Venda transferida para ${r.vendedor}`);
     fecharModal('modal-transferir');
+    removerLinhaTransferidaDaLista(_transfMsisdn);
   } catch(e) {
     toast(e.message, 'error');
   } finally {
     btn.disabled = false; btn.textContent = 'Transferir';
   }
+}
+
+// Tira a linha transferida da lista onde ela estava sendo mostrada (ex: linhas do
+// vendedor no detalhe), sem precisar atualizar a página, e ajusta o contador de total.
+function removerLinhaTransferidaDaLista(msisdn) {
+  if (!msisdn) return;
+  document.querySelectorAll(`tr[data-msisdn="${msisdn}"]`).forEach(tr => {
+    const tbody = tr.closest('tbody');
+    tr.style.transition = 'opacity .25s';
+    tr.style.opacity = '0';
+    setTimeout(() => {
+      tr.remove();
+      if (tbody?.id === 'vd-linhas') {
+        const totalEl = document.getElementById('vd-linhas-total');
+        if (totalEl) totalEl.textContent = Math.max(0, (parseInt(totalEl.textContent, 10) || 0) - 1);
+        if (!tbody.children.length) {
+          tbody.innerHTML = `<tr><td colspan="11" class="empty-state"><div class="ico">📱</div><p>Nenhuma linha vinculada no período</p></td></tr>`;
+        }
+      }
+    }, 250);
+  });
 }
 
 // ── PIX PENDENTE ──────────────────────────────────────────────────────────────
