@@ -4029,7 +4029,7 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="abrirWhatsappCliente('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">💬 WhatsApp</button>
       ${l.recurrence && l.recurrence.paymentType ? `<button class="btn btn-danger btn-sm" onclick="cancelarRecorrenciaLinha('${l.msisdn||''}')">🚫 Cancelar Recorrência</button>` : ''}
       ${state.user.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTransferirVenda('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">🔀 Transferir Venda</button>` : ''}
-      ${state.user.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTitularidade('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}','${l.document||''}')">🔁 Trocar Titularidade</button>` : ''}
+      <button class="btn btn-secondary btn-sm" onclick="abrirTitularidade('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}','${l.document||''}')">🔁 Trocar Titularidade</button>
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
