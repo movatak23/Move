@@ -3707,6 +3707,86 @@ app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
   }
 });
 
+// ─── REATIVAÇÃO DE LINHA (app cliente) ───────────────────────────────────────
+// Mesmo fluxo validado no admin (POST /api/bora/reativar), mas com authCliente
+// e checagem de que o msisdn pertence ao CPF logado.
+app.post('/api/cliente/linha/:msisdn/reativar', authCliente, async (req, res) => {
+  try {
+    const msisdn = req.params.msisdn;
+    const cpf = req.cliente.cpf;
+
+    // Confirma que a linha pertence ao CPF logado antes de tocar na Bora
+    const subs = await boraGet(`/api/Subscription/${cpf}`);
+    const listaLinhas = Array.isArray(subs) ? subs : (subs?.subscriptions || subs?.items || []);
+    const pertence = listaLinhas.some(s => (s.msisdn || s.phoneNumber || s.number) === msisdn);
+    if (!pertence) return res.status(403).json({ erro: 'Esta linha não pertence a este CPF' });
+
+    const tipoPrimeiro   = String(req.body.paymentType || 'pix').toLowerCase();
+    const tipoRecorrente = String(req.body.paymentTypeRecorrencia || 'BILLET').toUpperCase();
+
+    // Passo 1: cria o carrinho de reativação (Bora só aceita { msisdn })
+    const react = await boraPost('/api/Subscription/reactivation', { msisdn });
+    const cartId = react?.cartId || react?.cart?.id || null;
+    if (!cartId) throw new Error('cartId não retornado pela reativação');
+
+    // Passo 2: processa o primeiro pagamento sobre o cartId
+    const payBody = { isRecurrence: true, recurrenceType: tipoRecorrente, cartId };
+    let pagamentoResp;
+    if (tipoPrimeiro === 'billetcombo') {
+      pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/BilletCombo`, payBody);
+    } else if (tipoPrimeiro === 'billet') {
+      pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/billet`, payBody);
+    } else {
+      pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/pix`, payBody);
+    }
+
+    await pool.query("UPDATE linhas SET status='ativa' WHERE msisdn=$1", [msisdn]).catch(() => null);
+
+    const pixData    = pagamentoResp?.pix    || null;
+    const billetData = pagamentoResp?.billet || null;
+    const pixCode    = pixData?.code      || pagamentoResp?.pixCode      || pagamentoResp?.pixCopyPaste || null;
+    const pixQrUrl   = pixData?.qrCodeUrl || pagamentoResp?.qrCodeUrl    || null;
+    const barcode    = billetData?.barCode || billetData?.digitableLine || pagamentoResp?.barcode   || null;
+    const billetUrl  = billetData?.url     || billetData?.pdfUrl        || pagamentoResp?.billetUrl || null;
+
+    res.json({
+      ok: true,
+      msisdn,
+      cartId,
+      pix:    pixCode ? { code: pixCode, qrCodeUrl: pixQrUrl } : null,
+      billet: (barcode || billetUrl) ? { barcode, url: billetUrl } : null,
+    });
+  } catch (e) {
+    console.error('[cliente/reativar] erro:', e.response?.data || e.message);
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.response?.data?.message || e.message });
+  }
+});
+
+// Envio do código (PIX ou boleto) já gerado para o email cadastrado na Bora.
+// Ação separada e explícita — só dispara quando o cliente toca em "Enviar por email".
+app.post('/api/cliente/linha/:msisdn/reativar/email', authCliente, async (req, res) => {
+  try {
+    const msisdn = req.params.msisdn;
+    const { pixCode, barcode, billetUrl } = req.body;
+    if (!pixCode && !barcode && !billetUrl) throw new Error('Nada para enviar — gere o PIX/boleto antes');
+
+    const details = await boraGet(`/api/Subscription/${msisdn}/details`);
+    const email = details?.email || null;
+    const nome  = details?.name  || req.cliente?.nome || null;
+    if (!email) return res.status(404).json({ erro: 'Nenhum email cadastrado para esta linha na Bora' });
+
+    if (pixCode) {
+      await enviarEmailPix({ email, nome, pixCode, planoNome: 'Reativação de linha', planoValor: 0 });
+    } else {
+      await enviarEmailBoleto({ email, nome, barcode, url: billetUrl });
+    }
+    res.json({ ok: true, email });
+  } catch (e) {
+    console.error('[cliente/reativar/email] erro:', e.response?.data || e.message);
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
 
 // ─── PROXY BORA — Recarga pelo painel web ───────────────────────────────────
 app.post('/api/bora/recarregar', authMiddleware, async (req, res) => {
