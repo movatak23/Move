@@ -4580,6 +4580,85 @@ app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
   }
 });
 
+// ─── TROCA DE TITULARIDADE ────────────────────────────────────────────────────
+// Fluxo Bora (4 passos): 1) abre ticket no accountId da linha → ticketId;
+// 2) GET pergunta do quiz anti-fraude do titular ATUAL; 3) POST resposta (loop até
+// o GET não retornar mais pergunta); 4) efetiva o exchange com o customerId do NOVO
+// titular (obtido consultando o CPF dele — a Bora não cria cliente avulso).
+
+// Passo 1 — abre o formulário/ticket de troca a partir da linha
+app.post('/api/bora/titularidade/:msisdn/iniciar', authMiddleware, async (req, res) => {
+  try {
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    const accountId = details?.accountId;
+    if (!accountId) throw new Error('accountId não encontrado para esta linha');
+    const data = await boraPost(`/api/Subscription/ownership-change/${accountId}/form`, {});
+    const ticketId = data?.ticketId || null;
+    if (!ticketId) throw new Error('A Bora não retornou ticketId ao abrir a troca de titularidade');
+    res.json({ ok: true, ticketId, titularAtual: details?.name || null, accountId });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// Passo 2 — pergunta atual do quiz (concluido=true quando não há mais pergunta)
+app.get('/api/bora/titularidade/:ticketId/pergunta', authMiddleware, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscription/ownership-change/${req.params.ticketId}/question`);
+    const concluido = !data || !data.question;
+    res.json({ ok: true, concluido, question: data?.question || null, alternatives: data?.alternatives || [] });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// Passo 3 — responde a pergunta atual
+app.post('/api/bora/titularidade/:ticketId/responder', authMiddleware, async (req, res) => {
+  try {
+    const response = req.body?.response;
+    if (response === undefined || response === null || response === '') {
+      return res.status(400).json({ erro: 'Resposta não informada' });
+    }
+    const data = await boraPost(`/api/Subscription/ownership-change/${req.params.ticketId}/question`, { response });
+    res.json({ ok: true, data: data || null });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// Resolve o NOVO titular pelo CPF/CNPJ → customerId (newClientId) + nome p/ confirmação.
+// Precisa já existir como cliente na Bora (ter ou ter tido linha).
+app.get('/api/bora/titularidade/novo-titular/:cpf', authMiddleware, async (req, res) => {
+  try {
+    const details = await boraGet(`/api/Subscription/${req.params.cpf}/details`);
+    const customerId = details?.boraIntegration?.customerId || null;
+    if (!customerId) {
+      return res.status(404).json({ erro: 'CPF/CNPJ não encontrado como cliente na Bora — o novo titular precisa já ter uma linha na Bora' });
+    }
+    res.json({ ok: true, customerId, nome: details?.name || null, documento: details?.document || req.params.cpf });
+  } catch (e) {
+    const code = e.response?.status;
+    if (code === 404) return res.status(404).json({ erro: 'CPF/CNPJ não encontrado como cliente na Bora' });
+    res.status(code || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// Passo 4 — efetiva a troca. conserveBenefits=true mantém o plano atual.
+app.post('/api/bora/titularidade/efetivar', authMiddleware, async (req, res) => {
+  try {
+    const { ticketId, newClientId, conserveBenefits, planId, cartId } = req.body || {};
+    if (!ticketId) return res.status(400).json({ erro: 'ticketId não informado' });
+    if (!newClientId) return res.status(400).json({ erro: 'newClientId (novo titular) não informado' });
+    const payload = { ticketId, newClientId, conserveBenefits: conserveBenefits !== false };
+    if (planId) payload.planId = planId;
+    if (cartId) payload.cartId = cartId;
+    const data = await boraPost('/api/Subscription/ownership-change/exchange', payload);
+    res.json({ ok: true, accountId: data?.accountId || null });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
 // ─── REATIVAÇÃO DE LINHA ──────────────────────────────────────────────────────
 // Passo 1 — Busca dados da linha para exibir no modal de confirmação
 app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
