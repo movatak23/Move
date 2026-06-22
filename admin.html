@@ -1718,6 +1718,65 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- ── TROCA DE TITULARIDADE ────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-titularidade">
+  <div class="modal" style="width:540px">
+    <div class="modal-title">🔁 Troca de Titularidade</div>
+
+    <!-- Step 1: confirmação -->
+    <div id="tit-step-1">
+      <div id="tit-info" style="margin-bottom:14px;font-size:13px;color:var(--text2)"></div>
+      <div style="background:var(--yellow-dim);border:1px solid var(--yellow);border-radius:var(--r);padding:10px 14px;font-size:12px;color:var(--yellow);margin-bottom:16px">
+        ⚠ A Bora vai aplicar um questionário de segurança do <strong>titular atual</strong> antes de liberar a troca. O novo titular precisa já ter (ou ter tido) uma linha na Bora.
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="fecharModal('modal-titularidade')">Cancelar</button>
+        <button class="btn btn-primary" id="btn-iniciar-tit" onclick="iniciarTitularidade()">Iniciar troca</button>
+      </div>
+    </div>
+
+    <!-- Step 2: quiz anti-fraude -->
+    <div id="tit-step-2" style="display:none">
+      <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:13px">Verificação de segurança</div>
+      <div id="tit-pergunta" style="color:var(--text);font-size:14px;margin-bottom:14px"></div>
+      <div id="tit-alternativas" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="fecharModal('modal-titularidade')">Cancelar</button>
+      </div>
+    </div>
+
+    <!-- Step 3: novo titular -->
+    <div id="tit-step-3" style="display:none">
+      <div style="background:var(--green-dim,rgba(0,200,120,.12));border:1px solid var(--green,#0c8);border-radius:var(--r);padding:8px 12px;font-size:12px;color:var(--green,#0c8);margin-bottom:14px">
+        ✓ Verificação concluída. Informe o novo titular.
+      </div>
+      <div class="field" style="margin-bottom:10px">
+        <label>CPF/CNPJ do novo titular</label>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="tit-novo-cpf" placeholder="Somente números">
+          <button class="btn btn-secondary btn-sm" onclick="buscarNovoTitular()">🔍 Buscar</button>
+        </div>
+      </div>
+      <div id="tit-novo-resultado" style="font-size:13px;margin-bottom:14px"></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2);margin-bottom:16px;cursor:pointer">
+        <input type="checkbox" id="tit-conserve" checked> Manter o plano e benefícios atuais
+      </label>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="fecharModal('modal-titularidade')">Cancelar</button>
+        <button class="btn btn-primary" id="btn-efetivar-tit" onclick="efetivarTitularidade()" style="display:none">Efetivar troca</button>
+      </div>
+    </div>
+
+    <!-- Step 4: resultado -->
+    <div id="tit-step-4" style="display:none">
+      <div id="tit-resultado"></div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="fecharModal('modal-titularidade');realizarConsulta()">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Modal Portabilidade (fluxo de 3 passos, igual à Bora) -->
 <div class="modal-overlay" id="modal-portabilidade">
   <div class="modal" style="width:640px;max-width:94vw">
@@ -3970,9 +4029,120 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="abrirWhatsappCliente('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">💬 WhatsApp</button>
       ${l.recurrence && l.recurrence.paymentType ? `<button class="btn btn-danger btn-sm" onclick="cancelarRecorrenciaLinha('${l.msisdn||''}')">🚫 Cancelar Recorrência</button>` : ''}
       ${state.user.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTransferirVenda('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">🔀 Transferir Venda</button>` : ''}
+      ${state.user.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTitularidade('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}','${l.document||''}')">🔁 Trocar Titularidade</button>` : ''}
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
+}
+
+// ── TROCA DE TITULARIDADE ─────────────────────────────────────────────────────
+let _titMsisdn = null, _titTicketId = null, _titNewClientId = null, _titAlternatives = [];
+function _titStep(n) {
+  [1,2,3,4].forEach(i => { const el = document.getElementById('tit-step-'+i); if (el) el.style.display = (i===n ? 'block' : 'none'); });
+}
+function abrirTitularidade(msisdn, nome, doc) {
+  if (!msisdn) { toast('Número não disponível','error'); return; }
+  _titMsisdn = msisdn; _titTicketId = null; _titNewClientId = null; _titAlternatives = [];
+  const fone = msisdn.replace('55','').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+  document.getElementById('tit-info').innerHTML = `Linha <strong>${fone}</strong> — titular atual: <strong>${nome || '—'}</strong>${doc ? ` (${doc})` : ''}`;
+  document.getElementById('btn-iniciar-tit').disabled = false;
+  document.getElementById('tit-novo-cpf').value = '';
+  document.getElementById('tit-novo-resultado').innerHTML = '';
+  document.getElementById('btn-efetivar-tit').style.display = 'none';
+  document.getElementById('tit-conserve').checked = true;
+  _titStep(1);
+  document.getElementById('modal-titularidade').classList.add('open');
+}
+async function iniciarTitularidade() {
+  const btn = document.getElementById('btn-iniciar-tit');
+  btn.disabled = true; btn.textContent = 'Abrindo...';
+  try {
+    const d = await api('POST', `/api/bora/titularidade/${_titMsisdn}/iniciar`);
+    _titTicketId = d.ticketId;
+    _titStep(2);
+    await carregarPerguntaTit();
+  } catch (e) {
+    toast(e.message || 'Erro ao iniciar troca','error');
+    btn.disabled = false;
+  } finally {
+    btn.textContent = 'Iniciar troca';
+  }
+}
+async function carregarPerguntaTit() {
+  const perg = document.getElementById('tit-pergunta');
+  const alts = document.getElementById('tit-alternativas');
+  perg.textContent = 'Carregando pergunta...'; alts.innerHTML = '';
+  try {
+    const d = await api('GET', `/api/bora/titularidade/${_titTicketId}/pergunta`);
+    if (d.concluido) { _titStep(3); return; }
+    perg.textContent = d.question || '';
+    _titAlternatives = d.alternatives || [];
+    if (_titAlternatives.length) {
+      alts.innerHTML = _titAlternatives.map((a,i) =>
+        `<button class="btn btn-secondary btn-sm" style="text-align:left" onclick="responderTitIdx(${i})">${a}</button>`).join('');
+    } else {
+      alts.innerHTML = `<div style="display:flex;gap:8px">
+        <input type="text" id="tit-resp-livre" placeholder="Sua resposta">
+        <button class="btn btn-primary btn-sm" onclick="responderTitLivre()">Enviar</button></div>`;
+    }
+  } catch (e) {
+    toast(e.message || 'Erro ao carregar pergunta','error');
+  }
+}
+function responderTitIdx(i) { _responderTit(_titAlternatives[i]); }
+function responderTitLivre() {
+  const v = (document.getElementById('tit-resp-livre').value || '').trim();
+  if (!v) { toast('Informe a resposta','error'); return; }
+  _responderTit(v);
+}
+async function _responderTit(response) {
+  const alts = document.getElementById('tit-alternativas');
+  alts.innerHTML = '<div class="loading">Validando...</div>';
+  try {
+    await api('POST', `/api/bora/titularidade/${_titTicketId}/responder`, { response });
+  } catch (e) {
+    toast(e.message || 'Resposta recusada','error');
+  }
+  await carregarPerguntaTit();
+}
+async function buscarNovoTitular() {
+  const cpf = (document.getElementById('tit-novo-cpf').value || '').replace(/\D/g,'');
+  const out = document.getElementById('tit-novo-resultado');
+  const btnEf = document.getElementById('btn-efetivar-tit');
+  if (!cpf) { toast('Informe o CPF/CNPJ','error'); return; }
+  out.innerHTML = '<div class="loading">Buscando na Bora...</div>';
+  btnEf.style.display = 'none'; _titNewClientId = null;
+  try {
+    const d = await api('GET', `/api/bora/titularidade/novo-titular/${cpf}`);
+    _titNewClientId = d.customerId;
+    out.innerHTML = `<div style="background:var(--bg3);border-radius:8px;padding:10px 12px">Novo titular: <strong>${d.nome || '—'}</strong><br><span style="color:var(--text3);font-size:12px">${d.documento || cpf}</span></div>`;
+    btnEf.style.display = 'inline-flex';
+  } catch (e) {
+    out.innerHTML = `<div style="color:var(--red)">${e.message || 'CPF/CNPJ não encontrado na Bora'}</div>`;
+  }
+}
+async function efetivarTitularidade() {
+  if (!_titTicketId || !_titNewClientId) { toast('Faltam dados da troca','error'); return; }
+  if (!confirm('Confirmar a troca de titularidade desta linha? A ação é definitiva.')) return;
+  const btn = document.getElementById('btn-efetivar-tit');
+  btn.disabled = true; btn.textContent = 'Efetivando...';
+  try {
+    await api('POST', '/api/bora/titularidade/efetivar', {
+      ticketId: _titTicketId,
+      newClientId: _titNewClientId,
+      conserveBenefits: document.getElementById('tit-conserve').checked
+    });
+    document.getElementById('tit-resultado').innerHTML =
+      `<div style="text-align:center;padding:12px"><div style="font-size:34px">✅</div>
+       <div style="font-weight:700;color:var(--text);margin-top:6px">Titularidade alterada com sucesso</div>
+       <div style="color:var(--text2);font-size:13px;margin-top:4px">A linha agora pertence ao novo titular.</div></div>`;
+    _titStep(4);
+    toast('Titularidade alterada','success');
+  } catch (e) {
+    toast(e.message || 'Erro ao efetivar troca','error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Efetivar troca';
+  }
 }
 
 // ── WHATSAPP CLIENTE ──────────────────────────────────────────────────────────
