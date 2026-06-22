@@ -1995,8 +1995,10 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
     );
 
     // Total de linhas ativas no geral (sem filtro de período) — card "Linhas Ativas".
-    // Usa o status confirmado pela Bora (status_bora=ACTIVE). Para linhas ainda não
-    // sincronizadas (status_bora nulo), cai no status local como aproximação.
+    // Conta como ativa o que a Bora confirma como ACTIVE e também os estados GRACE*
+    // (período de carência: a linha continua viva, dentro da tolerância de vencimento,
+    // não é cancelamento). Para linhas ainda não sincronizadas (status_bora nulo),
+    // cai no status local como aproximação.
     const { rows: ativasTotalRows } = await pool.query(
       `SELECT COUNT(*)::int AS total
          FROM linhas l
@@ -2004,6 +2006,7 @@ app.get('/api/dashboard/financeiro-periodo', authMiddleware, adminOnly, async (r
           AND l.msisdn IS NOT NULL
           AND (
             UPPER(COALESCE(l.status_bora,'')) = 'ACTIVE'
+            OR UPPER(COALESCE(l.status_bora,'')) LIKE 'GRACE%'
             OR (l.status_bora IS NULL AND LOWER(COALESCE(l.status,'')) IN ('ativa','active'))
           )`
     );
