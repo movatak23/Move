@@ -2335,6 +2335,17 @@ app.get('/api/app/logo', (req, res) => {
   res.json({ url });
 });
 
+// Verifica se o ICCID existe na Bora antes da ativação (mesma chamada da rota admin,
+// mas liberada com a chave do app — usada na tela de ativação ANTES do login).
+app.get('/api/app/iccid/verificar/:iccid', authApp, async (req, res) => {
+  try {
+    const data = await boraGet(`/api/Subscriber/${req.params.iccid}/iccid`);
+    res.json(data);
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
+  }
+});
+
 // Cobranças mensais do cliente (por CPF)
 app.get('/api/app/cobrancas/:cpf', authApp, async (req, res) => {
   try {
@@ -2344,18 +2355,29 @@ app.get('/api/app/cobrancas/:cpf', authApp, async (req, res) => {
       `SELECT msisdn, plano_nome, documento_cliente FROM linhas WHERE documento_cliente = $1 AND msisdn IS NOT NULL`,
       [cpf]
     );
-    if (!linhas.length) return res.json({ cobracas: [] });
+    if (!linhas.length) return res.json({ cobrancas: [] });
+
+    // Agrupa por documento — evita repetir a mesma consulta de boletos (e duplicar
+    // o resultado) quando o CPF tem mais de uma linha vinculada ao mesmo documento_cliente.
+    const porDocumento = new Map();
+    for (const linha of linhas) {
+      const doc = linha.documento_cliente;
+      if (!porDocumento.has(doc)) porDocumento.set(doc, []);
+      porDocumento.get(doc).push(linha);
+    }
 
     const todas = [];
-    for (const linha of linhas) {
+    for (const [doc, linhasDoDoc] of porDocumento) {
       try {
-        const boletos = await boraGet(`/api/Subscriber/${linha.documento_cliente}/billets`);
+        const boletos = await boraGet(`/api/Subscriber/${doc}/billets`);
         const lista = Array.isArray(boletos) ? boletos : (boletos?.items || boletos?.billets || []);
+        const msisdnRef = linhasDoDoc[0]?.msisdn || null;
+        const planoRef  = linhasDoDoc[0]?.plano_nome || '—';
         for (const b of lista) {
           todas.push({
             id:        b.id || b.billetId || null,
-            msisdn:    linha.msisdn,
-            plano:     linha.plano_nome || '—',
+            msisdn:    b.msisdn || msisdnRef,
+            plano:     b.planoNome || planoRef,
             barcode:   b.digitableLine || b.barCode || b.typeableLine || null,
             url:       b.url || b.pdfUrl || b.link || null,
             pixCode:   b.pix?.code || b.pixCode || null,
