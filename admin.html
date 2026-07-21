@@ -1726,7 +1726,7 @@ select option { background: var(--bg3); }
         ⚠ Este plano não está cadastrado na plataforma. Nenhuma comissão será registrada pela reativação.
       </div>
       <div id="reativar-aviso" style="background:var(--yellow-dim);border:1px solid var(--yellow);border-radius:var(--r);padding:10px 14px;font-size:12px;color:var(--yellow);margin-bottom:14px">
-        ⚠ Importante: a recorrência atual será cancelada e uma nova cobrança será gerada para reativar a linha.
+        ⚠ Uma nova cobrança será gerada agora (PIX ou Boleto, conforme sua escolha) e a renovação automática (recorrência) será (re)configurada. Se já houver recorrência ativa, ela será substituída.
       </div>
       <div id="reativar-pay-wrap" style="display:none">
         <div class="form-row" style="gap:12px">
@@ -4219,7 +4219,11 @@ function renderLinhaConsulta(l, cons) {
       <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,this)">📄 Encaminhar Boleto</button>
       <button class="btn btn-secondary btn-sm" id="btn-ver-pix-${l.msisdn?.replace(/\D/g,'')}" onclick="abrirPixPendente('${l.msisdn||''}',this)">⚡ Ver PIX</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirWhatsappCliente('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">💬 WhatsApp</button>
-      ${l.recurrence && l.recurrence.paymentType ? `<button class="btn btn-danger btn-sm" onclick="cancelarRecorrenciaLinha('${l.msisdn||''}')">🚫 Cancelar Recorrência</button>` : ''}
+      ${(l.recurrence && l.recurrence.paymentType)
+        ? `<button class="btn btn-danger btn-sm" onclick="cancelarRecorrenciaLinha('${l.msisdn||''}')">🚫 Cancelar Recorrência</button>`
+        : (traduzirStatus(l.status).label !== 'BLOQUEADO'
+            ? `<button class="btn btn-primary btn-sm" onclick="reativarLinha('${l.msisdn||''}')">🔄 Reativar Recorrência</button>`
+            : '')}
       ${state.user.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTransferirVenda('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">🔀 Transferir Venda</button>` : ''}
       ${podeRecurso('titularidade') ? `<button class="btn btn-secondary btn-sm" onclick="abrirTitularidade('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}','${l.document||''}')">🔁 Trocar Titularidade</button>` : ''}
       ${podeRecurso('sim_swap') ? `<button class="btn btn-secondary btn-sm" onclick="abrirSimSwap('${l.msisdn||''}','${l.iccid||''}')">🔄 Trocar SIM</button>` : ''}
