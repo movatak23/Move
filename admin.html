@@ -1764,6 +1764,39 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- Modal Editar Cadastro do Cliente -->
+<div class="modal-overlay" id="modal-editar-cliente">
+  <div class="modal" style="width:580px">
+    <div class="modal-title">✏️ Editar Cadastro do Cliente</div>
+    <div id="ec-info" style="font-size:12px;color:var(--text2);margin-bottom:12px"></div>
+    <div class="form-row">
+      <div class="field"><label>Nome Completo</label><input type="text" id="ec-nome"></div>
+      <div class="field"><label>CPF/CNPJ</label><input type="text" id="ec-doc" disabled></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>E-mail</label><input type="email" id="ec-email"></div>
+      <div class="field"><label>Telefone</label><input type="text" id="ec-tel"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Data de Nascimento</label><input type="date" id="ec-nasc"></div>
+      <div class="field"><label>CEP</label><input type="text" id="ec-cep"></div>
+    </div>
+    <div class="form-row">
+      <div class="field" style="flex:2"><label>Rua</label><input type="text" id="ec-rua"></div>
+      <div class="field"><label>Número</label><input type="text" id="ec-numero"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Bairro</label><input type="text" id="ec-bairro"></div>
+      <div class="field"><label>Cidade</label><input type="text" id="ec-cidade"></div>
+      <div class="field" style="max-width:90px"><label>UF</label><input type="text" id="ec-uf" maxlength="2"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-editar-cliente')">Cancelar</button>
+      <button class="btn btn-primary" id="ec-salvar" onclick="salvarEditarCliente()">Salvar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── TROCA DE TITULARIDADE ────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-titularidade">
   <div class="modal" style="width:540px">
@@ -4217,6 +4250,7 @@ function renderLinhaConsulta(l, cons) {
       ${podeRecurso('troca_plano') ? `<button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>` : ''}
       ${podeRecurso('esim') ? `<button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>` : ''}
       <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,this)">📄 Encaminhar Boleto</button>
+      <button class="btn btn-secondary btn-sm" onclick="abrirEditarCliente('${l.msisdn||''}','${l.document||''}')">✏️ Editar Cadastro</button>
       <button class="btn btn-secondary btn-sm" id="btn-ver-pix-${l.msisdn?.replace(/\D/g,'')}" onclick="abrirPixPendente('${l.msisdn||''}',this)">⚡ Ver PIX</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirWhatsappCliente('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">💬 WhatsApp</button>
       ${(l.recurrence && l.recurrence.paymentType)
@@ -4230,6 +4264,64 @@ function renderLinhaConsulta(l, cons) {
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
+}
+
+// ── EDITAR CADASTRO DO CLIENTE ────────────────────────────────────────────────
+let _ecMsisdn = null;
+async function abrirEditarCliente(msisdn, doc) {
+  const documento = String(doc || '').replace(/\D/g, '');
+  if (!documento) { toast('Cliente sem CPF/CNPJ cadastrado nesta linha', 'error'); return; }
+  _ecMsisdn = msisdn || '';
+  ['ec-nome','ec-email','ec-tel','ec-nasc','ec-rua','ec-numero','ec-bairro','ec-cep','ec-cidade','ec-uf']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('ec-doc').value = documento;
+  document.getElementById('ec-info').textContent = 'Carregando dados do cliente…';
+  document.getElementById('modal-editar-cliente').classList.add('open');
+  try {
+    const d = await api('GET', `/api/bora/subscriber/documento/${documento}`);
+    document.getElementById('ec-nome').value = d.name || d.nome || '';
+    document.getElementById('ec-email').value = d.email || '';
+    document.getElementById('ec-tel').value = d.phone || d.telefone || '';
+    document.getElementById('ec-nasc').value = d.birthDate ? String(d.birthDate).split('T')[0] : '';
+    document.getElementById('ec-rua').value = d.street || '';
+    document.getElementById('ec-numero').value = d.number || '';
+    document.getElementById('ec-bairro').value = d.neighborhood || '';
+    document.getElementById('ec-cep').value = d.zipcode || d.zipCode || '';
+    document.getElementById('ec-cidade').value = d.city || '';
+    document.getElementById('ec-uf').value = d.uf || d.state || '';
+    document.getElementById('ec-info').innerHTML = `Linha: <b>${msisdn || '—'}</b> · CPF/CNPJ: <span class="mono">${documento}</span>`;
+  } catch (e) {
+    document.getElementById('ec-info').innerHTML = '<span style="color:var(--yellow)">Cadastro não encontrado na Bora — preencha e salve para criar/atualizar.</span>';
+  }
+}
+async function salvarEditarCliente() {
+  const nome = document.getElementById('ec-nome').value.trim();
+  if (!nome) { toast('Informe o nome do cliente', 'error'); return; }
+  const subscriber = {
+    document: document.getElementById('ec-doc').value.replace(/\D/g, ''),
+    name: nome,
+    email: document.getElementById('ec-email').value.trim(),
+    phone: document.getElementById('ec-tel').value.trim(),
+    birthDate: document.getElementById('ec-nasc').value || '',
+    street: document.getElementById('ec-rua').value.trim(),
+    number: document.getElementById('ec-numero').value.trim(),
+    neighborhood: document.getElementById('ec-bairro').value.trim(),
+    zipcode: document.getElementById('ec-cep').value.replace(/\D/g, ''),
+    city: document.getElementById('ec-cidade').value.trim(),
+    uf: document.getElementById('ec-uf').value.trim().toUpperCase()
+  };
+  const btn = document.getElementById('ec-salvar');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+  try {
+    await api('PUT', '/api/bora/cliente/cadastro', { msisdn: _ecMsisdn, subscriber });
+    toast('Cadastro do cliente atualizado');
+    fecharModal('modal-editar-cliente');
+    if (typeof realizarConsulta === 'function') realizarConsulta();
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Salvar';
+  }
 }
 
 // ── TROCA DE TITULARIDADE ─────────────────────────────────────────────────────

@@ -2257,6 +2257,40 @@ app.post('/api/bora/subscriber', authMiddleware, async (req, res) => {
   }
 });
 
+// Editar cadastro do cliente (nome/e-mail/telefone/endereço). Admin edita qualquer um;
+// vendedor só clientes da própria base (garantirLinhaDoUsuario pelo msisdn da linha).
+// POST /api/Subscriber faz upsert por documento; reflete nome/documento no CRM local.
+app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
+  try {
+    const { msisdn, subscriber } = req.body || {};
+    const doc = String(subscriber?.document || '').replace(/\D/g, '');
+    if (!doc || !String(subscriber?.name || '').trim()) {
+      return res.status(400).json({ erro: 'Documento e nome são obrigatórios' });
+    }
+    // Isolamento: precisa possuir a linha (por msisdn quando houver; senão pelo documento).
+    if (!(await garantirLinhaDoUsuario(req, res, msisdn || doc))) return;
+
+    // Atualiza o assinante na Bora (mesmo endpoint de cadastro faz update por documento)
+    const boraResp = await boraPost('/api/Subscriber', { ...subscriber, document: doc });
+
+    // Reflete nome/documento nas linhas do cliente no CRM local
+    const params = [String(subscriber.name).trim(), doc];
+    let where = `regexp_replace(COALESCE(documento_cliente,''),'[^0-9]','','g') = $2`;
+    if (msisdn) {
+      params.push(variantesMsisdn(msisdn));
+      where += ` OR regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') = ANY($3::text[])`;
+    }
+    const r = await pool.query(
+      `UPDATE linhas SET nome_cliente=$1, documento_cliente=$2 WHERE ${where}`,
+      params
+    ).catch(() => ({ rowCount: 0 }));
+
+    res.json({ ok: true, linhasAtualizadas: r.rowCount, bora: boraResp || null });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.response?.data?.message || e.message });
+  }
+});
+
 // ─── PROXY BORA — Planos ──────────────────────────────────────────────────────
 app.get('/api/bora/planos/ativacao', authMiddleware, async (req, res) => {
   try {
