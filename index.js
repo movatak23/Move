@@ -457,9 +457,21 @@ async function enviarWhatsAppMove(telefone, mensagem) {
       }
     );
   } catch (e) {
-    const zapiMsg = e.response?.data?.message || e.response?.data?.error || e.response?.data?.value || JSON.stringify(e.response?.data || {});
-    console.error('[zapi-move] erro:', e.response?.status, zapiMsg);
-    throw new Error(`Z-API (${e.response?.status || '?'}): ${zapiMsg}`);
+    const status = e.response?.status;
+    const zapiMsg = e.response?.data?.message || e.response?.data?.error || e.response?.data?.value || '';
+    console.error('[zapi-move] erro:', status, zapiMsg || JSON.stringify(e.response?.data || {}));
+    const bruta = String(zapiMsg).toLowerCase();
+    let amigavel;
+    if (/subscribe to this instance|not connected|disconnected|desconect|need.*subscribe|reconnect/.test(bruta)) {
+      amigavel = '📵 O WhatsApp está temporariamente desconectado e precisa ser reconectado. Avise o administrador para reconectar a conta e tente de novo.';
+    } else if (e.code === 'ECONNABORTED' || /timeout/i.test(String(e.message || ''))) {
+      amigavel = '⏳ O WhatsApp demorou para responder. Tente novamente em alguns instantes.';
+    } else if (/phone|number|invalid|não é whatsapp|not a whatsapp/.test(bruta)) {
+      amigavel = '📱 Não foi possível enviar: verifique se o número tem WhatsApp ativo.';
+    } else {
+      amigavel = '😕 Não conseguimos enviar a mensagem pelo WhatsApp agora. Tente novamente em instantes.';
+    }
+    throw new Error(amigavel);
   }
 }
 
@@ -4720,6 +4732,60 @@ app.get('/api/alertas/vencimento', authMiddleware, async (req, res) => {
     const params = vendedorId ? [vendedorId] : [];
     const { rows } = await pool.query(query, params);
     res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Planos vencendo — varre AO VIVO as linhas ativas do vendedor logado e checa a
+// expiração de cada uma na Bora. Independente da tabela alertas_vencimento (que é
+// preenchida por cron diário). Escopo: vendedor/subvendedor só as próprias linhas.
+app.get('/api/vendedor/vencimentos', authMiddleware, async (req, res) => {
+  try {
+    const escopo = await resolverEscopoVenda(req);
+    const campo = escopo.subvendedor_id ? 'subvendedor_id' : 'vendedor_id';
+    const escopoId = escopo.subvendedor_id || escopo.vendedor_id;
+    const dias = Math.min(Math.max(parseInt(req.query.dias, 10) || 7, 1), 15);
+    const LIMITE = 60;
+
+    const { rows: linhas } = await pool.query(
+      `SELECT id, msisdn, nome_cliente, plano_nome FROM linhas
+        WHERE ${campo}=$1
+          AND LOWER(COALESCE(status,'')) IN ('ativa','active')
+          AND msisdn IS NOT NULL
+          AND COALESCE(iccid,'') NOT ILIKE 'retroativo-%'
+        ORDER BY data_ativacao DESC
+        LIMIT ${LIMITE}`,
+      [escopoId]
+    );
+
+    const hoje = new Date();
+    const vencendo = [];
+    const fila = [...linhas];
+    async function worker() {
+      while (fila.length) {
+        const l = fila.shift();
+        try {
+          const details = await boraGet(`/api/Subscription/${l.msisdn}/details`);
+          const planArray = Array.isArray(details?.plan) ? details.plan : [];
+          const ultimo = planArray[planArray.length - 1];
+          if (!ultimo?.expiration) continue;
+          const venc = new Date(ultimo.expiration);
+          const diasRestantes = Math.ceil((venc - hoje) / 86400000);
+          if (diasRestantes <= dias && diasRestantes >= -3) {
+            vencendo.push({
+              msisdn: l.msisdn,
+              nome_cliente: l.nome_cliente || details?.subscriber?.name || details?.name || null,
+              plano: ultimo.name || l.plano_nome || null,
+              dias_restantes: diasRestantes,
+              data_vencimento: venc.toISOString(),
+            });
+          }
+        } catch { /* linha sem details / erro — ignora */ }
+      }
+    }
+    // 5 verificações em paralelo pra não ficar lento nem sobrecarregar a Bora
+    await Promise.all(Array.from({ length: 5 }, worker));
+    vencendo.sort((a, b) => a.dias_restantes - b.dias_restantes);
+    res.json({ ok: true, verificadas: linhas.length, limite: LIMITE, vencendo });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

@@ -1098,6 +1098,15 @@ select option { background: var(--bg3); }
         <div class="stat-card blue"><div class="stat-label">Receita Move no Período</div><div class="stat-value" id="mp-receita-move">—</div></div>
       </div>
       <div class="table-card">
+        <div class="table-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+          <div class="table-title">⏰ Planos vencendo</div>
+          <button class="btn btn-secondary btn-sm" id="mp-venc-btn" onclick="carregarVencimentos()">🔄 Verificar</button>
+        </div>
+        <div id="mp-vencimentos" style="padding:4px 0">
+          <div class="empty-state" style="padding:16px"><p style="color:var(--text2);font-size:13px">Clique em <b>Verificar</b> para ver quais dos seus clientes estão com o plano perto de vencer.</p></div>
+        </div>
+      </div>
+      <div class="table-card">
         <div class="table-header"><div class="table-title">Histórico de Transações</div></div>
         <table>
           <thead><tr><th>Data</th><th>Tipo</th><th>MSISDN</th><th>Cliente</th><th>Plano</th><th>Comissão</th></tr></thead>
@@ -3454,6 +3463,45 @@ async function confirmarAtivacao() {
     res.innerHTML = `<div class="info-card" style="border-color:var(--red)"><div class="info-row"><span class="k">Erro</span><span class="v" style="color:var(--red)">${e.message}</span></div></div>`;
     toast(e.message,'error');
     if (String(e.message).toLowerCase().includes('limite')) carregarLimiteEsim();
+  }
+}
+
+// ── PLANOS VENCENDO (área do vendedor) ───────────────────────────────────────
+async function carregarVencimentos() {
+  const cont = document.getElementById('mp-vencimentos');
+  const btn = document.getElementById('mp-venc-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Verificando...'; }
+  cont.innerHTML = '<div class="loading" style="padding:16px">Consultando a operadora… pode levar alguns segundos.</div>';
+  try {
+    const r = await api('GET', '/api/vendedor/vencimentos?dias=7');
+    const lista = r.vencendo || [];
+    if (!lista.length) {
+      cont.innerHTML = `<div class="empty-state" style="padding:16px"><div class="ico">✅</div><p>Nenhum plano vencendo nos próximos 7 dias (verificamos ${r.verificadas || 0} linha(s)).</p></div>`;
+      return;
+    }
+    cont.innerHTML = '<table><thead><tr><th>Cliente</th><th>Número</th><th>Plano</th><th>Vence</th><th>Situação</th><th>Ações</th></tr></thead><tbody>' +
+      lista.map(v => {
+        const d = v.dias_restantes;
+        const quando = d < 0 ? `Vencido há ${Math.abs(d)}d` : (d === 0 ? 'Vence hoje' : `Em ${d} dia${d > 1 ? 's' : ''}`);
+        const cor = d <= 0 ? 'badge-red' : (d <= 2 ? 'badge-yellow' : 'badge-blue');
+        const dataV = v.data_vencimento ? new Date(v.data_vencimento).toLocaleDateString('pt-BR') : '—';
+        const nome = (v.nome_cliente || '').replace(/'/g, '');
+        return `<tr>
+          <td>${v.nome_cliente || '—'}</td>
+          <td class="mono">${v.msisdn || '—'}</td>
+          <td>${v.plano || '—'}</td>
+          <td class="text-muted">${dataV}</td>
+          <td><span class="badge ${cor}">${quando}</span></td>
+          <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${podeRecurso('recarga') ? `<button class="btn btn-primary btn-sm" onclick="navegarParaRecarga('${v.msisdn}')">📦 Recarregar</button>` : ''}
+            <button class="btn btn-secondary btn-sm" onclick="abrirWhatsappCliente('${v.msisdn}','${nome}')">💬 WhatsApp</button>
+          </div></td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+  } catch (e) {
+    cont.innerHTML = `<div class="empty-state" style="padding:16px"><p style="color:var(--red)">${e.message}</p></div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Verificar'; }
   }
 }
 
