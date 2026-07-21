@@ -822,51 +822,54 @@ function variantesMsisdn(valor) {
 }
 
 // ── ISOLAMENTO POR VENDEDOR ───────────────────────────────────────────────────
-// Retorna a linha da carteira do usuário (escopo vendedor/subvendedor) que casa com o
-// identificador (msisdn com/sem DDI 55/máscara, iccid ou documento). Null se não for dele.
-// Vendedor principal enxerga as próprias linhas e as da equipe (mesmo vendedor_id);
-// subvendedor enxerga só as dele (subvendedor_id). Admin não passa por aqui.
-async function linhaNaCarteira(req, identificador) {
-  const { vendedor_id, subvendedor_id } = await resolverEscopoVenda(req);
+// Dono atual de uma linha que casa com o identificador (msisdn com/sem DDI 55/máscara,
+// iccid ou documento), SEM filtrar por vendedor. Desempate pela última transferência
+// (vinculado_em). Null se nenhuma linha conhecida casar (linha nova / não cadastrada).
+async function donoDaLinha(identificador) {
   const val = String(identificador || '').trim();
   const digitos = val.replace(/\D/g, '').replace(/^0+/, '');
   const variantes = variantesMsisdn(val);
   const msisdnBora = normalizarMsisdnParaBora(val);
-  const escopoCond = subvendedor_id ? 'subvendedor_id = $1' : 'vendedor_id = $1';
-  const escopoId = subvendedor_id || vendedor_id;
   const { rows } = await pool.query(
-    `SELECT id FROM linhas
-      WHERE ${escopoCond}
+    `SELECT vendedor_id, subvendedor_id FROM linhas
+      WHERE vendedor_id IS NOT NULL
         AND (
-          regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') = ANY($2::text[])
+          regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') = ANY($1::text[])
           OR (CASE
                 WHEN regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') LIKE '55%'
                   THEN regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')
                 WHEN length(regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')) IN (10,11)
                   THEN '55'||regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')
                 ELSE regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')
-              END) = $3
-          OR iccid = $4
-          OR (NULLIF($5,'') IS NOT NULL AND regexp_replace(COALESCE(documento_cliente,''),'[^0-9]','','g') = $5)
+              END) = $2
+          OR iccid = $3
+          OR (NULLIF($4,'') IS NOT NULL AND regexp_replace(COALESCE(documento_cliente,''),'[^0-9]','','g') = $4)
         )
+      ORDER BY vinculado_em DESC NULLS LAST, id DESC
       LIMIT 1`,
-    [escopoId, variantes, msisdnBora || digitos, val, digitos]
+    [variantes, msisdnBora || digitos, val, digitos]
   );
   return rows[0] || null;
 }
 
-// Guard: para não-admin, exige que o identificador esteja na carteira do usuário.
-// Retorna true se pode prosseguir; se não, já responde 403 e retorna false.
+// Guard de isolamento (não-admin). NÃO bloqueia por "não achei na sua carteira" — isso
+// dava 403 falso quando a linha era do vendedor mas o dado local não batia (ex.:
+// documento_cliente vazio ao gerar PIX/boleto por CPF). Bloqueia SÓ quando a linha casa
+// e é comprovadamente de OUTRO vendedor. Linha desconhecida (nova/servicing) é permitida.
 async function garantirLinhaDoUsuario(req, res, identificador) {
   if (req.user.role === 'admin') return true;
   try {
-    if (await linhaNaCarteira(req, identificador)) return true;
+    const dono = await donoDaLinha(identificador);
+    if (!dono) return true; // linha não cadastrada no CRM → permite
+    const escopo = await resolverEscopoVenda(req);
+    // "minha" = mesmo vendedor principal (cobre o principal e toda a equipe/subvendedores)
+    if (Number(dono.vendedor_id) === Number(escopo.vendedor_id)) return true;
+    res.status(403).json({ erro: 'Esta linha é de outro vendedor' });
+    return false;
   } catch (e) {
     res.status(500).json({ erro: e.message });
     return false;
   }
-  res.status(403).json({ erro: 'Esta linha não está na sua carteira' });
-  return false;
 }
 
 async function carregarMapasComissaoPlanos() {
