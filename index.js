@@ -2168,8 +2168,10 @@ app.get('/api/dashboard/indicadores-dia', authMiddleware, async (req, res) => {
 
 // ─── PROXY BORA — Subscriber ──────────────────────────────────────────────────
 app.get('/api/bora/subscriber/documento/:doc', authMiddleware, async (req, res) => {
+  // Sem guard de carteira: é utilitário de ATIVAÇÃO/nova linha (buscar cliente por CPF),
+  // onde o cliente ainda não pertence a ninguém. A consulta de linha existente
+  // (/api/consulta/linha) segue protegida por carteira.
   try {
-    if (!(await garantirLinhaDoUsuario(req, res, req.params.doc))) return;
     const data = await boraGet(`/api/Subscriber/${req.params.doc}/document`);
     res.json(data);
   } catch (e) {
@@ -2178,8 +2180,9 @@ app.get('/api/bora/subscriber/documento/:doc', authMiddleware, async (req, res) 
 });
 
 app.get('/api/bora/subscriber/iccid/:iccid', authMiddleware, async (req, res) => {
+  // Sem guard de carteira: é o "Verificar Chip" da ATIVAÇÃO, checando um ICCID do estoque
+  // compartilhado que ainda não é de ninguém. Consulta de linha existente segue protegida.
   try {
-    if (!(await garantirLinhaDoUsuario(req, res, req.params.iccid))) return;
     const data = await boraGet(`/api/Subscriber/${req.params.iccid}/iccid`);
     res.json(data);
   } catch (e) {
