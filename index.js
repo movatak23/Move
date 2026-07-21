@@ -212,6 +212,36 @@ async function garantirColunasCacheStatus() {
   }
 }
 
+// Backfill idempotente do vinculado_em para linhas transferidas ANTES desta feature.
+// Só toca linhas com vinculado_em NULL, então é seguro rodar em todo boot.
+async function backfillVinculadoEm() {
+  // 1) Recupera a data real da transferência do mapa vinculos_msisdn_vendedor (origem='transferencia').
+  //    Casa por dígitos do msisdn, tolerando o prefixo 55.
+  await pool.query(`
+    UPDATE linhas l
+       SET vinculado_em = v.atualizado_em
+      FROM vinculos_msisdn_vendedor v
+     WHERE l.vinculado_em IS NULL
+       AND v.origem = 'transferencia'
+       AND v.atualizado_em IS NOT NULL
+       AND (
+         regexp_replace(COALESCE(l.msisdn::text,''),'[^0-9]','','g') = regexp_replace(COALESCE(v.msisdn::text,''),'[^0-9]','','g')
+         OR '55' || regexp_replace(COALESCE(l.msisdn::text,''),'[^0-9]','','g') = regexp_replace(COALESCE(v.msisdn::text,''),'[^0-9]','','g')
+         OR regexp_replace(COALESCE(l.msisdn::text,''),'[^0-9]','','g') = '55' || regexp_replace(COALESCE(v.msisdn::text,''),'[^0-9]','','g')
+       )
+  `).catch(e => console.warn('[DB] backfill vinculado_em (mapa) falhou:', e.message));
+
+  // 2) Fallback: linhas placeholder de transferência (iccid 'transferencia-...') sem match
+  //    usam a própria data_ativacao (que, nesses casos, é a data em que foram criadas na transferência).
+  await pool.query(`
+    UPDATE linhas
+       SET vinculado_em = data_ativacao
+     WHERE vinculado_em IS NULL
+       AND COALESCE(iccid,'') ILIKE 'transferencia-%'
+       AND data_ativacao IS NOT NULL
+  `).catch(e => console.warn('[DB] backfill vinculado_em (placeholder) falhou:', e.message));
+}
+
 async function consultarEsimPorIccid(iccid) {
   if (!iccid) throw new Error('ICCID não informado para consulta do eSIM');
   return await boraGet(`/api/Subscriber/${encodeURIComponent(iccid)}/iccid`);
@@ -5745,6 +5775,7 @@ async function rodarMigrations(tentativa = 1) {
     ['cache de status', garantirColunasCacheStatus],
     ['tabela notif WhatsApp', garantirTabelaNotifWhatsapp],
     ['tabela vínculos vendedor', garantirTabelaVinculoVendedor],
+    ['backfill vinculado_em', backfillVinculadoEm],
     ['tabela recargas pendentes', garantirTabelaRecargasPendentes],
     ['tabela materiais publicidade', garantirTabelaMateriaisPublicidade],
     ['tabelas suporte', garantirTabelasSuporte],
