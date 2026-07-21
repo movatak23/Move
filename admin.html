@@ -4313,8 +4313,12 @@ async function salvarEditarCliente() {
   const btn = document.getElementById('ec-salvar');
   btn.disabled = true; btn.textContent = 'Salvando…';
   try {
-    await api('PUT', '/api/bora/cliente/cadastro', { msisdn: _ecMsisdn, subscriber });
-    toast('Cadastro do cliente atualizado');
+    const r = await api('PUT', '/api/bora/cliente/cadastro', { msisdn: _ecMsisdn, subscriber });
+    if (r && r.boraAtualizado === false && r.avisoBora) {
+      toast(r.avisoBora, 'error');       // mostra o motivo exato da Bora
+    } else {
+      toast('Cadastro do cliente atualizado');
+    }
     fecharModal('modal-editar-cliente');
     if (typeof realizarConsulta === 'function') realizarConsulta();
   } catch (e) {

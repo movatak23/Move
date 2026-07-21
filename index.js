@@ -2270,35 +2270,51 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
     // Isolamento: precisa possuir a linha (por msisdn quando houver; senão pelo documento).
     if (!(await garantirLinhaDoUsuario(req, res, msisdn || doc))) return;
 
-    // Busca o cadastro atual pra preservar o ID — sem ele a Bora tenta CRIAR de novo
-    // e responde "já existe um usuário cadastrado". Com o id, ela ATUALIZA.
-    let atual = {};
-    try { atual = (await boraGet(`/api/Subscriber/${doc}/document`)) || {}; } catch {}
+    const detalheErro = (err) => err?.response?.data?.detail || err?.response?.data?.message
+      || (typeof err?.response?.data === 'string' ? err.response.data : null)
+      || (err?.response?.data ? JSON.stringify(err.response.data) : null) || err?.message || 'erro';
 
-    // Mescla: base = cadastro atual (traz id e campos que o form não envia),
-    // sobrescrito pelos campos editados.
-    const payload = { ...atual, ...subscriber, document: doc };
-    if (atual.id != null) payload.id = atual.id;
-    if (atual.idSubscriberExternal != null) payload.idSubscriberExternal = atual.idSubscriberExternal;
-    if (atual.subscriberId != null && payload.subscriberId == null) payload.subscriberId = atual.subscriberId;
-
-    const boraResp = await boraPost('/api/Subscriber', payload);
-
-    // Reflete nome/documento nas linhas do cliente no CRM local
+    // 1) Reflete no CRM local primeiro (sempre acontece, mesmo se a Bora recusar)
     const params = [String(subscriber.name).trim(), doc];
     let where = `regexp_replace(COALESCE(documento_cliente,''),'[^0-9]','','g') = $2`;
     if (msisdn) {
       params.push(variantesMsisdn(msisdn));
       where += ` OR regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') = ANY($3::text[])`;
     }
-    const r = await pool.query(
-      `UPDATE linhas SET nome_cliente=$1, documento_cliente=$2 WHERE ${where}`,
-      params
+    const rLocal = await pool.query(
+      `UPDATE linhas SET nome_cliente=$1, documento_cliente=$2 WHERE ${where}`, params
     ).catch(() => ({ rowCount: 0 }));
 
-    res.json({ ok: true, linhasAtualizadas: r.rowCount, bora: boraResp || null });
+    // 2) Atualiza o assinante na Bora. Busca o atual pra mesclar id + campos não enviados.
+    let atual = {};
+    try { atual = (await boraGet(`/api/Subscriber/${doc}/document`)) || {}; } catch {}
+    const payload = { ...atual, ...subscriber, document: doc };
+
+    let boraOk = false, boraErro = null, boraResp = null;
+    // POST sozinho estava caindo em "já existe" (create). Tenta PUT (update) e, se o
+    // método não for aceito, cai pra POST. Guarda o erro exato pra diagnóstico.
+    try {
+      boraResp = await boraPut('/api/Subscriber', payload);
+      boraOk = true;
+    } catch (ePut) {
+      const st = ePut.response?.status;
+      if (st === 404 || st === 405 || st === 501) {
+        try { boraResp = await boraPost('/api/Subscriber', payload); boraOk = true; }
+        catch (ePost) { boraErro = detalheErro(ePost); }
+      } else {
+        boraErro = detalheErro(ePut);
+      }
+    }
+
+    res.json({
+      ok: true,
+      linhasAtualizadas: rLocal.rowCount,
+      boraAtualizado: boraOk,
+      avisoBora: boraOk ? null : `Salvo no CRM, mas a operadora (Bora) recusou a atualização: ${boraErro}`,
+      bora: boraResp || null
+    });
   } catch (e) {
-    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.response?.data?.message || e.message });
+    res.status(500).json({ erro: e.message });
   }
 });
 
