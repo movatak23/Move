@@ -204,6 +204,9 @@ async function garantirColunasCacheStatus() {
     await pool.query(`ALTER TABLE linhas ADD COLUMN IF NOT EXISTS status_bora VARCHAR(40)`);
     await pool.query(`ALTER TABLE linhas ADD COLUMN IF NOT EXISTS ultima_sincronizacao TIMESTAMP`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_linhas_ultima_sincronizacao ON linhas(ultima_sincronizacao)`);
+    // Data em que a linha foi vinculada ao vendedor atual (setada na transferência).
+    // Faz a linha transferida contar como "vinculada" no período mesmo se ativada antes.
+    await pool.query(`ALTER TABLE linhas ADD COLUMN IF NOT EXISTS vinculado_em TIMESTAMPTZ`);
   } catch (e) {
     console.warn('[DB] Não foi possível garantir colunas de cache de status:', e.message);
   }
@@ -1793,7 +1796,8 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
     const paramsLinhas = [vendedorId];
     let filtroLinhas = '';
     if (data_inicio && data_fim) {
-      filtroLinhas = ' AND l.data_ativacao::date BETWEEN $2::date AND $3::date';
+      // Linha entra no período se foi ATIVADA no período OU TRANSFERIDA (vinculada) no período.
+      filtroLinhas = ' AND (l.data_ativacao::date BETWEEN $2::date AND $3::date OR l.vinculado_em::date BETWEEN $2::date AND $3::date)';
       paramsLinhas.push(data_inicio, data_fim);
     }
 
@@ -1838,6 +1842,14 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
       paramsLinhas
     );
 
+    // "Linhas Vinculadas" = total de linhas que pertencem AGORA ao vendedor (estado atual,
+    // independente do período). Assim toda linha transferida entra na conta imediatamente.
+    const { rows: vincTotalRows } = await pool.query(
+      `SELECT COUNT(*)::int AS total FROM linhas WHERE ${campoEscopo} = $1`,
+      [vendedorId]
+    );
+    const linhasVinculadasTotal = Number(vincTotalRows[0]?.total || 0);
+
     const { rows: topClientes } = await pool.query(
       `SELECT l.msisdn,
               COALESCE(NULLIF(l.nome_cliente,''), 'Cliente sem nome') AS nome_cliente,
@@ -1881,6 +1893,7 @@ app.get('/api/relatorio/vendedor/:id', authMiddleware, async (req, res) => {
     res.json({
       transacoes, resumo, linhas, top_clientes: topClientes, indicadores_dia: indicadoresDia,
       linhas_ativas_periodo: linhasAtivasPeriodo,
+      linhas_vinculadas_total: linhasVinculadasTotal,
       linhas_canceladas_inativas: linhasCanceladasInativas.length,
       linhas_canceladas_inativas_numeros: linhasCanceladasInativasNumeros,
     });
@@ -2286,10 +2299,10 @@ app.post('/api/linhas/transferir-vendedor', authMiddleware, adminOnly, async (re
     if (!linhaRes.rows.length) {
       const iccidTransferencia = `transferencia-${msisdnBora || digitosMsisdn}`;
       linhaRes = await pool.query(
-        `INSERT INTO linhas (iccid, msisdn, vendedor_id, subvendedor_id, status)
-         VALUES ($1,$2,$3,$4,'ativa')
+        `INSERT INTO linhas (iccid, msisdn, vendedor_id, subvendedor_id, status, vinculado_em)
+         VALUES ($1,$2,$3,$4,'ativa',NOW())
          ON CONFLICT (iccid) DO UPDATE
-         SET msisdn=$2, vendedor_id=$3, subvendedor_id=$4
+         SET msisdn=$2, vendedor_id=$3, subvendedor_id=$4, vinculado_em=NOW()
          RETURNING id`,
         [iccidTransferencia, msisdnBora || digitosMsisdn, novoVendedorPrincipal, novoSubvendedor]
       );
@@ -2321,7 +2334,7 @@ app.post('/api/linhas/transferir-vendedor', authMiddleware, adminOnly, async (re
       // 1) Transfere a linha para o último vendedor selecionado.
       // Esta atualização intencionalmente sobrescreve qualquer vendedor anterior.
       const r1 = await pool.query(
-        'UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2 WHERE id=$3',
+        'UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2, vinculado_em=NOW() WHERE id=$3',
         [novoVendedorPrincipal, novoSubvendedor, linhaId]
       );
 
@@ -2351,7 +2364,7 @@ app.post('/api/linhas/transferir-vendedor', authMiddleware, adminOnly, async (re
     // todos ficam com o mesmo vendedor atual e todas as transações passam para ele.
     if (linhaIdsTransferidas.length) {
       await pool.query(
-        'UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2 WHERE id = ANY($3::int[])',
+        'UPDATE linhas SET vendedor_id=$1, subvendedor_id=$2, vinculado_em=NOW() WHERE id = ANY($3::int[])',
         [novoVendedorPrincipal, novoSubvendedor, linhaIdsTransferidas]
       );
       const rFinal = await pool.query(

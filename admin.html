@@ -2459,7 +2459,7 @@ async function carregarDetalheVendedor() {
     document.getElementById('vd-ativ').textContent = dados.linhas_ativas_periodo ?? 0;
     document.getElementById('vd-rec').textContent = rec?.quantidade || 0;
     document.getElementById('vd-com').textContent = 'R$'+totalComissao.toFixed(2);
-    document.getElementById('vd-linhas-total').textContent = dados.linhas?.length || 0;
+    document.getElementById('vd-linhas-total').textContent = dados.linhas_vinculadas_total ?? (dados.linhas?.length || 0);
     document.getElementById('vd-canceladas').textContent = dados.linhas_canceladas_inativas ?? 0;
     document.getElementById('vd-receita-move').textContent = 'R$'+(totalComissao*2).toFixed(2);
 
@@ -3406,7 +3406,7 @@ async function loadMeuPainel() {
     document.getElementById('mp-ativ').textContent = ativ?.quantidade||0;
     document.getElementById('mp-rec').textContent = rec?.quantidade||0;
     document.getElementById('mp-com').textContent = 'R$'+totCom.toFixed(2);
-    document.getElementById('mp-linhas-total').textContent = dados.linhas?.length || 0;
+    document.getElementById('mp-linhas-total').textContent = dados.linhas_vinculadas_total ?? (dados.linhas?.length || 0);
     document.getElementById('mp-receita-move').textContent = 'R$'+(totCom*2).toFixed(2);
 
     const tbody = document.getElementById('mp-tabela');
