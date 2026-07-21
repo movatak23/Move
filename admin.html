@@ -1536,33 +1536,14 @@ select option { background: var(--bg3); }
       <select id="mv-ativo"><option value="true">Ativo</option><option value="false">Inativo</option></select>
     </div>
     <div style="margin-top:16px">
-      <label style="color:var(--text3);font-size:11px;font-weight:700;letter-spacing:1px;display:block;margin-bottom:10px">PERMISSÕES</label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="perm-consulta" value="consulta"> Consultar Linha
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="perm-recarga" value="recarga"> Recarga
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="perm-portabilidade" value="portabilidade"> Portabilidade
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="perm-boleto-combado" value="boleto_combado"> Boleto Combado
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="perm-troca-plano" value="troca_plano"> Trocar Plano
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="perm-ativacao" value="ativacao"> Ativar Chip
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="perm-inadimplencia" value="inadimplencia"> Inadimplência
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px">
-          <input type="checkbox" id="perm-churn" value="churn"> Churn
-        </label>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <label style="color:var(--text3);font-size:11px;font-weight:700;letter-spacing:1px">PERMISSÕES</label>
+        <div style="display:flex;gap:10px">
+          <a href="javascript:void(0)" onclick="mvMarcarPerms(true)" style="font-size:11px;color:var(--accent);text-decoration:none">Marcar todas</a>
+          <a href="javascript:void(0)" onclick="mvMarcarPerms(false)" style="font-size:11px;color:var(--text3);text-decoration:none">Limpar</a>
+        </div>
       </div>
+      <div id="mv-perms-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px 18px"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="fecharModal('modal-vendedor')">Cancelar</button>
@@ -1772,6 +1753,55 @@ select option { background: var(--bg3); }
       <div id="tit-resultado"></div>
       <div class="modal-footer">
         <button class="btn btn-primary" onclick="fecharModal('modal-titularidade');realizarConsulta()">Fechar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Troca de SIM (sim-swap) -->
+<div class="modal-overlay" id="modal-sim-swap">
+  <div class="modal" style="width:540px">
+    <div class="modal-title">🔄 Troca de SIM</div>
+
+    <!-- Step 1: novo chip -->
+    <div id="ss-step-1">
+      <div id="ss-info" style="margin-bottom:12px;font-size:13px;color:var(--text2)"></div>
+      <div class="field" style="margin-bottom:8px">
+        <label>ICCID do novo chip</label>
+        <input type="text" id="ss-iccid" placeholder="Digite ou escaneie o ICCID do chip novo">
+      </div>
+      <div style="margin-bottom:8px">
+        <button class="btn btn-secondary btn-sm" type="button" onclick="ssToggleEstoque()">📦 Escolher do estoque eSIM</button>
+      </div>
+      <div class="field" id="ss-estoque-wrap" style="display:none;margin-bottom:8px">
+        <label>eSIM disponível no estoque</label>
+        <select id="ss-iccid-estoque" onchange="document.getElementById('ss-iccid').value=this.value"><option value="">Carregando...</option></select>
+      </div>
+      <div style="background:var(--yellow-dim);border:1px solid var(--yellow);border-radius:var(--r);padding:10px 14px;font-size:12px;color:var(--yellow);margin-bottom:16px">
+        ⚠ A Bora aplica um questionário de segurança do titular da linha antes de liberar a troca do chip.
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="fecharModal('modal-sim-swap')">Cancelar</button>
+        <button class="btn btn-primary" id="btn-iniciar-ss" onclick="iniciarSimSwap()">Iniciar troca</button>
+      </div>
+    </div>
+
+    <!-- Step 2: quiz -->
+    <div id="ss-step-2" style="display:none">
+      <div style="font-weight:700;color:var(--text);margin-bottom:6px;font-size:13px">Verificação de segurança</div>
+      <div id="ss-progresso" style="font-size:11px;font-weight:700;letter-spacing:1px;color:var(--text3);margin-bottom:8px"></div>
+      <div id="ss-pergunta" style="color:var(--text);font-size:14px;margin-bottom:14px"></div>
+      <div id="ss-alternativas" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="fecharModal('modal-sim-swap')">Cancelar</button>
+      </div>
+    </div>
+
+    <!-- Step 3: resultado -->
+    <div id="ss-step-3" style="display:none">
+      <div id="ss-resultado"></div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="fecharModal('modal-sim-swap');realizarConsulta()">Fechar</button>
       </div>
     </div>
   </div>
@@ -2212,24 +2242,32 @@ function construirNav() {
       { page: 'minha-marca', icon: '▣', label: 'Minha Marca no App' }
     ] : []),
     { section: 'Operação' },
-    { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
+    { page: 'ativar', icon: '⊕', label: 'Ativar Chip', perm: 'ativacao' },
     { page: 'recarga', icon: '📦', label: 'Pacotes Adicionais', perm: 'recarga' },
     { page: 'consulta', icon: '🔍', label: 'Consultar Linha', perm: 'consulta' },
     { page: 'portabilidade', icon: '↔', label: 'Portabilidade', perm: 'portabilidade' },
-    ...(isVendedorPrincipal ? [{ page: 'calculadora', icon: '◎', label: 'Calculadora' }] : []),
-    { page: 'publicidade', icon: '📣', label: 'Publicidade' },
+    { page: 'calculadora', icon: '◎', label: 'Calculadora', perm: 'calculadora' },
+    { page: 'esim', icon: '◈', label: 'E-SIM', perm: 'esim' },
+    { page: 'publicidade', icon: '📣', label: 'Publicidade', perm: 'publicidade' },
     { section: 'Ferramentas' },
     { page: 'inadimplencia', icon: '⚠', label: 'Inadimplência', perm: 'inadimplencia' },
     { page: 'churn', icon: '📉', label: 'Churn', perm: 'churn' },
-    { page: 'ranking', icon: '🏆', label: 'Ranking' },
+    { page: 'ranking', icon: '🏆', label: 'Ranking', perm: 'ranking' },
     { section: 'Suporte' },
-    { page: 'suporte-vendedor', icon: '🎫', label: 'Meus Tickets' },
+    { page: 'suporte-vendedor', icon: '🎫', label: 'Meus Tickets', perm: 'suporte' },
     { link: '/ajuda.html', icon: '❓', label: 'Central de Ajuda' },
   ];
-  nav.innerHTML = items.filter(i => {
-    if (!i.perm) return true;
-    return state.permissoes && state.permissoes.includes(i.perm);
-  }).map(i => {
+  const visiveis = items.filter(i => !i.perm || (state.permissoes && state.permissoes.includes(i.perm)));
+  // remove cabeçalhos de seção que ficaram sem itens após o filtro de permissões
+  const podados = visiveis.filter((i, idx) => {
+    if (!i.section) return true;
+    for (let j = idx + 1; j < visiveis.length; j++) {
+      if (visiveis[j].section) break;
+      return true;
+    }
+    return false;
+  });
+  nav.innerHTML = podados.map(i => {
     if (i.section) return `<div class="nav-section">${i.section}</div>`;
     if (i.link) return `<div class="nav-item" onclick="window.open('${i.link}','_blank')"><span class="icon">${i.icon}</span>${i.label}</div>`;
     return `<div class="nav-item" id="nav-${i.page}" onclick="navegarPara('${i.page}')"><span class="icon">${i.icon}</span>${i.label}</div>`;
@@ -2630,22 +2668,66 @@ async function confirmarExclusaoVendedor() {
   }
 }
 
+// Fonte única de verdade dos recursos que o admin pode liberar/bloquear por vendedor.
+// A chave (`key`) é gravada em vendedor_permissoes e usada no gating do menu/ação (campo `perm`).
+const PERM_DEFS = [
+  { key: 'ativacao',       label: 'Ativar Chip' },
+  { key: 'recarga',        label: 'Recarga / Pacotes' },
+  { key: 'consulta',       label: 'Consultar Linha' },
+  { key: 'portabilidade',  label: 'Portabilidade' },
+  { key: 'troca_plano',    label: 'Trocar Plano' },
+  { key: 'boleto_combado', label: 'Boleto Combado' },
+  { key: 'titularidade',   label: 'Troca de Titularidade' },
+  { key: 'sim_swap',       label: 'Troca de SIM' },
+  { key: 'calculadora',    label: 'Calculadora' },
+  { key: 'esim',           label: 'Estoque eSIM' },
+  { key: 'publicidade',    label: 'Publicidade' },
+  { key: 'ranking',        label: 'Ranking' },
+  { key: 'inadimplencia',  label: 'Inadimplência' },
+  { key: 'churn',          label: 'Churn' },
+  { key: 'suporte',        label: 'Tickets de Suporte' },
+];
+const PERMS = PERM_DEFS.map(d => d.key);
+
+// true se o usuário logado pode usar o recurso (admin sempre pode; vendedor depende da permissão)
+function podeRecurso(perm) {
+  return state.user?.role === 'admin' || (state.permissoes && state.permissoes.includes(perm));
+}
+
+function renderPermsGrid() {
+  const grid = document.getElementById('mv-perms-grid');
+  if (!grid) return;
+  grid.innerHTML = PERM_DEFS.map(d =>
+    `<label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--text);font-size:13px;text-align:left">
+       <input type="checkbox" class="mv-perm" value="${d.key}" style="flex:0 0 auto;width:16px;height:16px;margin:0">
+       <span>${d.label}</span>
+     </label>`).join('');
+}
+function mvSetPerms(perms) {
+  const set = new Set(perms || []);
+  document.querySelectorAll('#mv-perms-grid .mv-perm').forEach(el => { el.checked = set.has(el.value); });
+}
+function mvMarcarPerms(marcar) {
+  document.querySelectorAll('#mv-perms-grid .mv-perm').forEach(el => { el.checked = !!marcar; });
+}
+function mvGetPerms() {
+  return Array.from(document.querySelectorAll('#mv-perms-grid .mv-perm:checked')).map(el => el.value);
+}
+
 function abrirModalVendedor() {
   state.editVendedorId = null;
   document.getElementById('modal-vendedor-title').textContent = state.user?.role === 'vendedor' ? 'Novo Vendedor Interno' : 'Novo Vendedor';
   ['mv-nome','mv-tel','mv-email','mv-senha'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('mv-ativo').value = 'true';
+  renderPermsGrid();
+  mvSetPerms([]);
   document.getElementById('modal-vendedor').classList.add('open');
 }
 
 // editarVendedor substituído pela versão com permissões
 
 async function salvarVendedor() {
-  const permissoes = ['consulta','recarga','portabilidade','boleto_combado','troca_plano','ativacao','inadimplencia','churn']
-    .filter(p => {
-      const el = document.getElementById('perm-'+p.replace('_','-'));
-      return el && el.checked;
-    });
+  const permissoes = mvGetPerms();
   const body = {
     nome: document.getElementById('mv-nome').value,
     email: document.getElementById('mv-email').value,
@@ -3731,8 +3813,6 @@ async function confirmarAtribuicao() {
 
 
 // ── PERMISSÕES ────────────────────────────────────────────────────────────────
-const PERMS = ['consulta','recarga','portabilidade','boleto_combado','troca_plano','ativacao','inadimplencia','churn'];
-
 async function editarVendedor(id, nome, email, tel, ativo) {
   state.editVendedorId = id;
   document.getElementById('modal-vendedor-title').textContent = 'Editar Vendedor';
@@ -3742,10 +3822,11 @@ async function editarVendedor(id, nome, email, tel, ativo) {
   document.getElementById('mv-ativo').value = String(ativo);
   document.getElementById('mv-senha').value = '';
   // Carrega permissões atuais
-  PERMS.forEach(p => { const el = document.getElementById('perm-'+p.replace('_','-')); if(el) el.checked = false; });
+  renderPermsGrid();
+  mvSetPerms([]);
   try {
     const perms = await api('GET', `/api/vendedores/${id}/permissoes`);
-    perms.forEach(p => { const el = document.getElementById('perm-'+p.replace('_','-')); if(el) el.checked = true; });
+    mvSetPerms(perms);
   } catch {}
   document.getElementById('modal-vendedor').classList.add('open');
 }
@@ -4020,16 +4101,17 @@ function renderLinhaConsulta(l, cons) {
       ${renderGraficoConsumo(cons, l.msisdn)}
     </div>
     <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap" id="acoes-linha">
-      <button class="btn btn-primary btn-sm" onclick="navegarParaRecarga('${l.msisdn}')">📦 Pac. Adicionais</button>
-      <button class="btn btn-secondary btn-sm" onclick="navegarParaPortabilidade('${l.document}')">↔ Portabilidade</button>
-      <button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>
-      <button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>
+      ${podeRecurso('recarga') ? `<button class="btn btn-primary btn-sm" onclick="navegarParaRecarga('${l.msisdn}')">📦 Pac. Adicionais</button>` : ''}
+      ${podeRecurso('portabilidade') ? `<button class="btn btn-secondary btn-sm" onclick="navegarParaPortabilidade('${l.document}')">↔ Portabilidade</button>` : ''}
+      ${podeRecurso('troca_plano') ? `<button class="btn btn-secondary btn-sm" onclick="abrirTrocarPlano('${l.msisdn}')">🔄 Trocar Plano</button>` : ''}
+      ${podeRecurso('esim') ? `<button class="btn btn-secondary btn-sm" onclick="reenviarEsim(&#39;${l.iccid||''}&#39;,&#39;${(l.email||'').replace(/'/g,'')}&#39;,&#39;${(l.name||'').replace(/'/g,'')}&#39;,&#39;${l.msisdn||''}&#39;,this)">📧 Reenviar QR eSIM</button>` : ''}
       <button class="btn btn-secondary btn-sm" onclick="encaminharBoletoLinha(&#39;${l.document||''}&#39;,this)">📄 Encaminhar Boleto</button>
       <button class="btn btn-secondary btn-sm" id="btn-ver-pix-${l.msisdn?.replace(/\D/g,'')}" onclick="abrirPixPendente('${l.msisdn||''}',this)">⚡ Ver PIX</button>
       <button class="btn btn-secondary btn-sm" onclick="abrirWhatsappCliente('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">💬 WhatsApp</button>
       ${l.recurrence && l.recurrence.paymentType ? `<button class="btn btn-danger btn-sm" onclick="cancelarRecorrenciaLinha('${l.msisdn||''}')">🚫 Cancelar Recorrência</button>` : ''}
       ${state.user.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTransferirVenda('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">🔀 Transferir Venda</button>` : ''}
-      <button class="btn btn-secondary btn-sm" onclick="abrirTitularidade('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}','${l.document||''}')">🔁 Trocar Titularidade</button>
+      ${podeRecurso('titularidade') ? `<button class="btn btn-secondary btn-sm" onclick="abrirTitularidade('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}','${l.document||''}')">🔁 Trocar Titularidade</button>` : ''}
+      ${podeRecurso('sim_swap') ? `<button class="btn btn-secondary btn-sm" onclick="abrirSimSwap('${l.msisdn||''}','${l.iccid||''}')">🔄 Trocar SIM</button>` : ''}
       ${renderBotoesBloqueio(l)}
     </div>
   </div>`;
@@ -4143,6 +4225,91 @@ async function efetivarTitularidade() {
   } finally {
     btn.disabled = false; btn.textContent = 'Efetivar troca';
   }
+}
+
+// ── TROCA DE SIM (sim-swap) ───────────────────────────────────────────────────
+let _ss = {};
+function _ssStep(n) { [1,2,3].forEach(i => { const el = document.getElementById('ss-step-'+i); if (el) el.style.display = (i===n)?'block':'none'; }); }
+function abrirSimSwap(msisdn, iccidAtual) {
+  if (!msisdn) { toast('Número da linha não disponível','error'); return; }
+  _ss = { msisdn, total: 5, respondidas: 0 };
+  document.getElementById('ss-info').innerHTML = `Linha: <strong>${msisdn}</strong>${iccidAtual ? ` · Chip atual: <span class="mono">${iccidAtual}</span>` : ''}`;
+  document.getElementById('ss-iccid').value = '';
+  document.getElementById('ss-estoque-wrap').style.display = 'none';
+  _ssStep(1);
+  document.getElementById('modal-sim-swap').classList.add('open');
+}
+async function ssToggleEstoque() {
+  const wrap = document.getElementById('ss-estoque-wrap');
+  if (wrap.style.display !== 'none') { wrap.style.display = 'none'; return; }
+  wrap.style.display = 'block';
+  const sel = document.getElementById('ss-iccid-estoque');
+  sel.innerHTML = '<option value="">⏳ Sincronizando estoque...</option>';
+  try {
+    const esims = await api('GET', '/api/esim/disponiveis');
+    sel.innerHTML = '<option value="">-- Selecione um eSIM --</option>' + esims.map(e => `<option value="${e.iccid}">${e.iccid}</option>`).join('');
+    if (!esims.length) toast('⚠ Nenhum eSIM disponível no estoque','info');
+  } catch (e) { sel.innerHTML = '<option value="">Erro ao carregar</option>'; toast(e.message,'error'); }
+}
+async function iniciarSimSwap() {
+  const iccid = document.getElementById('ss-iccid').value.trim();
+  if (!iccid) { toast('Informe o ICCID do novo chip','error'); return; }
+  const btn = document.getElementById('btn-iniciar-ss');
+  btn.disabled = true; btn.textContent = 'Abrindo...';
+  try {
+    const r = await api('POST', `/api/bora/sim-swap/${_ss.msisdn}/iniciar`, { newIccid: iccid });
+    _ss.iccid = r.iccid; _ss.total = r.totalQuestoes || 5; _ss.respondidas = 0;
+    _ssStep(2);
+    ssRenderQuestao(r);
+  } catch (e) { toast(e.message,'error'); } finally { btn.disabled = false; btn.textContent = 'Iniciar troca'; }
+}
+function ssRenderQuestao(data) {
+  if (data.done) return ssFinalizar(data);
+  document.getElementById('ss-progresso').textContent = `PERGUNTA ${Math.min(_ss.respondidas+1, _ss.total)} DE ${_ss.total}`;
+  document.getElementById('ss-pergunta').textContent = data.question || 'Pergunta de segurança';
+  const alts = document.getElementById('ss-alternativas');
+  alts.innerHTML = (data.alternatives || []).map(alt =>
+    `<button class="btn btn-secondary" style="justify-content:flex-start;text-align:left;white-space:normal;height:auto;padding:10px 12px" onclick="ssResponder(this, ${JSON.stringify(String(alt)).replace(/"/g,'&quot;')})">${alt}</button>`
+  ).join('');
+  if (!(data.alternatives || []).length) return ssFinalizar({ done: true, sucesso: false, resultado: data.resultado || {} });
+}
+async function ssResponder(btn, resposta) {
+  document.querySelectorAll('#ss-alternativas button').forEach(b => b.disabled = true);
+  if (btn) btn.style.borderColor = 'var(--accent)';
+  document.getElementById('ss-pergunta').textContent = 'Verificando...';
+  try {
+    const r = await api('POST', `/api/bora/sim-swap/${_ss.msisdn}/responder`, { iccid: _ss.iccid, response: resposta });
+    _ss.respondidas++;
+    ssRenderQuestao(r);
+  } catch (e) { toast(e.message,'error'); document.querySelectorAll('#ss-alternativas button').forEach(b => b.disabled = false); }
+}
+function ssFinalizar(data) {
+  document.getElementById('ss-alternativas').innerHTML = '';
+  const crm = data.crm || {};
+  const msg = (data.resultado && (data.resultado.message || data.resultado.description)) || '';
+  if (data.sucesso) {
+    document.getElementById('ss-resultado').innerHTML =
+      `<div style="text-align:center;padding:12px"><div style="font-size:34px">✅</div>
+       <div style="font-weight:700;color:var(--text);margin-top:6px">Troca de SIM concluída</div>
+       <div style="color:var(--text2);font-size:13px;margin-top:4px">Novo ICCID: <span class="mono">${_ss.iccid}</span> · CRM: ${crm.linhasAfetadas||0} linha(s).</div></div>`;
+  } else {
+    document.getElementById('ss-resultado').innerHTML =
+      `<div style="text-align:center;padding:12px"><div style="font-size:34px">❌</div>
+       <div style="font-weight:700;color:var(--text);margin-top:6px">Troca não confirmada automaticamente</div>
+       <div style="color:var(--red,#ef4444);font-size:13px;margin-top:4px">${msg || 'A identidade pode não ter sido comprovada.'}</div>
+       <div style="color:var(--text3);font-size:12px;margin:10px 0">Se confirmou na Bora que trocou, force a atualização do CRM:</div>
+       <button class="btn btn-secondary btn-sm" onclick="ssSincronizarCrm(this)">Forçar atualização no CRM</button></div>`;
+  }
+  _ssStep(3);
+  toast(data.sucesso ? 'Troca de SIM concluída' : 'Troca de SIM não confirmada', data.sucesso ? 'success' : 'error');
+}
+async function ssSincronizarCrm(btn) {
+  btn.disabled = true; btn.textContent = 'Atualizando...';
+  try {
+    const r = await api('POST', `/api/bora/sim-swap/${_ss.msisdn}/sincronizar`, { iccid: _ss.iccid });
+    toast('CRM atualizado: ' + ((r.crm && r.crm.linhasAfetadas) || 0) + ' linha(s)');
+    btn.textContent = '✔ CRM atualizado';
+  } catch (e) { toast(e.message,'error'); btn.disabled = false; btn.textContent = 'Forçar atualização no CRM'; }
 }
 
 // ── WHATSAPP CLIENTE ──────────────────────────────────────────────────────────

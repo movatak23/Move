@@ -776,6 +776,54 @@ function variantesMsisdn(valor) {
   return Array.from(set).filter(Boolean);
 }
 
+// ── ISOLAMENTO POR VENDEDOR ───────────────────────────────────────────────────
+// Retorna a linha da carteira do usuário (escopo vendedor/subvendedor) que casa com o
+// identificador (msisdn com/sem DDI 55/máscara, iccid ou documento). Null se não for dele.
+// Vendedor principal enxerga as próprias linhas e as da equipe (mesmo vendedor_id);
+// subvendedor enxerga só as dele (subvendedor_id). Admin não passa por aqui.
+async function linhaNaCarteira(req, identificador) {
+  const { vendedor_id, subvendedor_id } = await resolverEscopoVenda(req);
+  const val = String(identificador || '').trim();
+  const digitos = val.replace(/\D/g, '').replace(/^0+/, '');
+  const variantes = variantesMsisdn(val);
+  const msisdnBora = normalizarMsisdnParaBora(val);
+  const escopoCond = subvendedor_id ? 'subvendedor_id = $1' : 'vendedor_id = $1';
+  const escopoId = subvendedor_id || vendedor_id;
+  const { rows } = await pool.query(
+    `SELECT id FROM linhas
+      WHERE ${escopoCond}
+        AND (
+          regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') = ANY($2::text[])
+          OR (CASE
+                WHEN regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') LIKE '55%'
+                  THEN regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')
+                WHEN length(regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')) IN (10,11)
+                  THEN '55'||regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')
+                ELSE regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')
+              END) = $3
+          OR iccid = $4
+          OR (NULLIF($5,'') IS NOT NULL AND regexp_replace(COALESCE(documento_cliente,''),'[^0-9]','','g') = $5)
+        )
+      LIMIT 1`,
+    [escopoId, variantes, msisdnBora || digitos, val, digitos]
+  );
+  return rows[0] || null;
+}
+
+// Guard: para não-admin, exige que o identificador esteja na carteira do usuário.
+// Retorna true se pode prosseguir; se não, já responde 403 e retorna false.
+async function garantirLinhaDoUsuario(req, res, identificador) {
+  if (req.user.role === 'admin') return true;
+  try {
+    if (await linhaNaCarteira(req, identificador)) return true;
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+    return false;
+  }
+  res.status(403).json({ erro: 'Esta linha não está na sua carteira' });
+  return false;
+}
+
 async function carregarMapasComissaoPlanos() {
   const { rows } = await pool.query('SELECT * FROM planos_comissao');
   const porId = new Map();
@@ -2066,6 +2114,7 @@ app.get('/api/dashboard/indicadores-dia', authMiddleware, async (req, res) => {
 // ─── PROXY BORA — Subscriber ──────────────────────────────────────────────────
 app.get('/api/bora/subscriber/documento/:doc', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.doc))) return;
     const data = await boraGet(`/api/Subscriber/${req.params.doc}/document`);
     res.json(data);
   } catch (e) {
@@ -2075,6 +2124,7 @@ app.get('/api/bora/subscriber/documento/:doc', authMiddleware, async (req, res) 
 
 app.get('/api/bora/subscriber/iccid/:iccid', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.iccid))) return;
     const data = await boraGet(`/api/Subscriber/${req.params.iccid}/iccid`);
     res.json(data);
   } catch (e) {
@@ -2096,6 +2146,7 @@ app.get('/api/bora/esim/:iccid/qrcode', authMiddleware, async (req, res) => {
 // Alias administrativo para o mesmo endpoint de QR Code, mantendo compatibilidade com o padrão Subscriber.
 app.get('/api/bora/subscriber/:iccid/qrcode', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.iccid))) return;
     const { esimInfo, qrCodeUrl } = await capturarQrCodeEsim(req.params.iccid);
     res.json({ ok: true, iccid: req.params.iccid, qrCodeUrl, esimInfo });
   } catch (e) {
@@ -2760,6 +2811,7 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
 // ─── PROXY BORA — Detalhes de linha ───────────────────────────────────────────
 app.get('/api/bora/linha/:identificador', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.identificador))) return;
     const data = await boraGet(`/api/Subscription/${req.params.identificador}/details`);
     res.json(data);
   } catch (e) {
@@ -2769,6 +2821,7 @@ app.get('/api/bora/linha/:identificador', authMiddleware, async (req, res) => {
 
 app.get('/api/bora/historic/:msisdn', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
     res.json(details);
   } catch (e) {
@@ -3684,6 +3737,7 @@ app.get('/api/cliente/consumo/:msisdn', authCliente, async (req, res) => {
 
 app.get('/api/bora/consumo/:msisdn', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const data = await boraGet(`/api/Subscription/${req.params.msisdn}/consumption`);
     res.json(data);
   } catch (e) {
@@ -4283,18 +4337,28 @@ app.get('/api/ranking', authMiddleware, async (req, res) => {
     else if (periodo === 'semana') filtro = "AND t.data_transacao >= NOW() - INTERVAL '7 days'";
     else filtro = "AND DATE_TRUNC('month', t.data_transacao) = DATE_TRUNC('month', NOW())";
 
+    // Isolamento: admin vê todos. Vendedor principal vê a si + a própria equipe;
+    // subvendedor vê só a si. E-mail só é exposto ao admin.
+    const isAdmin = req.user.role === 'admin';
+    let escopoWhere = "v.role = 'vendedor' AND v.ativo = true";
+    const params = [];
+    if (!isAdmin) {
+      if (req.user.role === 'subvendedor') { escopoWhere = 'v.id = $1'; params.push(req.user.id); }
+      else { escopoWhere = '(v.id = $1 OR v.parent_id = $1)'; params.push(req.user.id); }
+    }
+    const emailSel = isAdmin ? 'v.email,' : '';
     const { rows } = await pool.query(`
-      SELECT v.id, v.nome, v.email,
+      SELECT v.id, v.nome, ${emailSel}
         COUNT(DISTINCT CASE WHEN t.tipo='ativacao' THEN t.id END) as ativacoes,
         COUNT(DISTINCT CASE WHEN t.tipo='recarga' THEN t.id END) as recargas,
         COALESCE(SUM(t.comissao),0) as total_comissao,
         COUNT(DISTINCT t.id) as total_transacoes
       FROM vendedores v
       LEFT JOIN transacoes t ON t.vendedor_id = v.id ${filtro}
-      WHERE v.role = 'vendedor' AND v.ativo = true
-      GROUP BY v.id, v.nome, v.email
+      WHERE ${escopoWhere}
+      GROUP BY v.id, v.nome${isAdmin ? ', v.email' : ''}
       ORDER BY total_transacoes DESC, total_comissao DESC
-    `);
+    `, params);
     res.json(rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -4619,6 +4683,7 @@ app.get('/api/alertas/vencimento', authMiddleware, async (req, res) => {
 // ─── BLOQUEIO / DESBLOQUEIO ───────────────────────────────────────────────────
 app.post('/api/bora/linha/:msisdn/bloquear', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
     const accountId = details?.accountId;
     if (!accountId) throw new Error('accountId não encontrado para esta linha');
@@ -4632,6 +4697,7 @@ app.post('/api/bora/linha/:msisdn/bloquear', authMiddleware, async (req, res) =>
 
 app.post('/api/bora/linha/:msisdn/desbloquear', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
     const accountId = details?.accountId;
     if (!accountId) throw new Error('accountId não encontrado para esta linha');
@@ -4647,6 +4713,7 @@ app.post('/api/bora/linha/:msisdn/desbloquear', authMiddleware, async (req, res)
 // enabled=false no PUT de recurrence. A linha continua ativa até o fim do ciclo atual.
 app.post('/api/bora/linha/:msisdn/cancelar-recorrencia', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
     const accountId = details?.accountId;
     if (!accountId) throw new Error('accountId não encontrado para esta linha');
@@ -4660,6 +4727,7 @@ app.post('/api/bora/linha/:msisdn/cancelar-recorrencia', authMiddleware, async (
 // ─── TROCAR PLANO ─────────────────────────────────────────────────────────────
 app.get('/api/bora/trocar-plano/:msisdn', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const data = await boraGet(`/api/Subscription/changeplan/${req.params.msisdn}`);
     res.json(data);
   } catch (e) {
@@ -4669,6 +4737,7 @@ app.get('/api/bora/trocar-plano/:msisdn', authMiddleware, async (req, res) => {
 
 app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.body.msisdn))) return;
     const data = await boraPost('/api/Subscription/changeplan', req.body);
     if (req.body.msisdn && req.body.planId) {
       await pool.query(
@@ -4689,8 +4758,9 @@ app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
 // titular (obtido consultando o CPF dele — a Bora não cria cliente avulso).
 
 // Passo 1 — abre o formulário/ticket de troca a partir da linha
-app.post('/api/bora/titularidade/:msisdn/iniciar', authMiddleware, async (req, res) => {
+app.post('/api/bora/titularidade/:msisdn/iniciar', authMiddleware, requirePerm('titularidade'), async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
     const accountId = details?.accountId;
     if (!accountId) throw new Error('accountId não encontrado para esta linha');
@@ -4704,7 +4774,7 @@ app.post('/api/bora/titularidade/:msisdn/iniciar', authMiddleware, async (req, r
 });
 
 // Passo 2 — pergunta atual do quiz (concluido=true quando não há mais pergunta)
-app.get('/api/bora/titularidade/:ticketId/pergunta', authMiddleware, async (req, res) => {
+app.get('/api/bora/titularidade/:ticketId/pergunta', authMiddleware, requirePerm('titularidade'), async (req, res) => {
   try {
     const data = await boraGet(`/api/Subscription/ownership-change/${req.params.ticketId}/question`);
     const concluido = !data || !data.question;
@@ -4715,7 +4785,7 @@ app.get('/api/bora/titularidade/:ticketId/pergunta', authMiddleware, async (req,
 });
 
 // Passo 3 — responde a pergunta atual
-app.post('/api/bora/titularidade/:ticketId/responder', authMiddleware, async (req, res) => {
+app.post('/api/bora/titularidade/:ticketId/responder', authMiddleware, requirePerm('titularidade'), async (req, res) => {
   try {
     const response = req.body?.response;
     if (response === undefined || response === null || response === '') {
@@ -4730,7 +4800,7 @@ app.post('/api/bora/titularidade/:ticketId/responder', authMiddleware, async (re
 
 // Resolve o NOVO titular pelo CPF/CNPJ → customerId (newClientId) + nome p/ confirmação.
 // Precisa já existir como cliente na Bora (ter ou ter tido linha).
-app.get('/api/bora/titularidade/novo-titular/:cpf', authMiddleware, async (req, res) => {
+app.get('/api/bora/titularidade/novo-titular/:cpf', authMiddleware, requirePerm('titularidade'), async (req, res) => {
   try {
     const details = await boraGet(`/api/Subscription/${req.params.cpf}/details`);
     const customerId = details?.boraIntegration?.customerId || null;
@@ -4746,7 +4816,7 @@ app.get('/api/bora/titularidade/novo-titular/:cpf', authMiddleware, async (req, 
 });
 
 // Passo 4 — efetiva a troca. conserveBenefits=true mantém o plano atual.
-app.post('/api/bora/titularidade/efetivar', authMiddleware, async (req, res) => {
+app.post('/api/bora/titularidade/efetivar', authMiddleware, requirePerm('titularidade'), async (req, res) => {
   try {
     const { ticketId, newClientId, conserveBenefits, planId, cartId } = req.body || {};
     if (!ticketId) return res.status(400).json({ erro: 'ticketId não informado' });
@@ -4761,10 +4831,108 @@ app.post('/api/bora/titularidade/efetivar', authMiddleware, async (req, res) => 
   }
 });
 
+// ─── TROCA DE SIM (sim-swap Bora) ─────────────────────────────────────────────
+// Fluxo Bora: POST /api/Subscription/sim-swap/{numero} {newiccid} -> {questionQuantity};
+//   depois PUT /api/Subscription/sim-swap/{numero} {response, iccid} (1ª com response="")
+//   devolve cada {question, alternatives}; ao responder a última, retorna se comprovou a
+//   identidade. Estado (msisdn/iccid) mantido no cliente. requirePerm('sim_swap') + carteira.
+function simSwapSucesso(data) {
+  const txt = JSON.stringify(data || {}).toLowerCase();
+  if (data && (data.success === true || data.swapped === true || data.status === 'success')) return true;
+  return /(sucesso|realizad|conclu[ií]d|trocad|aprovad)/.test(txt)
+      && !/(n[aã]o foi poss|inv[aá]lid|incorret|fail|erro|negad)/.test(txt);
+}
+
+async function atualizarSimLocal({ msisdn, iccid }) {
+  const digitos = String(msisdn).replace(/\D/g, '').replace(/^0+/, '');
+  const msisdnBora = normalizarMsisdnParaBora(msisdn);
+  const variantes = variantesMsisdn(msisdn);
+  const whereMsisdn = `
+    (
+      CASE
+        WHEN regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') LIKE '55%'
+          THEN regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')
+        WHEN length(regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')) IN (10,11)
+          THEN '55'||regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')
+        ELSE regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g')
+      END
+    ) = $2
+    OR regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') = ANY($3::text[])`;
+  let iccidAnterior = null, linhaId = null, linhasAfetadas = 0;
+  const atual = await pool.query(`SELECT id, iccid FROM linhas WHERE ${whereMsisdn} ORDER BY id LIMIT 1`, [null, msisdnBora || digitos, variantes]).catch(() => ({ rows: [] }));
+  if (atual.rows.length) { iccidAnterior = atual.rows[0].iccid; linhaId = atual.rows[0].id; }
+  try {
+    const r = await pool.query(`UPDATE linhas SET iccid=$1 WHERE ${whereMsisdn} RETURNING id`, [iccid, msisdnBora || digitos, variantes]);
+    linhasAfetadas = r.rowCount;
+  } catch (e) { console.error('[sim-swap] update linhas iccid falhou:', e.message); }
+  await pool.query(`UPDATE esims SET status='usado', usado_em=NOW(), msisdn=$2 WHERE iccid=$1 AND status='disponivel'`, [iccid, msisdnBora || digitos]).catch(() => null);
+  return { linhasAfetadas, linhaId, iccidAnterior };
+}
+
+// 1) Abre a solicitação de sim-swap e devolve a primeira pergunta
+app.post('/api/bora/sim-swap/:msisdn/iniciar', authMiddleware, requirePerm('sim_swap'), async (req, res) => {
+  try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
+    const iccid = String(req.body.newIccid || req.body.iccid || '').replace(/\s/g, '');
+    if (!iccid) return res.status(400).json({ erro: 'Informe o ICCID do novo chip' });
+    const numero = normalizarMsisdnParaBora(req.params.msisdn);
+    const abertura = await boraPost(`/api/Subscription/sim-swap/${encodeURIComponent(numero)}`, { newiccid: iccid });
+    const totalQuestoes = abertura?.questionQuantity || 5;
+    const q1 = await boraPut(`/api/Subscription/sim-swap/${encodeURIComponent(numero)}`, { response: '', iccid });
+    const temQuestao = q1 && q1.question && Array.isArray(q1.alternatives) && q1.alternatives.length;
+    res.json({
+      ok: true, msisdn: numero, iccid, totalQuestoes, done: !temQuestao,
+      question: temQuestao ? q1.question : null, alternatives: temQuestao ? q1.alternatives : [],
+      resultado: temQuestao ? null : (q1 || abertura)
+    });
+  } catch (e) { res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message }); }
+});
+
+// 2) Responde a questão; devolve a próxima ou o resultado final (com sync CRM)
+app.post('/api/bora/sim-swap/:msisdn/responder', authMiddleware, requirePerm('sim_swap'), async (req, res) => {
+  try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
+    const { iccid, response } = req.body;
+    if (!iccid) return res.status(400).json({ erro: 'iccid obrigatório' });
+    if (response === undefined || response === null || response === '') return res.status(400).json({ erro: 'Informe a resposta escolhida' });
+    const numero = normalizarMsisdnParaBora(req.params.msisdn);
+    const data = await boraPut(`/api/Subscription/sim-swap/${encodeURIComponent(numero)}`, { response, iccid });
+    const temQuestao = data && data.question && Array.isArray(data.alternatives) && data.alternatives.length;
+    if (temQuestao) return res.json({ done: false, question: data.question, alternatives: data.alternatives });
+    const sucesso = simSwapSucesso(data);
+    let crm = { linhasAfetadas: 0 };
+    if (sucesso) {
+      crm = await atualizarSimLocal({ msisdn: numero, iccid });
+      await pool.query(
+        `INSERT INTO sim_swap_historico (linha_id,msisdn,iccid_novo,iccid_anterior,status,usuario_id,detalhe) VALUES ($1,$2,$3,$4,'concluida',$5,$6)`,
+        [crm.linhaId || null, numero, iccid, crm.iccidAnterior || null, req.user?.id || null, JSON.stringify(data || {}).slice(0, 1000)]
+      ).catch(err => console.error('[sim-swap] hist:', err.message));
+    }
+    res.json({ done: true, sucesso, resultado: data || {}, crm });
+  } catch (e) { res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message }); }
+});
+
+// Fallback: força a atualização do CRM (swap ok na Bora mas heurística não reconheceu)
+app.post('/api/bora/sim-swap/:msisdn/sincronizar', authMiddleware, requirePerm('sim_swap'), async (req, res) => {
+  try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
+    const iccid = String(req.body.iccid || '').replace(/\s/g, '');
+    if (!iccid) return res.status(400).json({ erro: 'iccid obrigatório' });
+    const numero = normalizarMsisdnParaBora(req.params.msisdn);
+    const crm = await atualizarSimLocal({ msisdn: numero, iccid });
+    await pool.query(
+      `INSERT INTO sim_swap_historico (linha_id,msisdn,iccid_novo,iccid_anterior,status,usuario_id,detalhe) VALUES ($1,$2,$3,$4,'concluida_manual',$5,$6)`,
+      [crm.linhaId || null, numero, iccid, crm.iccidAnterior || null, req.user?.id || null, 'sincronizacao manual']
+    ).catch(() => null);
+    res.json({ ok: true, crm });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ─── REATIVAÇÃO DE LINHA ──────────────────────────────────────────────────────
 // Passo 1 — Busca dados da linha para exibir no modal de confirmação
 app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const msisdn = req.params.msisdn;
     const details = await boraGet(`/api/Subscription/${msisdn}/details`);
     const accountId = details?.accountId || null;
@@ -4800,6 +4968,7 @@ app.get('/api/bora/reativar/:msisdn', authMiddleware, async (req, res) => {
 // Passo 2 — Suspende a linha (cancela recorrência automaticamente na Bora)
 app.post('/api/bora/linha/:msisdn/suspender-recorrencia', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const msisdn = req.params.msisdn;
     const details = await boraGet(`/api/Subscription/${msisdn}/details`);
     const accountId = details?.accountId;
@@ -4816,6 +4985,7 @@ app.post('/api/bora/linha/:msisdn/suspender-recorrencia', authMiddleware, async 
 // Passo 3 — Gera cart de reativação e processa primeiro pagamento
 app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.body.msisdn))) return;
     const { msisdn, planId, paymentTypePrimeiro, paymentTypeRecorrencia } = req.body;
     if (!msisdn) throw new Error('msisdn obrigatório');
     if (!planId) throw new Error('planId obrigatório');
@@ -4898,6 +5068,7 @@ app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
 //   2) POST /api/cart/recharge/{cartId}/{pix|billet|BilletCombo} { isRecurrence, recurrenceType, cartId }
 app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.body.msisdn))) return;
     const { msisdn, paymentType, pagamento, paymentTypeRecorrencia, recorrencia, email, nome } = req.body;
     if (!msisdn) throw new Error('msisdn obrigatório');
 
@@ -5037,6 +5208,7 @@ app.post('/api/bora/boleto/:billetId/reenviar', authMiddleware, async (req, res)
 // PIX pendente de uma linha (por MSISDN) — busca em boletos de assinatura E de recarga
 app.get('/api/bora/linha/:msisdn/pix-pendente', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const msisdn = req.params.msisdn;
     const details = await boraGet(`/api/Subscription/${msisdn}/details`);
     const doc = details?.document || details?.cpf || null;
@@ -5113,6 +5285,7 @@ app.get('/api/bora/linha/:msisdn/pix-pendente', authMiddleware, async (req, res)
 // Envia o código PIX por WhatsApp para o MSISDN da linha
 app.post('/api/bora/linha/:msisdn/pix/enviar-whatsapp', authMiddleware, async (req, res) => {
   try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
     const { code, valor, plano } = req.body;
     const msisdn   = req.params.msisdn;
     const valorFmt = parseFloat(valor || 0) > 0
@@ -5132,6 +5305,7 @@ app.post('/api/bora/linha/:msisdn/pix/enviar-whatsapp', authMiddleware, async (r
 });
 
 app.get('/api/bora/linha/:doc/boleto', authMiddleware, async (req, res) => {  try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.doc))) return;
     const boletos = await boraGet(`/api/Subscriber/${req.params.doc}/billets`);
     const lista = Array.isArray(boletos) ? boletos : (boletos?.items || boletos?.billets || []);
     const b = lista.find(x => !x.paid && !x.paymentDate) || lista[0];
@@ -5492,6 +5666,62 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin.html'));
 });
 
+// ─── Migrations de permissões / sim-swap (adicionadas) ───────────────────────
+// Tabela de permissões por vendedor (usada em todo o código mas nunca criada no schema)
+async function garantirTabelaPermissoes() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vendedor_permissoes (
+      id SERIAL PRIMARY KEY,
+      vendedor_id INTEGER NOT NULL REFERENCES vendedores(id) ON DELETE CASCADE,
+      permissao VARCHAR(50) NOT NULL,
+      UNIQUE (vendedor_id, permissao)
+    )
+  `);
+}
+
+// Migration única: preserva o acesso que os vendedores já tinham antes do gating completo.
+// Antes, Ativar/Ranking/Publicidade/Suporte eram globais, Calculadora era do principal e
+// a Troca de Titularidade era acessível a quem tinha Consultar Linha. Sem isto, ao ligar o
+// gating por permissão, os vendedores existentes perderiam esses acessos.
+async function garantirPermissoesPadrao() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS _migracoes (chave VARCHAR(80) PRIMARY KEY, aplicada_em TIMESTAMPTZ DEFAULT NOW())`);
+  const marca = await pool.query(`SELECT 1 FROM _migracoes WHERE chave='perm_defaults_v1'`);
+  if (marca.rows.length) return;
+  for (const perm of ['ativacao', 'ranking', 'publicidade', 'suporte']) {
+    await pool.query(`
+      INSERT INTO vendedor_permissoes (vendedor_id, permissao)
+      SELECT id, $1 FROM vendedores WHERE role IN ('vendedor','subvendedor')
+      ON CONFLICT DO NOTHING`, [perm]);
+  }
+  await pool.query(`
+    INSERT INTO vendedor_permissoes (vendedor_id, permissao)
+    SELECT id, 'calculadora' FROM vendedores WHERE role='vendedor'
+    ON CONFLICT DO NOTHING`);
+  await pool.query(`
+    INSERT INTO vendedor_permissoes (vendedor_id, permissao)
+    SELECT DISTINCT vendedor_id, 'titularidade' FROM vendedor_permissoes WHERE permissao='consulta'
+    ON CONFLICT DO NOTHING`);
+  await pool.query(`INSERT INTO _migracoes (chave) VALUES ('perm_defaults_v1') ON CONFLICT DO NOTHING`);
+  console.log('[DB] Permissões padrão aplicadas (perm_defaults_v1)');
+}
+
+// Auditoria das trocas de SIM (sim-swap)
+async function garantirTabelaSimSwap() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sim_swap_historico (
+      id SERIAL PRIMARY KEY,
+      linha_id INTEGER,
+      msisdn VARCHAR(25),
+      iccid_novo VARCHAR(50),
+      iccid_anterior VARCHAR(50),
+      status VARCHAR(20) DEFAULT 'concluida',
+      usuario_id INTEGER,
+      detalhe TEXT,
+      criado_em TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+}
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 // Migrations rodam APÓS o banco estar pronto, com retry — evita falhas silenciosas
 // no boot quando o pool ainda não conectou.
@@ -5505,6 +5735,9 @@ async function rodarMigrations(tentativa = 1) {
     ['tabela recargas pendentes', garantirTabelaRecargasPendentes],
     ['tabela materiais publicidade', garantirTabelaMateriaisPublicidade],
     ['tabelas suporte', garantirTabelasSuporte],
+    ['tabela permissoes', garantirTabelaPermissoes],
+    ['tabela sim-swap', garantirTabelaSimSwap],
+    ['permissoes padrao', garantirPermissoesPadrao],
   ];
   let falhas = [];
   for (const [nome, fn] of migrations) {
