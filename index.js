@@ -2270,8 +2270,19 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
     // Isolamento: precisa possuir a linha (por msisdn quando houver; senão pelo documento).
     if (!(await garantirLinhaDoUsuario(req, res, msisdn || doc))) return;
 
-    // Atualiza o assinante na Bora (mesmo endpoint de cadastro faz update por documento)
-    const boraResp = await boraPost('/api/Subscriber', { ...subscriber, document: doc });
+    // Busca o cadastro atual pra preservar o ID — sem ele a Bora tenta CRIAR de novo
+    // e responde "já existe um usuário cadastrado". Com o id, ela ATUALIZA.
+    let atual = {};
+    try { atual = (await boraGet(`/api/Subscriber/${doc}/document`)) || {}; } catch {}
+
+    // Mescla: base = cadastro atual (traz id e campos que o form não envia),
+    // sobrescrito pelos campos editados.
+    const payload = { ...atual, ...subscriber, document: doc };
+    if (atual.id != null) payload.id = atual.id;
+    if (atual.idSubscriberExternal != null) payload.idSubscriberExternal = atual.idSubscriberExternal;
+    if (atual.subscriberId != null && payload.subscriberId == null) payload.subscriberId = atual.subscriberId;
+
+    const boraResp = await boraPost('/api/Subscriber', payload);
 
     // Reflete nome/documento nas linhas do cliente no CRM local
     const params = [String(subscriber.name).trim(), doc];
