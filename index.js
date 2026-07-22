@@ -2270,9 +2270,18 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
     // Isolamento: precisa possuir a linha (por msisdn quando houver; senão pelo documento).
     if (!(await garantirLinhaDoUsuario(req, res, msisdn || doc))) return;
 
-    const detalheErro = (err) => err?.response?.data?.detail || err?.response?.data?.message
-      || (typeof err?.response?.data === 'string' ? err.response.data : null)
-      || (err?.response?.data ? JSON.stringify(err.response.data) : null) || err?.message || 'erro';
+    const detalheErro = (err) => {
+      const d = err?.response?.data;
+      if (d == null) return err?.message || 'erro';
+      if (typeof d === 'string') return d;
+      const partes = [];
+      if (d.title) partes.push(d.title);
+      if (d.detail) partes.push(d.detail);
+      if (d.message) partes.push(d.message);
+      if (d.errors) partes.push('campos: ' + JSON.stringify(d.errors));   // .NET validation por campo
+      if (Array.isArray(d.validationErrors)) partes.push(JSON.stringify(d.validationErrors));
+      return partes.length ? partes.join(' | ') : JSON.stringify(d).slice(0, 500);
+    };
 
     // 1) Reflete no CRM local primeiro (sempre acontece, mesmo se a Bora recusar)
     const params = [String(subscriber.name).trim(), doc];
@@ -2320,9 +2329,13 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
       const st = ePut.response?.status;
       if (st === 404 || st === 405 || st === 501) {
         try { boraResp = await boraPost('/api/Subscriber', payload); boraOk = true; }
-        catch (ePost) { boraErro = detalheErro(ePost); }
+        catch (ePost) {
+          boraErro = detalheErro(ePost);
+          console.error('[editar-cadastro] POST falhou', ePost.response?.status, 'payload=', JSON.stringify(payload), 'resp=', JSON.stringify(ePost.response?.data));
+        }
       } else {
         boraErro = detalheErro(ePut);
+        console.error('[editar-cadastro] PUT falhou', st, 'payload=', JSON.stringify(payload), 'resp=', JSON.stringify(ePut.response?.data));
       }
     }
 
