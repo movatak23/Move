@@ -2303,7 +2303,11 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
       const val = (edit != null && String(edit).trim() !== '') ? edit : fallbacks.find(f => f != null && String(f).trim() !== '');
       return (val == null || String(val).trim() === '') ? undefined : val;
     };
+    // A Bora exige o campo 'Id' (id do assinante) no update — sem ele: "'Id' must not be empty."
+    const subId = atual.id ?? atual.Id ?? atual.idSubscriberExternal ?? atual.subscriberId ?? null;
     const payload = {
+      Id: subId,
+      id: subId,
       document: doc,
       name:         v(subscriber.name, atual.name, atual.nome),
       email:        v(subscriber.email, atual.email),
