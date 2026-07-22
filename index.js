@@ -2285,10 +2285,30 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
       `UPDATE linhas SET nome_cliente=$1, documento_cliente=$2 WHERE ${where}`, params
     ).catch(() => ({ rowCount: 0 }));
 
-    // 2) Atualiza o assinante na Bora. Busca o atual pra mesclar id + campos não enviados.
+    // 2) Atualiza o assinante na Bora. Busca o atual só pra preencher campos deixados
+    // em branco — mas monta um payload LIMPO com a MESMA forma do cadastro da ativação
+    // (que a Bora aceita). Enviar o objeto cru do GET (...atual) causava ValidationException.
     let atual = {};
     try { atual = (await boraGet(`/api/Subscriber/${doc}/document`)) || {}; } catch {}
-    const payload = { ...atual, ...subscriber, document: doc };
+    const v = (edit, ...fallbacks) => {
+      const val = (edit != null && String(edit).trim() !== '') ? edit : fallbacks.find(f => f != null && String(f).trim() !== '');
+      return (val == null || String(val).trim() === '') ? undefined : val;
+    };
+    const payload = {
+      document: doc,
+      name:         v(subscriber.name, atual.name, atual.nome),
+      email:        v(subscriber.email, atual.email),
+      phone:        v(subscriber.phone, atual.phone, atual.telefone),
+      birthDate:    v(subscriber.birthDate, atual.birthDate),
+      street:       v(subscriber.street, atual.street),
+      number:       v(subscriber.number, atual.number),
+      neighborhood: v(subscriber.neighborhood, atual.neighborhood),
+      zipcode:      v(subscriber.zipcode, atual.zipcode, atual.zipCode),
+      city:         v(subscriber.city, atual.city),
+      uf:           v(subscriber.uf, atual.uf, atual.state),
+    };
+    // remove chaves undefined pra não mandar campo vazio
+    Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
 
     let boraOk = false, boraErro = null, boraResp = null;
     // POST sozinho estava caindo em "já existe" (create). Tenta PUT (update) e, se o
