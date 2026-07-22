@@ -2303,11 +2303,15 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
       const val = (edit != null && String(edit).trim() !== '') ? edit : fallbacks.find(f => f != null && String(f).trim() !== '');
       return (val == null || String(val).trim() === '') ? undefined : val;
     };
-    // A Bora exige o campo 'Id' (id do assinante) no update — sem ele: "'Id' must not be empty."
-    const subId = atual.id ?? atual.Id ?? atual.idSubscriberExternal ?? atual.subscriberId ?? null;
+    // A Bora exige o 'Id' do assinante no update. O cadastro tem subscriberId (id interno,
+    // o correto) e idSubscriberExternal (id externo). Antes eu mandava o externo → "já existe".
+    const subId = atual.subscriberId ?? atual.id ?? atual.Id ?? atual.idSubscriberExternal ?? null;
     const payload = {
       Id: subId,
-      id: subId,
+      subscriberId: atual.subscriberId ?? subId,
+      idSubscriberExternal: atual.idSubscriberExternal,
+      accountId: atual.accountId,
+      active: atual.active,
       document: doc,
       name:         v(subscriber.name, atual.name, atual.nome),
       email:        v(subscriber.email, atual.email),
@@ -2315,6 +2319,7 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
       birthDate:    v(subscriber.birthDate, atual.birthDate),
       street:       v(subscriber.street, atual.street),
       number:       v(subscriber.number, atual.number),
+      complement:   v(subscriber.complement, atual.complement),
       neighborhood: v(subscriber.neighborhood, atual.neighborhood),
       zipcode:      v(subscriber.zipcode, atual.zipcode, atual.zipCode),
       city:         v(subscriber.city, atual.city),
