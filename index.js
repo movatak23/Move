@@ -5947,6 +5947,35 @@ async function garantirTabelaSimSwap() {
 }
 
 // ─── Start ────────────────────────────────────────────────────────────────────
+// Extrai a causa real de erros de banco. AggregateError (todas as conexões falharam)
+// vinha "sem mensagem" — aqui pegamos o code/erro interno.
+function detalheErroDB(e) {
+  if (!e) return 'sem detalhe';
+  if (e.code) return e.code;
+  if (Array.isArray(e.errors) && e.errors.length) {
+    const inner = e.errors[0];
+    return inner?.code || inner?.message || String(inner);
+  }
+  return e.message || e.constructor?.name || 'sem detalhe';
+}
+
+// Aguarda o Postgres ficar acessível — o Railway às vezes sobe o app antes do banco,
+// e a rede interna leva alguns segundos. Faz ping com backoff antes das migrations.
+async function esperarBanco(maxTentativas = 15) {
+  for (let i = 1; i <= maxTentativas; i++) {
+    try {
+      await pool.query('SELECT 1');
+      if (i > 1) console.log(`[DB] Banco acessível (tentativa ${i}).`);
+      return true;
+    } catch (e) {
+      console.warn(`[DB] Banco indisponível (tentativa ${i}/${maxTentativas}): ${detalheErroDB(e)}. Aguardando...`);
+      await aguardar(Math.min(2000 * i, 15000));
+    }
+  }
+  console.error('[DB] Banco não respondeu após várias tentativas — migrations podem falhar neste boot.');
+  return false;
+}
+
 // Migrations rodam APÓS o banco estar pronto, com retry — evita falhas silenciosas
 // no boot quando o pool ainda não conectou.
 async function rodarMigrations(tentativa = 1) {
@@ -5969,13 +5998,14 @@ async function rodarMigrations(tentativa = 1) {
     try {
       await fn();
     } catch (e) {
-      falhas.push({ nome, erro: e.message });
+      falhas.push({ nome, erro: detalheErroDB(e) });
     }
   }
-  if (falhas.length && tentativa < 3) {
-    console.warn(`[DB] ${falhas.length} migration(s) falharam (tentativa ${tentativa}). Repetindo em 5s...`);
-    falhas.forEach(f => console.warn(`  - ${f.nome}: ${f.erro || 'erro sem mensagem'}`));
-    await aguardar(5000);
+  if (falhas.length && tentativa < 6) {
+    const espera = 5000 * tentativa; // backoff crescente
+    console.warn(`[DB] ${falhas.length} migration(s) falharam (tentativa ${tentativa}). Repetindo em ${espera/1000}s...`);
+    falhas.forEach(f => console.warn(`  - ${f.nome}: ${f.erro}`));
+    await aguardar(espera);
     return rodarMigrations(tentativa + 1);
   }
   if (falhas.length) {
@@ -5989,7 +6019,11 @@ async function rodarMigrations(tentativa = 1) {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Bora Vendas rodando na porta ${PORT}`);
-  // Migrations + primeiro polling só depois do servidor no ar e banco provavelmente pronto
-  setTimeout(() => { rodarMigrations().catch(e => console.error('[DB] Erro nas migrations:', e.message)); }, 3000);
-  setTimeout(checarRecargas, 2 * 60 * 1000);
+  // Espera o banco ficar acessível → roda migrations → primeiro polling.
+  // Assim um "blip" de conexão no boot do Railway não faz as migrations falharem.
+  (async () => {
+    await esperarBanco();
+    await rodarMigrations().catch(e => console.error('[DB] Erro nas migrations:', detalheErroDB(e)));
+    setTimeout(checarRecargas, 30 * 1000);
+  })();
 });
