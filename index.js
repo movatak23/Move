@@ -2352,7 +2352,7 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
       ok: true,
       linhasAtualizadas: rLocal.rowCount,
       boraAtualizado: boraOk,
-      avisoBora: boraOk ? null : `Bora recusou: ${boraErro} • DEBUG: idEnviado=${subId} | campos do cadastro=[${Object.keys(atual).join(', ')}]`,
+      avisoBora: boraOk ? null : `Salvo no CRM, mas a operadora (Bora) recusou a atualização: ${boraErro}`,
       bora: boraResp || null
     });
   } catch (e) {
