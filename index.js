@@ -112,6 +112,9 @@ async function boraRequest(method, endpoint, { params, body } = {}) {
     } else if (method === 'post') {
       headers['Content-Type'] = 'application/json';
       resp = await axios.post(`${BORA_BASE}${endpoint}`, body, { headers });
+    } else if (method === 'delete') {
+      headers['Content-Type'] = 'application/json';
+      resp = await axios.delete(`${BORA_BASE}${endpoint}`, { headers, data: body });
     } else {
       headers['Content-Type'] = 'application/json';
       resp = await axios.put(`${BORA_BASE}${endpoint}`, body, { headers });
@@ -146,6 +149,37 @@ async function boraPost(endpoint, body = {}) {
 
 async function boraPut(endpoint, body = {}) {
   return boraRequest('put', endpoint, { body });
+}
+
+async function boraDelete(endpoint, body = {}) {
+  return boraRequest('delete', endpoint, { body });
+}
+
+// ─── Pagamento com Cartão de Crédito (Bora) ──────────────────────────────────
+// A Bora NUNCA recebe o número do cartão pela nossa API. Para qualquer operação
+// paga com cartão (ativação, recarga, reativação, troca de plano), o fluxo é o
+// mesmo: cria-se o carrinho normalmente e, em vez de finalizar via /pix ou
+// /billet, chama-se POST /api/PaymentTransaction { cartId, firstPaymentType }.
+// A Bora devolve um link (ação GoToPaymentApp) para uma página hospedada por ela,
+// onde o cliente digita o cartão diretamente. A linha/recarga só é confirmada
+// quando esse pagamento é concluído (por isso msisdn pode vir nulo aqui).
+async function boraPagamentoCartao(cartId, firstPaymentType = 'Credit') {
+  return boraPost('/api/PaymentTransaction', { cartId, firstPaymentType });
+}
+
+// Extrai o link de pagamento (GoToPaymentApp) da resposta do PaymentTransaction.
+function extrairPaymentLink(resp) {
+  if (!resp) return null;
+  const acoes = resp.actions || resp.links || [];
+  const goto = Array.isArray(acoes)
+    ? (acoes.find(a => a.rel === 'GoToPaymentApp') || acoes.find(a => /payment|checkout|pay/i.test(a.rel || '')) || acoes[0])
+    : null;
+  return goto?.href || resp.paymentLink || resp.url || resp.link || null;
+}
+
+// true quando a forma de pagamento escolhida é cartão de crédito (aceita variações).
+function ehPagamentoCartao(tipo) {
+  return /^cred|^cart|card/i.test(String(tipo || '').trim());
 }
 
 
@@ -2763,12 +2797,15 @@ app.post('/api/app/ativar', authApp, async (req, res) => {
       pagamento = await boraPost(`/api/Cart/subscription/${cartId}/billet`, { isRecurrence: true, recurrenceType: recType });
     } else if (paymentType === 'billetcombo') {
       pagamento = await boraPost(`/api/Cart/subscription/${cartId}/BilletCombo`, {});
+    } else if (ehPagamentoCartao(paymentType)) {
+      pagamento = await boraPagamentoCartao(cartId);
     } else {
       throw new Error('Forma de pagamento inválida');
     }
 
     const msisdnFinal = pagamento?.msisdn || pagamento?.pmsisdn || null;
     const pixData = pagamento?.pix || null;
+    const paymentLink = ehPagamentoCartao(paymentType) ? extrairPaymentLink(pagamento) : null;
 
     // Salva no banco (vendedor_id = 1 = operação própria Move)
     const { rows: linhaRows } = await pool.query(
@@ -2803,6 +2840,7 @@ app.post('/api/app/ativar', authApp, async (req, res) => {
       msisdn: msisdnFinal,
       tipoChip,
       emailEnviado: subscriber.email,
+      paymentLink,
       pix: pixData ? { code: pixData.code, qrCodeUrl: pixData.qrCodeUrl } : null,
       billet: pagamento?.billet ? { url: pagamento.billet.url || pagamento.billet.digitableLine } : null,
     });
@@ -2892,12 +2930,9 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
       });
     } else if (paymentType === 'billetcombo') {
       pagamento = await boraPost(`/api/Cart/subscription/${cartId}/BilletCombo`, {});
-    } else if (paymentType === 'credit') {
-      // Cartão de crédito: a Bora NUNCA recebe o número do cartão pela nossa API — esse
-      // endpoint só devolve um link (GoToPaymentApp) pra uma página hospedada pela própria
-      // Bora, onde o cliente digita o cartão diretamente com eles. O número da linha só é
-      // atribuído quando esse pagamento é concluído (por isso pode vir nulo aqui).
-      pagamento = await boraPost('/api/PaymentTransaction', { cartId, firstPaymentType: 'Credit' });
+    } else if (ehPagamentoCartao(paymentType)) {
+      // Cartão de crédito: devolve link (GoToPaymentApp) para o cliente pagar direto na Bora.
+      pagamento = await boraPagamentoCartao(cartId);
     } else {
       throw new Error('paymentType inválido: use pix, billet, billetcombo ou credit');
     }
@@ -2929,9 +2964,7 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
 
     const pixData = pagamento?.pix || null;
     const msisdnFinal = pagamento?.msisdn || pagamento?.pmsisdn || cartPayload.msisdn || null;
-    const paymentLink = paymentType === 'credit'
-      ? (pagamento?.actions?.find(a => a.rel === 'GoToPaymentApp')?.href || pagamento?.actions?.[0]?.href || null)
-      : null;
+    const paymentLink = ehPagamentoCartao(paymentType) ? extrairPaymentLink(pagamento) : null;
 
     try {
       await pool.query(
@@ -3932,6 +3965,8 @@ app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
       pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/pix`, {});
     } else if (pagamento === 'billet') {
       pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/billet`, {});
+    } else if (ehPagamentoCartao(pagamento)) {
+      pagamentoResp = await boraPagamentoCartao(cartId);
     } else {
       throw new Error('Forma de pagamento inválida');
     }
@@ -3939,6 +3974,7 @@ app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
     res.json({
       ok: true,
       cartId,
+      paymentLink: ehPagamentoCartao(pagamento) ? extrairPaymentLink(pagamentoResp) : null,
       pix: pixData ? { code: pixData.code, qrCodeUrl: pixData.qrCodeUrl } : null,
       billet: pagamentoResp?.billet ? { url: pagamentoResp.billet.url, barcode: pagamentoResp.billet.digitableLine || pagamentoResp.billet.barCode } : null
     });
@@ -3976,6 +4012,8 @@ app.post('/api/cliente/linha/:msisdn/reativar', authCliente, async (req, res) =>
       pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/BilletCombo`, payBody);
     } else if (tipoPrimeiro === 'billet') {
       pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/billet`, payBody);
+    } else if (ehPagamentoCartao(tipoPrimeiro)) {
+      pagamentoResp = await boraPagamentoCartao(cartId);
     } else {
       pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/pix`, payBody);
     }
@@ -3993,6 +4031,7 @@ app.post('/api/cliente/linha/:msisdn/reativar', authCliente, async (req, res) =>
       ok: true,
       msisdn,
       cartId,
+      paymentLink: ehPagamentoCartao(tipoPrimeiro) ? extrairPaymentLink(pagamentoResp) : null,
       pix:    pixCode ? { code: pixCode, qrCodeUrl: pixQrUrl } : null,
       billet: (barcode || billetUrl) ? { barcode, url: billetUrl } : null,
     });
@@ -4062,6 +4101,8 @@ app.post('/api/bora/recarregar', authMiddleware, async (req, res) => {
       pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/pix`, {});
     } else if (pagamento === 'billet') {
       pagamentoResp = await boraPost(`/api/Cart/recharge/${cartId}/billet`, {});
+    } else if (ehPagamentoCartao(pagamento)) {
+      pagamentoResp = await boraPagamentoCartao(cartId);
     } else {
       throw new Error('Forma de pagamento inválida');
     }
@@ -4088,6 +4129,7 @@ app.post('/api/bora/recarregar', authMiddleware, async (req, res) => {
     res.json({
       ok: true,
       cartId,
+      paymentLink: ehPagamentoCartao(pagamento) ? extrairPaymentLink(pagamentoResp) : null,
       pix: pixData ? { code: pixData.code || null, qrCodeUrl: pixData.qrCodeUrl || null } : null,
       billet: pagamentoResp?.billet ? {
         url: pagamentoResp.billet.url || pagamentoResp.billet.digitableLine || null,
@@ -4942,6 +4984,73 @@ app.post('/api/bora/linha/:msisdn/cancelar-recorrencia', authMiddleware, async (
   }
 });
 
+// ─── CARTÕES DA RECORRÊNCIA (gerenciamento) ───────────────────────────────────
+// Lista os cartões de crédito cadastrados na recorrência da linha.
+// Bora: GET /api/Subscription/{accountId}/card (accountId vem dos details da linha).
+app.get('/api/bora/linha/:msisdn/cartoes', authMiddleware, async (req, res) => {
+  try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
+    const details = await boraGet(`/api/Subscription/${req.params.msisdn}/details`);
+    const accountId = details?.accountId;
+    if (!accountId) throw new Error('accountId não encontrado para esta linha');
+    const data = await boraGet(`/api/Subscription/${accountId}/card`);
+    const lista = Array.isArray(data) ? data : (data?.cards || data?.items || data?.data || []);
+    const cartoes = lista.map(c => ({
+      paymentId: c.paymentId || c.id || c.paymentMethodId || null,
+      brand:     c.brand || c.bandeira || c.cardBrand || null,
+      last4:     c.last4 || c.lastFourDigits || c.finalDigits || (c.number ? String(c.number).slice(-4) : null),
+      holder:    c.holderName || c.holder || c.name || null,
+      validade:  c.expiration || c.expiryDate || (c.expMonth && c.expYear ? `${c.expMonth}/${c.expYear}` : null),
+      principal: c.main === true || c.default === true || c.principal === true,
+    }));
+    res.json({ ok: true, accountId, recurrenceType: details?.recurrenceType || details?.recurrence?.paymentType || null, cartoes, raw: data });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// Exclui um cartão da recorrência pelo paymentId.
+// Bora: DELETE /api/Subscription/{paymentId}/card.
+app.delete('/api/bora/linha/:msisdn/cartao/:paymentId', authMiddleware, async (req, res) => {
+  try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
+    const { paymentId } = req.params;
+    if (!paymentId || paymentId === 'null') throw new Error('paymentId do cartão não informado');
+    const data = await boraDelete(`/api/Subscription/${paymentId}/card`);
+    res.json({ ok: true, data });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
+// Gera um link (PaymentTransaction) para o cliente cadastrar/trocar o cartão da
+// recorrência. Cria um carrinho de recarga do plano atual e finaliza via cartão —
+// a Bora hospeda a página de captura do cartão e passa a usá-lo na recorrência.
+app.post('/api/bora/linha/:msisdn/recorrencia/cartao', authMiddleware, async (req, res) => {
+  try {
+    if (!(await garantirLinhaDoUsuario(req, res, req.params.msisdn))) return;
+    const msisdn = req.params.msisdn;
+    const details = await boraGet(`/api/Subscription/${msisdn}/details`);
+    const documento = details?.document || details?.cpf || details?.subscriber?.document || null;
+    const clientId = details?.boraIntegration?.customerId || details?.boraData?.customerId || details?.customerId || null;
+    // Plano atual da linha (último do array de planos) ou o enviado no corpo.
+    const planArray = Array.isArray(details?.plan) ? details.plan : [];
+    const planId = req.body.planId || planArray[planArray.length - 1]?.planId || planArray[planArray.length - 1]?.id || null;
+    if (!planId) throw new Error('planId da recorrência não encontrado — informe planId no corpo');
+
+    const cart = await boraPost('/api/Cart/recharge', { msisdn, planId, clientId });
+    const cartId = cart?.cartId || cart?.id;
+    if (!cartId) throw new Error('cartId não retornado pela Bora');
+
+    const pagamento = await boraPagamentoCartao(cartId);
+    const paymentLink = extrairPaymentLink(pagamento);
+    if (!paymentLink) throw new Error('A Bora não retornou o link de pagamento com cartão');
+    res.json({ ok: true, cartId, paymentLink, documento });
+  } catch (e) {
+    res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
+  }
+});
+
 // ─── TROCAR PLANO ─────────────────────────────────────────────────────────────
 app.get('/api/bora/trocar-plano/:msisdn', authMiddleware, async (req, res) => {
   try {
@@ -4956,14 +5065,51 @@ app.get('/api/bora/trocar-plano/:msisdn', authMiddleware, async (req, res) => {
 app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
   try {
     if (!(await garantirLinhaDoUsuario(req, res, req.body.msisdn))) return;
+    const { msisdn, planId, paymentType } = req.body;
+
+    // Passo 1: cancela a recorrência atual e cria a nova ativação do plano escolhido.
     const data = await boraPost('/api/Subscription/changeplan', req.body);
-    if (req.body.msisdn && req.body.planId) {
+
+    // Passo 2 (Boleto/Cartão): a Bora devolve um carrinho que precisa ser finalizado
+    // "conforme fluxo padrão de uma recarga". Só o Boleto Combado já vem finalizado.
+    // BilletCombo → nada a fazer. Billet → recharge/billet. Cartão → PaymentTransaction.
+    const cartId = data?.cartId || data?.cart?.id || data?.id || null;
+    let paymentLink = null;
+    let pixData = data?.pix || null;
+    let billetData = data?.billet || null;
+    const tipo = String(paymentType || '').toLowerCase();
+
+    if (cartId && tipo && tipo !== 'billetcombo') {
+      let pagamentoResp;
+      if (ehPagamentoCartao(tipo)) {
+        pagamentoResp = await boraPagamentoCartao(cartId);
+        paymentLink = extrairPaymentLink(pagamentoResp);
+      } else if (tipo === 'pix') {
+        pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/pix`, { cartId });
+      } else {
+        pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/billet`, { cartId });
+      }
+      pixData = pagamentoResp?.pix || pixData;
+      billetData = pagamentoResp?.billet || billetData;
+    }
+
+    if (msisdn && planId) {
       await pool.query(
         "UPDATE linhas SET plano_id=$1 WHERE msisdn=$2",
-        [req.body.planId, req.body.msisdn]
+        [planId, msisdn]
       );
     }
-    res.json(data);
+    res.json({
+      ok: true,
+      cartId,
+      paymentLink,
+      pix: pixData ? { code: pixData.code || null, qrCodeUrl: pixData.qrCodeUrl || null } : null,
+      billet: billetData ? {
+        url: billetData.url || billetData.digitableLine || null,
+        barcode: billetData.barCode || billetData.digitableLine || null
+      } : null,
+      data
+    });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
@@ -5234,12 +5380,15 @@ app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
       pagamento = await boraPost(`/api/Cart/reactivation/${cartId}/pix`, {});
     } else if (tipoNorm === 'billetcombo') {
       pagamento = await boraPost(`/api/Cart/reactivation/${cartId}/BilletCombo`, {});
+    } else if (ehPagamentoCartao(tipoNorm)) {
+      pagamento = await boraPagamentoCartao(cartId);
     } else {
       pagamento = await boraPost(`/api/Cart/reactivation/${cartId}/billet`, {});
     }
 
     const pixData    = pagamento?.pix    || null;
     const billetData = pagamento?.billet || null;
+    const paymentLink = ehPagamentoCartao(tipoNorm) ? extrairPaymentLink(pagamento) : null;
 
     // Envia email com o link de pagamento (não bloqueia a resposta)
     if (emailTitular) {
@@ -5265,6 +5414,7 @@ app.post('/api/bora/reativar/pagamento', authMiddleware, async (req, res) => {
       ok: true,
       cartId,
       msisdn,
+      paymentLink,
       pix: pixData ? {
         code:      pixData.code      || null,
         qrCodeUrl: pixData.qrCodeUrl || null,
@@ -5307,6 +5457,8 @@ app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
       pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/pix`, payBody);
     } else if (tipoPrimeiro === 'billetcombo') {
       pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/BilletCombo`, payBody);
+    } else if (ehPagamentoCartao(tipoPrimeiro)) {
+      pagamentoResp = await boraPagamentoCartao(cartId);
     } else {
       pagamentoResp = await boraPost(`/api/cart/recharge/${cartId}/billet`, payBody);
     }
@@ -5346,6 +5498,7 @@ app.post('/api/bora/reativar', authMiddleware, async (req, res) => {
       ok: true,
       msisdn,
       cartId,
+      paymentLink: ehPagamentoCartao(tipoPrimeiro) ? extrairPaymentLink(pagamentoResp) : null,
       pix:    pixCode ? { code: pixCode, qrCodeUrl: pixQrUrl } : null,
       billet: (barcode || billetUrl) ? { barcode, url: billetUrl } : null,
     });

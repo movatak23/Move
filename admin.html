@@ -1372,6 +1372,7 @@ select option { background: var(--bg3); }
             <select id="rec-pagamento">
               <option value="pix">PIX</option>
               <option value="billet">Boleto</option>
+              <option value="credit">Cartão de Crédito</option>
             </select>
           </div>
           <div class="field" style="display:flex;align-items:flex-end">
@@ -1642,6 +1643,20 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- Modal Cartões da Recorrência -->
+<div class="modal-overlay" id="modal-cartoes">
+  <div class="modal" style="width:540px">
+    <div class="modal-title">💳 Cartões da Recorrência</div>
+    <div id="cartoes-msisdn-info" style="color:var(--accent);font-family:var(--mono);margin-bottom:16px;font-size:13px"></div>
+    <div id="cartoes-lista" class="loading">Carregando cartões...</div>
+    <div id="cartoes-resultado"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-cartoes')">Fechar</button>
+      <button class="btn btn-primary" id="btn-add-cartao" onclick="gerarLinkCartaoRecorrencia()">➕ Cadastrar/Trocar Cartão</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal WhatsApp Cliente -->
 <div class="modal-overlay" id="modal-whatsapp">
   <div class="modal" style="max-width:480px">
@@ -1736,6 +1751,7 @@ select option { background: var(--bg3); }
               <option value="billet">Boleto</option>
               <option value="billetcombo">Boleto Combado</option>
               <option value="pix">Pix</option>
+              <option value="credit">Cartão de Crédito</option>
             </select>
           </div>
           <div class="field">
@@ -4258,6 +4274,7 @@ function renderLinhaConsulta(l, cons) {
         : (traduzirStatus(l.status).label !== 'BLOQUEADO'
             ? `<button class="btn btn-primary btn-sm" onclick="reativarLinha('${l.msisdn||''}')">🔄 Reativar Recorrência</button>`
             : '')}
+      <button class="btn btn-secondary btn-sm" onclick="abrirCartoesRecorrencia('${l.msisdn||''}')">💳 Cartões da Recorrência</button>
       ${state.user.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTransferirVenda('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}')">🔀 Transferir Venda</button>` : ''}
       ${podeRecurso('titularidade') ? `<button class="btn btn-secondary btn-sm" onclick="abrirTitularidade('${l.msisdn||''}','${(l.name||'').replace(/'/g,'')}','${l.document||''}')">🔁 Trocar Titularidade</button>` : ''}
       ${podeRecurso('sim_swap') ? `<button class="btn btn-secondary btn-sm" onclick="abrirSimSwap('${l.msisdn||''}','${l.iccid||''}')">🔄 Trocar SIM</button>` : ''}
@@ -5391,6 +5408,20 @@ function copiarPix() {
   }
 }
 
+// Bloco reutilizável do link de pagamento com cartão de crédito (Bora hospeda a página).
+// A Move nunca recebe o número do cartão. Retorna '' quando não há link.
+function blocoPagamentoCartao(link, msg) {
+  if (!link) return '';
+  const texto = msg || 'O cliente preenche o cartão direto nessa página da Bora — a Move não recebe o número do cartão em nenhum momento. A operação só é confirmada depois desse pagamento ser concluído.';
+  return '<div class="info-card" style="margin-top:16px;border-color:#9b59b6">' +
+    '<div class="section-title" style="color:#9b59b6;margin-bottom:12px">&#128179; Pagamento com Cartão</div>' +
+    '<div style="color:var(--text2);font-size:13px;margin-bottom:12px">' + texto + '</div>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+    '<a href="' + link + '" target="_blank" class="btn btn-primary btn-sm">&#128279; Abrir Pagamento com Cartão</a>' +
+    '<button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText(\'' + link + '\');toast(\'Link de pagamento copiado!\')">&#128203; Copiar link</button>' +
+    '</div></div>';
+}
+
 function copiarLinhaDigitavel() {
   if (!window._billetBar) { toast('Linha digitável indisponível', 'error'); return; }
   navigator.clipboard.writeText(window._billetBar)
@@ -5580,6 +5611,9 @@ async function confirmarRecarga() {
     });
     let html = `<div class="section-card"><div class="section-title">Cobrança gerada</div>
       <div class="info-row"><span class="k">Cart ID</span><span class="v mono">${data.cartId||'—'}</span></div>`;
+    if (data.paymentLink) {
+      html += blocoPagamentoCartao(data.paymentLink, 'O cliente preenche o cartão direto nessa página da Bora — a Move não recebe o número do cartão. A recarga é confirmada quando o pagamento for concluído.');
+    }
     if (data.pix?.code) {
       window._pixCode = data.pix.code;
       html += `<div class="field" style="margin-top:14px"><label>Código PIX</label><textarea readonly rows="4">${data.pix.code}</textarea></div>
@@ -5717,10 +5751,14 @@ async function confirmarReativacao() {
     // Monta resultado do pagamento
     let htmlResultado = `<div style="color:var(--green);font-weight:500;margin-bottom:16px">✔ Linha ${msisdn} reativada com sucesso!</div>`;
 
-    htmlResultado += `
+    if (pag.paymentLink) {
+      htmlResultado += blocoPagamentoCartao(pag.paymentLink, 'O cliente preenche o cartão direto nessa página da Bora — a Move não recebe o número do cartão. A reativação é confirmada quando o pagamento for concluído.');
+    } else {
+      htmlResultado += `
       <div style="background:rgba(0,191,255,0.08);border:1px solid var(--accent);border-radius:var(--r);padding:12px 14px;font-size:13px;color:var(--accent);margin-bottom:16px">
         📧 O link de pagamento foi enviado para o e-mail de cadastro do titular.
       </div>`;
+    }
 
     if (pag.pix?.code) {
       const qrHtml = pag.pix.qrCodeUrl
@@ -5816,15 +5854,89 @@ async function confirmarTrocaPlano() {
   if (!_trocarPlanoMsisdn || !_trocarPlanoSelecionado) { toast('Selecione um plano', 'error'); return; }
   const paymentType = document.getElementById('trocar-plano-pay').value;
   try {
-    await api('POST', '/api/bora/trocar-plano', {
+    const data = await api('POST', '/api/bora/trocar-plano', {
       msisdn: _trocarPlanoMsisdn,
       planId: _trocarPlanoSelecionado.id,
       paymentType
     });
     toast(`Plano alterado para ${_trocarPlanoSelecionado.nome}`);
-    fecharModal('modal-trocar-plano');
+    // Cartão/Boleto geram um pagamento a concluir — mostra no modal em vez de fechar.
+    if (data.paymentLink || data.billet?.url || data.billet?.barcode || data.pix?.code) {
+      let html = `<div style="color:var(--green);font-weight:500;margin-bottom:12px">✔ Plano alterado para ${_trocarPlanoSelecionado.nome}. Conclua o pagamento abaixo.</div>`;
+      if (data.paymentLink) html += blocoPagamentoCartao(data.paymentLink, 'O cliente preenche o cartão direto nessa página da Bora — a Move não recebe o número do cartão. A troca de plano é confirmada quando o pagamento for concluído.');
+      if (data.pix?.code) html += `<div class="field" style="margin-top:14px"><label>Código PIX</label><textarea readonly rows="4">${data.pix.code}</textarea></div><button class="btn btn-secondary btn-sm" onclick="navigator.clipboard.writeText('${data.pix.code}');toast('PIX copiado!')">Copiar PIX</button>`;
+      if (data.billet?.url || data.billet?.barcode) html += `<div class="field" style="margin-top:14px"><label>Boleto / Linha digitável</label><textarea readonly rows="3">${data.billet.barcode || data.billet.url}</textarea></div>${data.billet.url ? `<a class="btn btn-secondary btn-sm" href="${data.billet.url}" target="_blank" style="margin-top:8px">Abrir boleto</a>` : ''}`;
+      document.getElementById('trocar-plano-lista').innerHTML = html;
+      document.getElementById('trocar-plano-pagamento').style.display = 'none';
+      document.getElementById('btn-confirmar-troca').style.display = 'none';
+    } else {
+      fecharModal('modal-trocar-plano');
+    }
     realizarConsulta();
   } catch(e) { toast(e.message, 'error'); }
+}
+
+// ── CARTÕES DA RECORRÊNCIA ────────────────────────────────────────────────────
+let _cartoesMsisdn = null;
+async function abrirCartoesRecorrencia(msisdn) {
+  if (!msisdn || msisdn === '—') { toast('MSISDN inválido', 'error'); return; }
+  _cartoesMsisdn = msisdn;
+  document.getElementById('cartoes-msisdn-info').textContent = `Linha: ${msisdn}`;
+  document.getElementById('cartoes-lista').innerHTML = '<div class="loading">Carregando cartões...</div>';
+  document.getElementById('cartoes-resultado').innerHTML = '';
+  document.getElementById('modal-cartoes').classList.add('open');
+  try {
+    const data = await api('GET', `/api/bora/linha/${msisdn}/cartoes`);
+    const cartoes = data.cartoes || [];
+    const recInfo = data.recurrenceType ? `<div style="color:var(--text3);font-size:12px;margin-bottom:10px">Recorrência atual: <b>${data.recurrenceType}</b></div>` : '';
+    if (!cartoes.length) {
+      document.getElementById('cartoes-lista').innerHTML = recInfo + '<div style="color:var(--text2);padding:12px">Nenhum cartão cadastrado na recorrência desta linha. Use "Cadastrar/Trocar Cartão" para gerar o link.</div>';
+      return;
+    }
+    document.getElementById('cartoes-lista').innerHTML = recInfo + cartoes.map(c => {
+      const desc = `${c.brand || 'Cartão'} •••• ${c.last4 || '????'}`;
+      const extra = [c.holder, c.validade].filter(Boolean).join(' · ');
+      const pid = c.paymentId || '';
+      return `<div class="info-card" style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+        <div>
+          <div style="font-weight:600">${desc} ${c.principal ? '<span class="badge badge-green" style="margin-left:6px">Principal</span>' : ''}</div>
+          ${extra ? `<div style="color:var(--text3);font-size:12px">${extra}</div>` : ''}
+        </div>
+        ${pid ? `<button class="btn btn-danger btn-sm" onclick="excluirCartaoRecorrencia('${pid}',this)">🗑 Excluir</button>` : '<span style="color:var(--text3);font-size:11px">sem paymentId</span>'}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    document.getElementById('cartoes-lista').innerHTML = `<div style="color:var(--red);padding:12px">${e.message}</div>`;
+  }
+}
+
+async function excluirCartaoRecorrencia(paymentId, btn) {
+  if (!_cartoesMsisdn || !paymentId) { toast('Dados do cartão inválidos', 'error'); return; }
+  if (!confirm('Excluir este cartão da recorrência?')) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Excluindo...'; }
+  try {
+    await api('DELETE', `/api/bora/linha/${_cartoesMsisdn}/cartao/${paymentId}`);
+    toast('Cartão excluído');
+    abrirCartoesRecorrencia(_cartoesMsisdn);
+  } catch(e) {
+    toast(e.message, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '🗑 Excluir'; }
+  }
+}
+
+async function gerarLinkCartaoRecorrencia() {
+  if (!_cartoesMsisdn) { toast('MSISDN inválido', 'error'); return; }
+  const btn = document.getElementById('btn-add-cartao');
+  btn.disabled = true; btn.textContent = 'Gerando link...';
+  document.getElementById('cartoes-resultado').innerHTML = '<div class="loading">Gerando link de pagamento...</div>';
+  try {
+    const data = await api('POST', `/api/bora/linha/${_cartoesMsisdn}/recorrencia/cartao`, {});
+    document.getElementById('cartoes-resultado').innerHTML = blocoPagamentoCartao(data.paymentLink, 'Envie este link ao cliente: ele cadastra o cartão direto na página da Bora e passa a ser usado na recorrência. A Move não recebe o número do cartão.');
+  } catch(e) {
+    document.getElementById('cartoes-resultado').innerHTML = `<div class="section-card" style="color:var(--red)">${e.message}</div>`;
+  } finally {
+    btn.disabled = false; btn.textContent = '➕ Cadastrar/Trocar Cartão';
+  }
 }
 
 // ── CHURN ─────────────────────────────────────────────────────────────────────
