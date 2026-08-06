@@ -1003,7 +1003,7 @@ select option { background: var(--bg3); }
             <div class="field"><label>E-mail <span class="req">*</span></label><input type="email" id="cli-email"></div>
           </div>
           <div class="form-row">
-            <div class="field"><label>Telefone</label><input type="text" id="cli-tel"></div>
+            <div class="field"><label>Telefone</label><input type="text" id="cli-tel" onblur="mascararTelefone(this)"></div>
             <div class="field"><label>Data de Nascimento</label><input type="date" id="cli-nasc"></div>
           </div>
           <div class="form-row triple">
@@ -1229,7 +1229,7 @@ select option { background: var(--bg3); }
         <div class="form-row triple">
           <div class="field">
             <label>MSISDN (Número)</label>
-            <input type="text" id="calc-msisdn" placeholder="Ex: 81999990000, 81988880000, 81977770000">
+            <input type="text" id="calc-msisdn" placeholder="Ex: (81) 99999-0000 — cole em qualquer formato" onblur="mascararTelefone(this)">
           </div>
           <div class="field">
             <label>Data Início</label>
@@ -1387,10 +1387,7 @@ select option { background: var(--bg3); }
         <div class="form-row">
           <div class="field">
             <label>Número da linha / MSISDN</label>
-            <div class="field-prefix">
-              <span class="prefix-tag">55</span>
-              <input type="text" id="rec-msisdn" placeholder="81999999999" maxlength="11">
-            </div>
+            <input type="text" id="rec-msisdn" placeholder="Ex: (81) 99999-9999 — cole em qualquer formato" onblur="mascararTelefone(this)">
           </div>
           <div class="field" style="display:flex;align-items:flex-end">
             <button class="btn btn-primary" onclick="buscarPlanosRecarga()">Buscar planos</button>
@@ -1437,9 +1434,8 @@ select option { background: var(--bg3); }
           </div>
           <div class="field">
             <label>Valor</label>
-            <div id="consulta-valor-wrap-prefix" class="field-prefix" style="display:none">
-              <span class="prefix-tag">55</span>
-              <input type="text" id="consulta-valor" placeholder="81999999999" maxlength="11">
+            <div id="consulta-valor-wrap-prefix" style="display:none">
+              <input type="text" id="consulta-valor" placeholder="Ex: (81) 99999-9999 — cole em qualquer formato" onblur="mascararTelefone(this)">
             </div>
             <input type="text" id="consulta-valor-plain" placeholder="Digite o valor..." style="display:block">
           </div>
@@ -1626,7 +1622,7 @@ select option { background: var(--bg3); }
     <div class="modal-title" id="modal-vendedor-title">Novo Vendedor</div>
     <div class="form-row">
       <div class="field"><label>Nome</label><input type="text" id="mv-nome"></div>
-      <div class="field"><label>Telefone</label><input type="text" id="mv-tel"></div>
+      <div class="field"><label>Telefone</label><input type="text" id="mv-tel" onblur="mascararTelefone(this)"></div>
     </div>
     <div class="form-row">
       <div class="field"><label>E-mail</label><input type="email" id="mv-email"></div>
@@ -1826,7 +1822,7 @@ select option { background: var(--bg3); }
     </div>
     <div class="form-row">
       <div class="field"><label>E-mail</label><input type="email" id="ec-email"></div>
-      <div class="field"><label>Telefone</label><input type="text" id="ec-tel"></div>
+      <div class="field"><label>Telefone</label><input type="text" id="ec-tel" onblur="mascararTelefone(this)"></div>
     </div>
     <div class="form-row">
       <div class="field"><label>Data de Nascimento</label><input type="date" id="ec-nasc"></div>
@@ -1858,7 +1854,7 @@ select option { background: var(--bg3); }
     </div>
     <div class="form-row">
       <div class="field"><label>E-mail <span style="color:var(--red)">*</span></label><input type="email" id="cc-email"></div>
-      <div class="field"><label>Telefone</label><input type="text" id="cc-tel"></div>
+      <div class="field"><label>Telefone</label><input type="text" id="cc-tel" onblur="mascararTelefone(this)"></div>
     </div>
     <div class="form-row">
       <div class="field"><label>Data de Nascimento</label><input type="date" id="cc-nasc"></div>
@@ -2019,10 +2015,7 @@ select option { background: var(--bg3); }
       <div class="section-card" id="port-linha-resumo" style="margin-bottom:14px"></div>
       <div class="form-row single">
         <div class="field"><label>Número a ser portado (com DDD)</label>
-          <div class="field-prefix">
-            <span class="prefix-tag">55</span>
-            <input type="text" id="port-pmsisdn" placeholder="81999990000" maxlength="11">
-          </div>
+          <input type="text" id="port-pmsisdn" placeholder="Ex: (81) 99999-0000 — cole em qualquer formato" onblur="mascararTelefone(this)">
         </div>
       </div>
       <div style="font-size:11.5px;color:var(--text3);background:var(--bg3);border-radius:8px;padding:10px 12px;margin-bottom:12px;line-height:1.7">
@@ -2153,7 +2146,7 @@ select option { background: var(--bg3); }
     <div class="modal-title" id="modal-admin-title">Novo Administrador</div>
     <div class="form-row">
       <div class="field"><label>Nome</label><input type="text" id="ma-nome"></div>
-      <div class="field"><label>Telefone</label><input type="text" id="ma-tel"></div>
+      <div class="field"><label>Telefone</label><input type="text" id="ma-tel" onblur="mascararTelefone(this)"></div>
     </div>
     <div class="form-row">
       <div class="field"><label>E-mail</label><input type="email" id="ma-email"></div>
@@ -2923,7 +2916,7 @@ async function salvarVendedor() {
   const body = {
     nome: document.getElementById('mv-nome').value,
     email: document.getElementById('mv-email').value,
-    telefone: document.getElementById('mv-tel').value,
+    telefone: document.getElementById('mv-tel').value.replace(/\D/g,''),
     senha: document.getElementById('mv-senha').value,
     ativo: document.getElementById('mv-ativo').value === 'true',
     permissoes
@@ -3056,7 +3049,7 @@ async function salvarAdmin() {
   const body = {
     nome: document.getElementById('ma-nome').value.trim(),
     email: document.getElementById('ma-email').value.trim(),
-    telefone: document.getElementById('ma-tel').value.trim(),
+    telefone: document.getElementById('ma-tel').value.replace(/\D/g,''),
     senha: document.getElementById('ma-senha').value,
     ativo: document.getElementById('ma-ativo').value === 'true'
   };
@@ -3293,6 +3286,27 @@ function formatBRL(v) {
   return 'R$ ' + (isFinite(n) ? n : 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Normaliza qualquer telefone/linha colado (com máscara, DDI, +55, parênteses, traços)
+// para o MSISDN da Bora: 55 + DDD + número. Idempotente — nunca duplica o 55.
+function normalizarMsisdn(raw) {
+  let d = String(raw || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2);   // remove DDI 55 já colado
+  if (d.length === 10 || d.length === 11) return '55' + d;    // DDD+número → adiciona o 55
+  return d;                                                    // fora do padrão: envia dígitos (backend normaliza)
+}
+// Máscara visual de telefone BR: (81) 99999-0000 — aceita colado com DDI/máscara.
+function formatarTelefoneBR(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (d.length > 11 && d.startsWith('55')) d = d.slice(2);
+  d = d.slice(0, 11);
+  if (d.length <= 2) return d;
+  if (d.length <= 6) return '(' + d.slice(0, 2) + ') ' + d.slice(2);
+  if (d.length <= 10) return '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6);
+  return '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7, 11);
+}
+// Formata o campo automaticamente (usar em onblur dos campos de telefone/linha).
+function mascararTelefone(el) { if (el) el.value = formatarTelefoneBR(el.value); }
+
 function detectarTipoChip(d) {
   const raw = d?.iccidType || d?.type || d?.simType || d?.cardType || '';
   const t = String(raw).toLowerCase();
@@ -3338,10 +3352,7 @@ async function verificarIccid() {
         '<div id="port-numero-wrap" style="display:none;margin-bottom:16px">' +
           '<div class="field">' +
             '<label>Número a Portar (com DDD)</label>' +
-            '<div class="field-prefix">' +
-              '<span class="prefix-tag">55</span>' +
-              '<input type="text" id="port-numero" placeholder="81999990000" maxlength="11">' +
-            '</div>' +
+            '<input type="text" id="port-numero" placeholder="Ex: (81) 99999-0000 — cole em qualquer formato" onblur="mascararTelefone(this)">' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -3360,7 +3371,7 @@ function selecionarTipoAtivacao(tipo) {
 
 function irParaCliente() {
   if (state.ativacao.tipoAtivacao === 'portabilidade') {
-    const num = '55' + document.getElementById('port-numero').value.trim().replace(/\D/g,'');
+    const num = normalizarMsisdn(document.getElementById('port-numero').value);
     if (!num || num.length < 12) { toast('Informe o número a portar com DDD','error'); return; }
     state.ativacao.msisdnPortabilidade = num;
   } else {
@@ -3456,7 +3467,7 @@ async function confirmarCliente() {
     document: doc,
     name: document.getElementById('cli-nome').value.trim(),
     email: document.getElementById('cli-email').value.trim(),
-    phone: document.getElementById('cli-tel').value.trim(),
+    phone: document.getElementById('cli-tel').value.replace(/\D/g,''),
     birthDate: document.getElementById('cli-nasc').value,
     street: document.getElementById('cli-rua').value.trim(),
     number: document.getElementById('cli-numero').value.trim(),
@@ -3808,7 +3819,7 @@ function gerarMeses(inicio, fim) {
 }
 
 async function calcularComissao(modo) {
-  const msisdn = document.getElementById('calc-msisdn').value.trim();
+  const msisdn = normalizarMsisdn(document.getElementById('calc-msisdn').value);
   const vidSel = document.getElementById('calc-vendedor').value || (state.user.role !== 'admin' ? String(state.user.id) : '');
   if (!msisdn && !vidSel) { toast('Informe o número ou selecione um vendedor', 'error'); return; }
   calcVendedorSelecionado = vidSel;
@@ -4305,7 +4316,7 @@ async function realizarConsulta() {
   const rawValor = isNumero
     ? document.getElementById('consulta-valor').value.trim()
     : document.getElementById('consulta-valor-plain').value.trim();
-  const valor = isNumero ? ('55' + rawValor.replace(/\D/g,'')) : rawValor;
+  const valor = isNumero ? normalizarMsisdn(rawValor) : rawValor;
   if (!rawValor) { toast('Informe o valor para consulta','error'); return; }
   const res = document.getElementById('consulta-resultado');
   res.innerHTML = '<div class="loading">Consultando...</div>';
@@ -4477,7 +4488,7 @@ async function salvarEditarCliente() {
     document: document.getElementById('ec-doc').value.replace(/\D/g, ''),
     name: nome,
     email: document.getElementById('ec-email').value.trim(),
-    phone: document.getElementById('ec-tel').value.trim(),
+    phone: document.getElementById('ec-tel').value.replace(/\D/g,''),
     birthDate: document.getElementById('ec-nasc').value || '',
     street: document.getElementById('ec-rua').value.trim(),
     number: document.getElementById('ec-numero').value.trim(),
@@ -4548,7 +4559,7 @@ async function salvarCriarCliente() {
   if (!val('cc-uf')) faltando.push('UF');
   if (faltando.length) { toast('Preencha: ' + faltando.join(', '), 'error'); return; }
   const subscriber = {
-    document: doc, name: val('cc-nome'), email, phone: val('cc-tel'),
+    document: doc, name: val('cc-nome'), email, phone: document.getElementById('cc-tel').value.replace(/\D/g,''),
     birthDate: document.getElementById('cc-nasc').value || '',
     street: val('cc-rua'), number: val('cc-numero'), neighborhood: val('cc-bairro'),
     zipcode: cep, city: val('cc-cidade'), uf: val('cc-uf').toUpperCase()
@@ -5191,14 +5202,14 @@ function portSelecionarLinha(idx) {
 }
 
 async function realizarPortabilidade() {
-  const numero = document.getElementById('port-pmsisdn').value.trim().replace(/\D/g,'');
-  if (numero.length < 10) { toast('Número a portar inválido','error'); return; }
+  const numero = normalizarMsisdn(document.getElementById('port-pmsisdn').value);
+  if (numero.length < 12) { toast('Número a portar inválido','error'); return; }
   if (!_portState.linhaSel) { toast('Selecione uma linha','error'); return; }
   const btn = document.getElementById('port-btn-iniciar');
   btn.disabled = true; btn.textContent = 'Solicitando...';
   try {
     await api('POST', '/api/portabilidade/realizar', {
-      pmsisdn: '55' + numero,
+      pmsisdn: numero,
       document: _portState.documento,
       name: _portState.linhaSel.name || null,
     });
@@ -5765,7 +5776,7 @@ function resetRecarga() {
 }
 
 async function buscarPlanosRecarga() {
-  const msisdn = '55' + document.getElementById('rec-msisdn').value.replace(/\D/g,'');
+  const msisdn = normalizarMsisdn(document.getElementById('rec-msisdn').value);
   if (!msisdn || msisdn.length < 12) { toast('Informe um número válido com DDD','error'); return; }
   state.recarga = { msisdn, plano: null };
   document.getElementById('rec-linha-info').innerHTML = '<div class="loading">Consultando linha...</div>';
