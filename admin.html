@@ -2506,7 +2506,7 @@ async function loadDashboard() {
       .then(kpi => {
         document.getElementById('st-linhas-ativas-dia').textContent = kpi.linhas_ativas_base ?? 0;
         document.getElementById('st-linhas-ativas-total').textContent = kpi.linhas_ativas_total ?? 0;
-        document.getElementById('st-receita-move').textContent = 'R$' + parseFloat(kpi.receita_move_periodo || 0).toFixed(2);
+        document.getElementById('st-receita-move').textContent = '' + formatBRL(parseFloat(kpi.receita_move_periodo || 0));
         document.getElementById('st-inadimplencia').textContent = `${kpi.linhas_inadimplentes || 0} (${parseFloat(kpi.taxa_inadimplencia || 0).toFixed(1)}%)`;
         document.getElementById('st-cancelamentos').textContent = `${kpi.linhas_canceladas || 0} (${parseFloat(kpi.taxa_cancelamento || 0).toFixed(1)}%)`;
       })
@@ -2558,16 +2558,16 @@ async function loadDashboard() {
     document.getElementById('st-vendedores').textContent = dados.length;
     document.getElementById('st-ativacoes').textContent = totAtiv;
     document.getElementById('st-recargas').textContent = totRec;
-    document.getElementById('st-comissoes').textContent = 'R$'+totCom.toFixed(2);
+    document.getElementById('st-comissoes').textContent = '' + formatBRL(totCom);
     const tbody = document.getElementById('dash-tabela');
     if (!dados.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="ico">📊</div><p>Nenhum dado no período</p></td></tr>`; return; }
     tbody.innerHTML = dados.map(r => `<tr class="dash-vendedor-row" style="cursor:pointer" data-vendedor-id="${r.vendedor_id}" data-vendedor-nome="${escapeHtmlAttr(r.nome)}" data-vendedor-email="${escapeHtmlAttr(r.email)}" onclick="abrirDetalheVendedorFromRow(this)">
       <td><strong>${r.nome}</strong><br><small class="text-muted">${r.email}</small></td>
       <td>${r.ativacoes}</td>
       <td>${r.recargas}</td>
-      <td class="currency">R$ ${parseFloat(r.comissao_ativacao||0).toFixed(2)}</td>
-      <td class="currency">R$ ${parseFloat(r.comissao_recarga||0).toFixed(2)}</td>
-      <td><strong class="currency">R$ ${parseFloat(r.total_comissao||0).toFixed(2)}</strong></td>
+      <td class="currency">${formatBRL(parseFloat(r.comissao_ativacao||0))}</td>
+      <td class="currency">${formatBRL(parseFloat(r.comissao_recarga||0))}</td>
+      <td><strong class="currency">${formatBRL(parseFloat(r.total_comissao||0))}</strong></td>
       <td><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();abrirDetalheVendedor(${r.vendedor_id}, this.closest('tr').dataset.vendedorNome, this.closest('tr').dataset.vendedorEmail)">Ver</button></td>
     </tr>`).join('');
   } catch(e) { toast(e.message, 'error'); }
@@ -2646,10 +2646,10 @@ async function carregarDetalheVendedor() {
     const totalComissao = dados.resumo.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
     document.getElementById('vd-ativ').textContent = dados.linhas_ativas_periodo ?? 0;
     document.getElementById('vd-rec').textContent = rec?.quantidade || 0;
-    document.getElementById('vd-com').textContent = 'R$'+totalComissao.toFixed(2);
+    document.getElementById('vd-com').textContent = '' + formatBRL(totalComissao);
     document.getElementById('vd-linhas-total').textContent = dados.linhas_vinculadas_total ?? (dados.linhas?.length || 0);
     document.getElementById('vd-canceladas').textContent = dados.linhas_canceladas_inativas ?? 0;
-    document.getElementById('vd-receita-move').textContent = 'R$'+(totalComissao*2).toFixed(2);
+    document.getElementById('vd-receita-move').textContent = '' + formatBRL(totalComissao*2);
 
     // Detalhe dos números cancelados/inativos (mostrado ao clicar no card)
     const detBox = document.getElementById('vd-canceladas-detalhe');
@@ -2673,7 +2673,7 @@ async function carregarDetalheVendedor() {
           <td class="mono">${c.msisdn || '—'}</td>
           <td>${c.plano_nome || '—'}</td>
           <td class="mono">${parseInt(c.quantidade_recargas || 0, 10)}</td>
-          <td class="currency">R$ ${parseFloat(c.total_comissao_recargas || 0).toFixed(2)}</td>
+          <td class="currency">${formatBRL(parseFloat(c.total_comissao_recargas || 0))}</td>
           <td class="mono">${formatarDataReferencia(c.ultima_recarga)}</td>
         </tr>`).join('');
       }
@@ -2688,11 +2688,11 @@ async function carregarDetalheVendedor() {
         <td class="mono">${l.msisdn || '—'}</td>
         <td>${l.msisdn ? `<a href="javascript:void(0)" onclick="abrirCadastroCliente('${l.msisdn}')" style="color:var(--accent);text-decoration:none;cursor:pointer" title="Ver cadastro do cliente">${l.nome_cliente || '—'}</a>` : (l.nome_cliente || '—')}</td>
         <td>${l.plano_nome || '—'}</td>
-        <td class="currency">R$ ${parseFloat(l.plano_valor||0).toFixed(2)}</td>
-        <td class="currency">R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}</td>
-        <td class="currency">R$ ${parseFloat(l.comissao_recarga||0).toFixed(2)}</td>
+        <td class="currency">${formatBRL(parseFloat(l.plano_valor||0))}</td>
+        <td class="currency">${formatBRL(parseFloat(l.comissao_ativacao||0))}</td>
+        <td class="currency">${formatBRL(parseFloat(l.comissao_recarga||0))}</td>
         <td class="mono">${parseInt(l.quantidade_recargas||0, 10)}</td>
-        <td><strong class="currency">R$ ${parseFloat(l.total_comissao||0).toFixed(2)}</strong></td>
+        <td><strong class="currency">${formatBRL(parseFloat(l.total_comissao||0))}</strong></td>
         <td>${l.data_ativacao ? new Date(l.data_ativacao).toLocaleDateString('pt-BR') : '—'}</td>
         <td>${state.user?.role === 'admin' ? `<button class="btn btn-secondary btn-sm" onclick="abrirTransferirVenda('${l.msisdn||''}','${(l.nome_cliente||'').replace(/'/g,'')}')">🔀 Transferir</button>` : '—'}</td>
       </tr>`).join('');
@@ -2708,8 +2708,8 @@ async function carregarDetalheVendedor() {
         <td class="mono">${t.msisdn || '—'}</td>
         <td>${t.nome_cliente || '—'}</td>
         <td>${t.plano_nome || '—'}</td>
-        <td class="currency">R$ ${parseFloat(t.valor_plano||0).toFixed(2)}</td>
-        <td class="currency">R$ ${parseFloat(t.comissao||0).toFixed(2)}</td>
+        <td class="currency">${formatBRL(parseFloat(t.valor_plano||0))}</td>
+        <td class="currency">${formatBRL(parseFloat(t.comissao||0))}</td>
       </tr>`).join('');
     }
   } catch(e) { toast(e.message, 'error'); }
@@ -2741,18 +2741,18 @@ function exportarRelatorioVendedorPDF() {
   doc.setFontSize(10);
   doc.text(`Vendedor: ${v.nome}${v.email ? ' — ' + v.email : ''}`, 14, 24);
   doc.text(`Período: ${ini} até ${fim}`, 14, 30);
-  doc.text(`Ativações: ${ativ?.quantidade || 0} | Recargas: ${rec?.quantidade || 0} | Linhas: ${dados.linhas?.length || 0} | Comissão total: R$ ${totalComissao.toFixed(2)}`, 14, 36);
+  doc.text(`Ativações: ${ativ?.quantidade || 0} | Recargas: ${rec?.quantidade || 0} | Linhas: ${dados.linhas?.length || 0} | Comissão total: ${formatBRL(totalComissao)}`, 14, 36);
 
   doc.autoTable({
     startY: 44,
     head: [['ICCID','MSISDN','Cliente','Plano','Valor Plano','Comissão Ativ.','Comissão Por Recarga','Quantidade de Recargas','Total','Ativação']],
     body: (dados.linhas || []).map(l => [
       l.iccid || '—', l.msisdn || '—', l.nome_cliente || '—', l.plano_nome || '—',
-      `R$ ${parseFloat(l.plano_valor||0).toFixed(2)}`,
-      `R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}`,
-      `R$ ${parseFloat(l.comissao_recarga||0).toFixed(2)}`,
+      `${formatBRL(parseFloat(l.plano_valor||0))}`,
+      `${formatBRL(parseFloat(l.comissao_ativacao||0))}`,
+      `${formatBRL(parseFloat(l.comissao_recarga||0))}`,
       `${parseInt(l.quantidade_recargas||0, 10)}`,
-      `R$ ${parseFloat(l.total_comissao||0).toFixed(2)}`,
+      `${formatBRL(parseFloat(l.total_comissao||0))}`,
       l.data_ativacao ? new Date(l.data_ativacao).toLocaleDateString('pt-BR') : '—'
     ]),
     styles: { fontSize: 7 },
@@ -2765,8 +2765,8 @@ function exportarRelatorioVendedorPDF() {
     body: (dados.transacoes || []).map(t => [
       t.data_transacao ? new Date(t.data_transacao).toLocaleDateString('pt-BR') : (t.periodo_referencia || '—'),
       t.tipo || '—', t.msisdn || '—', t.nome_cliente || '—', t.plano_nome || '—',
-      `R$ ${parseFloat(t.valor_plano||0).toFixed(2)}`,
-      `R$ ${parseFloat(t.comissao||0).toFixed(2)}`
+      `${formatBRL(parseFloat(t.valor_plano||0))}`,
+      `${formatBRL(parseFloat(t.comissao||0))}`
     ]),
     styles: { fontSize: 7 },
     headStyles: { fontSize: 7 }
@@ -2794,7 +2794,7 @@ async function loadVendedores() {
       <td class="text-muted">${v.email}</td>
       <td class="text-muted">${v.telefone||'—'}</td>
       <td>${v.total_linhas}</td>
-      <td class="currency">R$ ${parseFloat(v.total_comissao||0).toFixed(2)}</td>
+      <td class="currency">${formatBRL(parseFloat(v.total_comissao||0))}</td>
       <td><span class="badge ${v.ativo?'badge-green':'badge-red'}">${v.ativo?'Ativo':'Inativo'}</span></td>
       <td>
         <button class="btn btn-secondary btn-sm" onclick="editarVendedor(${v.id},'${v.nome}','${v.email}','${v.telefone||''}',${v.ativo})">Editar</button>
@@ -3098,9 +3098,9 @@ async function loadPlanosComissao() {
     if (!dados.length) { tbody.innerHTML = `<tr><td colspan="7" class="empty-state"><div class="ico">📋</div><p>Nenhum plano configurado</p></td></tr>`; return; }
     tbody.innerHTML = dados.map(p => `<tr>
       <td><strong>${p.plano_nome}</strong><br><span class="mono">${p.plano_id}</span></td>
-      <td class="currency">R$ ${parseFloat(p.plano_valor).toFixed(2)}</td>
-      <td class="currency">R$ ${parseFloat(p.comissao_ativacao).toFixed(2)}</td>
-      <td class="currency">R$ ${parseFloat(p.comissao_recarga).toFixed(2)}</td>
+      <td class="currency">${formatBRL(parseFloat(p.plano_valor))}</td>
+      <td class="currency">${formatBRL(parseFloat(p.comissao_ativacao))}</td>
+      <td class="currency">${formatBRL(parseFloat(p.comissao_recarga))}</td>
       <td><span class="badge ${p.ativo?'badge-green':'badge-red'}">${p.ativo?'Ativo':'Inativo'}</span></td>
       <td style="text-align:center">
         <label class="toggle-switch" title="${p.habilitado ? 'Visível para vendedores' : 'Oculto para vendedores'}">
@@ -3138,8 +3138,8 @@ async function abrirModalPlano() {
       planosBoraCache.map(p => {
         const pid = p.idPlanExternal || p.id || p.planId || '';
         const pnome = p.name || p.nome || p.description || pid;
-        const rawVal = parseFloat(p.value || p.price || p.valor || 0); const pval = (rawVal > 500 ? rawVal/100 : rawVal).toFixed(2);
-        return `<option value="${pid}" data-nome="${pnome}" data-valor="${pval}">${pnome} — R$ ${pval}</option>`;
+        const valorReais = parseFloat(p.value || p.price || p.valor || 0) / 100;   // Bora manda em centavos
+        return `<option value="${pid}" data-nome="${pnome}" data-valor="${valorReais.toFixed(2)}">${pnome} — ${formatBRL(valorReais)}</option>`;
       }).join('');
   } catch(e) { toast('Erro ao carregar planos Bora: '+e.message,'error'); }
 }
@@ -3282,6 +3282,13 @@ function initWizardObserver() {
 // Compat: chamadas antigas continuam funcionando via wizard.
 function irParaStep(n) { mostrarStep(n); }
 function voltarStep(n) { mostrarStep(n); }
+
+// Formata um valor em REAIS no padrão brasileiro: R$ 1.234,56 (usar em TODO valor exibido).
+// Valores vindos da Bora (plan.value/price) vêm em CENTAVOS — dividir por 100 ANTES de chamar.
+function formatBRL(v) {
+  const n = Number(v);
+  return 'R$ ' + (isFinite(n) ? n : 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 function detectarTipoChip(d) {
   const raw = d?.iccidType || d?.type || d?.simType || d?.cardType || '';
@@ -3480,10 +3487,11 @@ async function carregarPlanos() {
     grid.innerHTML = listaPlanos.map(p => {
       const pid = p.idPlanExternal || p.id || p.planId;
       const com = mapaComissoes[pid];
-      return `<div class="plano-card" id="pc-${pid}" onclick="selecionarPlano('${pid}','${p.name||p.nome||pid}',${parseFloat(p.value||p.price||p.valor||0)})">
+      const valorReais = parseFloat(p.value||p.price||p.valor||0) / 100;   // Bora manda em centavos
+      return `<div class="plano-card" id="pc-${pid}" onclick="selecionarPlano('${pid}','${p.name||p.nome||pid}',${valorReais})">
         <div class="pnome">${p.name||p.nome||pid}</div>
-        <div class="pval">R$ ${parseFloat(p.value||p.price||p.valor||0).toFixed(2)}</div>
-        ${com ? `<div class="pcomissao">★ Comissão: R$ ${parseFloat(com.comissao_ativacao).toFixed(2)}</div>` : '<div class="pcomissao" style="color:var(--red)">Sem comissão configurada</div>'}
+        <div class="pval">${formatBRL(valorReais)}</div>
+        ${com ? `<div class="pcomissao">★ Comissão: ${formatBRL(com.comissao_ativacao)}</div>` : '<div class="pcomissao" style="color:var(--red)">Sem comissão configurada</div>'}
       </div>`;
     }).join('');
     document.getElementById('btn-plano-continuar').style.display = 'none';
@@ -3535,7 +3543,7 @@ function irParaConfirmacao() {
     ${a.msisdnPortabilidade ? `<div class="info-row"><span class="k">Número a Portar</span><span class="v mono">${a.msisdnPortabilidade}</span></div>` : ''}
     <div class="info-row"><span class="k">DDD</span><span class="v">${a.ddd}</span></div>
     <div class="info-row"><span class="k">Plano</span><span class="v">${a.plano.nome}</span></div>
-    <div class="info-row"><span class="k">Valor</span><span class="v currency">R$ ${parseFloat(a.plano.valor).toFixed(2)}</span></div>
+    <div class="info-row"><span class="k">Valor</span><span class="v currency">${formatBRL(a.plano.valor)}</span></div>
     <div class="info-row"><span class="k">Pagamento</span><span class="v">${payLabels[a.pagamento]}</span></div>
     ${a.recorrencia ? '<div class="info-row"><span class="k">Recorrência</span><span class="v">' + (a.recorrencia === 'BILLET' ? 'Boleto Mensal' : 'Cartão de Crédito') + '</span></div>' : ''}
   `;
@@ -3574,7 +3582,7 @@ async function confirmarAtivacao() {
         ? '<span class="badge badge-yellow">⏳ Aguardando Pagamento</span>'
         : '<span class="badge badge-green">✓ Linha Ativada</span>') + '</span></div>' +
       (data.msisdn ? '<div class="info-row"><span class="k">Número</span><span class="v mono">' + data.msisdn + '</span></div>' : '') +
-      '<div class="info-row"><span class="k">Comissão Prevista</span><span class="v currency">R$ ' + parseFloat(data.comissao||0).toFixed(2) + '</span></div>' +
+      '<div class="info-row"><span class="k">Comissão Prevista</span><span class="v currency">' + formatBRL(parseFloat(data.comissao||0)) + '</span></div>' +
       '<div style="font-size:11px;color:var(--text3);margin-top:-4px;padding:0 4px">Creditada após a Bora confirmar o pagamento da linha (próxima sincronização, em até 5 min)</div>' +
     '</div>';
 
@@ -3695,9 +3703,9 @@ async function loadMeuPainel() {
     const totCom = dados.resumo.reduce((a,r)=>a+parseFloat(r.total_comissao||0),0);
     document.getElementById('mp-ativ').textContent = ativ?.quantidade||0;
     document.getElementById('mp-rec').textContent = rec?.quantidade||0;
-    document.getElementById('mp-com').textContent = 'R$'+totCom.toFixed(2);
+    document.getElementById('mp-com').textContent = '' + formatBRL(totCom);
     document.getElementById('mp-linhas-total').textContent = dados.linhas_vinculadas_total ?? (dados.linhas?.length || 0);
-    document.getElementById('mp-receita-move').textContent = 'R$'+(totCom*2).toFixed(2);
+    document.getElementById('mp-receita-move').textContent = '' + formatBRL(totCom*2);
 
     const tbody = document.getElementById('mp-tabela');
     if (!dados.transacoes.length) {
@@ -3709,7 +3717,7 @@ async function loadMeuPainel() {
         <td class="mono">${t.msisdn||'—'}</td>
         <td>${t.nome_cliente||'—'}</td>
         <td>${t.plano_nome||'—'}</td>
-        <td class="currency">R$ ${parseFloat(t.comissao||0).toFixed(2)}</td>
+        <td class="currency">${formatBRL(parseFloat(t.comissao||0))}</td>
       </tr>`).join('');
     }
 
@@ -3722,11 +3730,11 @@ async function loadMeuPainel() {
         <td class="mono">${l.msisdn||'—'}</td>
         <td>${l.nome_cliente||'—'}</td>
         <td>${l.plano_nome||'—'}</td>
-        <td class="currency">R$ ${parseFloat(l.plano_valor||0).toFixed(2)}</td>
-        <td class="currency">R$ ${parseFloat(l.comissao_ativacao||0).toFixed(2)}</td>
-        <td class="currency">R$ ${parseFloat(l.comissao_recarga||0).toFixed(2)}</td>
+        <td class="currency">${formatBRL(parseFloat(l.plano_valor||0))}</td>
+        <td class="currency">${formatBRL(parseFloat(l.comissao_ativacao||0))}</td>
+        <td class="currency">${formatBRL(parseFloat(l.comissao_recarga||0))}</td>
         <td class="mono">${parseInt(l.quantidade_recargas||0, 10)}</td>
-        <td class="currency">R$ ${parseFloat(l.total_comissao||0).toFixed(2)}</td>
+        <td class="currency">${formatBRL(parseFloat(l.total_comissao||0))}</td>
         <td>${l.data_ativacao ? new Date(l.data_ativacao).toLocaleDateString('pt-BR') : '—'}</td>
         <td class="text-muted">${l.ultima_checagem?new Date(l.ultima_checagem).toLocaleString('pt-BR'):'Nunca'}</td>
       </tr>`).join('');
@@ -3763,7 +3771,7 @@ async function initCalculadora() {
     const planos = await api('GET', '/api/planos-comissao');
     const selP = document.getElementById('calc-plano');
     selP.innerHTML = '<option value="">Detectar automaticamente</option>' +
-      planos.map(p => '<option value="' + p.plano_id + '">' + p.plano_nome + ' — R$ ' + parseFloat(p.plano_valor).toFixed(2) + '</option>').join('');
+      planos.map(p => '<option value="' + p.plano_id + '">' + p.plano_nome + ' — ' + formatBRL(parseFloat(p.plano_valor)) + '</option>').join('');
   } catch(e) { toast('Erro ao carregar dados: ' + e.message, 'error'); }
 }
 
@@ -3828,7 +3836,7 @@ async function calcularComissao(modo) {
       '<div class="stat-card blue"><div class="stat-label">Números Consultados</div><div class="stat-value">' + totalLinhas + '</div></div>' +
       '<div class="stat-card yellow"><div class="stat-label">Total Recargas</div><div class="stat-value">' + totalRecargas + '</div></div>' +
       (totalErros ? '<div class="stat-card red"><div class="stat-label">Erros</div><div class="stat-value">' + totalErros + '</div></div>' : '') +
-      '<div class="stat-card" style="border-color:var(--accent)"><div class="stat-label">Total Geral Comissão</div><div class="stat-value">R$' + totalGeral.toFixed(2) + '</div></div>';
+      '<div class="stat-card" style="border-color:var(--accent)"><div class="stat-label">Total Geral Comissão</div><div class="stat-value">' + formatBRL(totalGeral) + '</div></div>';
 
     if (!calcResultado.length) {
       document.getElementById('calc-tabela').innerHTML = '<tr><td colspan="6" class="empty-state"><div class="ico">📋</div><p>Nenhum resultado</p></td></tr>';
@@ -3853,7 +3861,7 @@ async function calcularComissao(modo) {
         linha.plano_atual_nome + ' &nbsp;|&nbsp; ' +
         (linha.data_ativacao ? new Date(linha.data_ativacao).toLocaleDateString('pt-BR') : '—') + ' &nbsp;|&nbsp; ' +
         '<span class="badge badge-green">' + (linha.status || '—') + '</span>' +
-        ' &nbsp;|&nbsp; <strong class="currency">Total: R$ ' + linha.total_comissao.toFixed(2) + '</strong>' +
+        ' &nbsp;|&nbsp; <strong class="currency">Total: ' + formatBRL(linha.total_comissao) + '</strong>' +
         '</td>' +
         '<td><button class="btn btn-primary btn-sm" onclick="abrirModalAtribuirIdx(' + idx + ')">+ Atribuir</button></td>' +
         '</tr>';
@@ -3864,7 +3872,7 @@ async function calcularComissao(modo) {
           '<td class="mono" style="padding-left:32px">' + dataFmt + '</td>' +
           '<td><span class="badge ' + (r.tipo === 'ativacao' ? 'badge-green' : 'badge-blue') + '">' + r.tipo + '</span></td>' +
           '<td>' + (r.plano_nome || '—') + '</td>' +
-          '<td class="currency">R$ ' + r.comissao.toFixed(2) + '</td>' +
+          '<td class="currency">' + formatBRL(r.comissao) + '</td>' +
           '<td colspan="2"><span class="badge ' + (r.sem_config ? 'badge-red' : 'badge-green') + '">' + (r.sem_config ? 'Plano Sem Comissão' : 'Com Comissão') + '</span></td>' +
         '</tr>';
       }
@@ -3943,7 +3951,7 @@ async function exportarRelatorioPDF() {
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(0, 229, 160);
-  doc.text('Total: R$ ' + totalGeral.toFixed(2), 130, 38);
+  doc.text('Total: ' + formatBRL(totalGeral), 130, 38);
 
   let y = 48;
 
@@ -3970,7 +3978,7 @@ async function exportarRelatorioPDF() {
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(0, 229, 160);
     doc.setFontSize(9);
-    doc.text('R$ ' + (linha.total_comissao || 0).toFixed(2), 185, y + 3, { align: 'right' });
+    doc.text('' + formatBRL(linha.total_comissao || 0), 185, y + 3, { align: 'right' });
 
     y += 12;
 
@@ -3979,7 +3987,7 @@ async function exportarRelatorioPDF() {
       r.data ? new Date(r.data).toLocaleDateString('pt-BR') : r.mes,
       r.tipo.toUpperCase(),
       r.plano_nome || '—',
-      r.sem_config ? 'Sem config' : 'R$ ' + r.comissao.toFixed(2)
+      r.sem_config ? 'Sem config' : '' + formatBRL(r.comissao)
     ]);
 
     if (rows.length) {
@@ -4058,7 +4066,7 @@ async function abrirModalAtribuir(linha) {
     '<div class="info-row"><span class="k">Plano Atual</span><span class="v">' + (linha.plano_atual_nome||'—') + '</span></div>' +
     '<div class="info-row"><span class="k">Ativação</span><span class="v">' + dataFmt + '</span></div>' +
     '<div class="info-row"><span class="k">Recargas</span><span class="v">' + (linha.resultado||[]).filter(r=>r.tipo==='recarga').length + '</span></div>' +
-    '<div class="info-row"><span class="k">Total Comissão</span><span class="v currency">R$ ' + (linha.total_comissao||0).toFixed(2) + '</span></div>';
+    '<div class="info-row"><span class="k">Total Comissão</span><span class="v currency">' + formatBRL(linha.total_comissao||0) + '</span></div>';
 
   // Carrega vendedores
   const selV = document.getElementById('atribuir-vendedor');
@@ -4836,7 +4844,7 @@ async function abrirPixPendente(msisdn, btn) {
     const data = await api('GET', `/api/bora/linha/${msisdn}/pix-pendente`);
     if (!data.tem_pix) { toast('Nenhum PIX pendente encontrado para esta linha','error'); return; }
     window._pixPendente = data;
-    const valorFmt = data.valor > 0 ? `R$ ${parseFloat(data.valor).toFixed(2).replace('.', ',')}` : '';
+    const valorFmt = data.valor > 0 ? formatBRL(data.valor) : '';
     const foneFmt  = msisdn.replace('55','').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
     document.getElementById('pix-modal-plano-wrap').textContent = data.plano || 'Cobrança pendente';
     document.getElementById('pix-modal-code').textContent = data.code || '';
@@ -4931,14 +4939,14 @@ async function retroCalcular() {
       <td><strong>${v.vendedor}</strong></td>
       <td>${v.ativacoes}</td>
       <td>${v.recargas}</td>
-      <td><strong class="currency">R$ ${v.comissao.toFixed(2)}</strong></td>
+      <td><strong class="currency">${formatBRL(v.comissao)}</strong></td>
     </tr>`).join('');
     if (r.sem_vendedor && (r.sem_vendedor.ativacoes || r.sem_vendedor.recargas)) {
       html += `<tr style="opacity:0.7">
         <td><em>Sem vendedor (órfãos)</em></td>
         <td>${r.sem_vendedor.ativacoes}</td>
         <td>${r.sem_vendedor.recargas}</td>
-        <td><em class="currency">R$ ${r.sem_vendedor.comissao.toFixed(2)}</em></td>
+        <td><em class="currency">${formatBRL(r.sem_vendedor.comissao)}</em></td>
       </tr>`;
     }
     tbody.innerHTML = html;
@@ -5135,7 +5143,7 @@ async function portBuscarLinhas() {
     const lista = document.getElementById('port-linhas-lista');
     lista.innerHTML = linhas.map((l, i) => {
       const planoNome = l.plan ? [l.plan.title, l.plan.subtitle].filter(Boolean).join(' · ') : 'Plano';
-      const preco = l.plan && l.plan.price ? (' — R$ ' + (parseInt(l.plan.price,10)/100).toFixed(2).replace('.',',')) : '';
+      const preco = l.plan && l.plan.price ? (' — ' + formatBRL(parseInt(l.plan.price,10)/100)) : '';
       return `<div class="section-card" style="cursor:pointer;border:1px solid var(--border2)" onclick="portSelecionarLinha(${i})">
         <div style="font-weight:700;color:var(--accent)">${planoNome}${preco}</div>
         <div style="font-size:12.5px;color:var(--text2);margin-top:4px">📱 ${fmtTelLinha(l.msisdn)} &nbsp;·&nbsp; DDD ${l.areaCode || '—'}</div>
@@ -5553,7 +5561,7 @@ async function loadRanking(periodo = 'mes') {
           <div style="font-size:10px;color:var(--text3)">RECARGAS</div>
         </div>
         <div style="text-align:center;min-width:100px">
-          <div style="font-size:18px;font-weight:700;color:var(--yellow)">R$ ${parseFloat(v.total_comissao).toFixed(2)}</div>
+          <div style="font-size:18px;font-weight:700;color:var(--yellow)">${formatBRL(parseFloat(v.total_comissao))}</div>
           <div style="font-size:10px;color:var(--text3)">COMISSÃO</div>
         </div>
       </div>
@@ -5573,7 +5581,7 @@ async function loadInadimplencia() {
     }
     tbody.innerHTML = lista.map(b => {
       const venc = b.dueDate || b.expiration ? new Date(b.dueDate||b.expiration).toLocaleDateString('pt-BR') : '—';
-      const valor = b.value ? 'R$ '+(parseFloat(b.value)/100).toFixed(2) : '—';
+      const valor = b.value ? formatBRL(parseFloat(b.value)/100) : '—';
       return `<tr>
         <td>${b.name||b.nome||'—'}</td>
         <td class="mono">${b.documento||b.document||'—'}</td>
@@ -5775,7 +5783,7 @@ async function buscarPlanosRecarga() {
     document.getElementById('rec-planos-grid').innerHTML = window._recPlanos.map((p, idx) => {
       return `<div class="plano-card" id="rec-plano-${p.id}" onclick="selecionarPlanoRecargaIdx(${idx})">
         <div class="pnome">${p.nome}</div>
-        <div class="pval">R$ ${p.valor.toFixed(2)}</div>
+        <div class="pval">${formatBRL(p.valor)}</div>
       </div>`;
     }).join('');
     document.getElementById('rec-planos-wrap').style.display = 'block';
@@ -5879,8 +5887,8 @@ function reativarLinha(msisdn) {
   ]).then(([data, comissoes]) => {
     const planName  = data.planName  || '—';
     const planValue = data.details?.planData?.value
-      ? (data.details.planData.value / 100).toFixed(2)
-      : (data.details?.plan?.value ? (data.details.plan.value / 100).toFixed(2) : '0.00');
+      ? data.details.planData.value / 100
+      : (data.details?.plan?.value ? data.details.plan.value / 100 : 0);
     const recType   = data.recurrenceType || '—';
 
     document.getElementById('modal-reativar')._planId = data.planId || null;
@@ -5893,7 +5901,7 @@ function reativarLinha(msisdn) {
       <div class="info-card">
         <div class="info-row"><span class="k">Número</span><span class="v mono">${msisdn}</span></div>
         <div class="info-row"><span class="k">Plano</span><span class="v">${planName}</span></div>
-        <div class="info-row"><span class="k">Valor</span><span class="v currency">R$ ${planValue}</span></div>
+        <div class="info-row"><span class="k">Valor</span><span class="v currency">${formatBRL(planValue)}</span></div>
         <div class="info-row"><span class="k">Forma de pagamento da recorrência</span><span class="v">${recType}</span></div>
       </div>`;
 
@@ -6023,11 +6031,10 @@ async function abrirTrocarPlano(msisdn) {
       planos.map(p => {
         const pid = p.idPlanExternal || p.id || p.planId || '';
         const pnome = p.name || p.nome || pid;
-        const rawVal = parseFloat(p.value || p.price || p.valor || 0);
-        const pval = (rawVal / 100).toFixed(2).replace('.', ',');
+        const valorReais = parseFloat(p.value || p.price || p.valor || 0) / 100;   // Bora manda em centavos
         return `<div class="plano-card" id="tp-${pid}" onclick="selecionarPlanoTroca('${pid}','${pnome}')">
           <div class="pnome">${pnome}</div>
-          <div class="pval">R$ ${pval}</div>
+          <div class="pval">${formatBRL(valorReais)}</div>
         </div>`;
       }).join('') +
       '</div>';
