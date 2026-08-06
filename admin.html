@@ -713,6 +713,17 @@ select option { background: var(--bg3); }
   margin-bottom: 20px;
 }
 .section-title { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
+
+/* Wizard de ativação — deslizamento lateral entre etapas */
+.wizard-viewport { overflow: hidden; position: relative; transition: height .38s cubic-bezier(.4,0,.2,1); }
+.wizard-track { display: flex; align-items: flex-start; transition: transform .4s cubic-bezier(.4,0,.2,1); }
+.wizard-panel { flex: 0 0 100%; width: 100%; box-sizing: border-box; }
+.wizard-nav { display: flex; align-items: center; gap: 12px; margin-top: 22px; }
+.wizard-nav .spacer { flex: 1; }
+.req { color: var(--red); }
+.field-erros { background: var(--red-dim); border: 1px solid var(--red); border-radius: var(--r); padding: 10px 14px; font-size: 12.5px; color: var(--red); margin: 4px 0 4px; }
+.field-erros ul { margin: 6px 0 0 18px; }
+.field-erros li { margin: 2px 0; }
 </style>
 </head>
 <body>
@@ -949,8 +960,10 @@ select option { background: var(--bg3); }
         <div class="flow-step" id="fs-5"><span class="step-num">05</span>CONFIRMAR</div>
       </div>
 
+      <div class="wizard-viewport" id="wizard-viewport">
+      <div class="wizard-track" id="wizard-track">
       <!-- Step 1: ICCID -->
-      <div id="step-1" class="section-card">
+      <div class="wizard-panel section-card" id="step-1">
         <div class="section-title">Número do Chip (ICCID)</div>
         <div class="form-row">
           <div class="field">
@@ -971,45 +984,53 @@ select option { background: var(--bg3); }
       </div>
 
       <!-- Step 2: CLIENTE -->
-      <div id="step-2" class="section-card" style="display:none">
+      <div class="wizard-panel section-card" id="step-2">
         <div class="section-title">Dados do Cliente</div>
         <div class="form-row">
           <div class="field">
-            <label>CPF/CNPJ</label>
+            <label>CPF/CNPJ <span class="req">*</span></label>
             <input type="text" id="cli-doc" placeholder="000.000.000-00">
           </div>
-          <div class="field" style="display:flex;align-items:flex-end">
-            <button class="btn btn-secondary" onclick="buscarCliente()">Buscar</button>
+          <div class="field" style="display:flex;align-items:flex-end;gap:8px">
+            <button class="btn btn-secondary" onclick="mostrarStep(1)">← Voltar</button>
+            <button class="btn btn-primary" onclick="buscarCliente()">Buscar</button>
           </div>
         </div>
         <div id="cli-result"></div>
         <div id="cli-form" style="display:none">
           <div class="form-row">
-            <div class="field"><label>Nome Completo</label><input type="text" id="cli-nome"></div>
-            <div class="field"><label>E-mail</label><input type="email" id="cli-email"></div>
+            <div class="field"><label>Nome Completo <span class="req">*</span></label><input type="text" id="cli-nome"></div>
+            <div class="field"><label>E-mail <span class="req">*</span></label><input type="email" id="cli-email"></div>
           </div>
           <div class="form-row">
             <div class="field"><label>Telefone</label><input type="text" id="cli-tel"></div>
             <div class="field"><label>Data de Nascimento</label><input type="date" id="cli-nasc"></div>
           </div>
           <div class="form-row triple">
-            <div class="field"><label>Rua</label><input type="text" id="cli-rua" placeholder="Nome da rua"></div>
-            <div class="field"><label>Número</label><input type="text" id="cli-numero" placeholder="123"></div>
-            <div class="field"><label>Bairro</label><input type="text" id="cli-bairro" placeholder="Centro"></div>
+            <div class="field">
+              <label>CEP <span class="req">*</span></label>
+              <input type="text" id="cli-cep" placeholder="00000-000" onblur="buscarCepAtivacao()">
+              <div id="cli-cep-msg" style="font-size:11px;color:var(--text3);margin-top:3px"></div>
+            </div>
+            <div class="field"><label>Rua <span class="req">*</span></label><input type="text" id="cli-rua" placeholder="Nome da rua"></div>
+            <div class="field"><label>Número <span class="req">*</span></label><input type="text" id="cli-numero" placeholder="123"></div>
           </div>
           <div class="form-row triple">
-            <div class="field"><label>CEP</label><input type="text" id="cli-cep" placeholder="00000-000"></div>
-            <div class="field"><label>Cidade</label><input type="text" id="cli-cidade"></div>
-            <div class="field"><label>Estado</label><input type="text" id="cli-uf" placeholder="PE" maxlength="2"></div>
+            <div class="field"><label>Bairro <span class="req">*</span></label><input type="text" id="cli-bairro" placeholder="Centro"></div>
+            <div class="field"><label>Cidade <span class="req">*</span></label><input type="text" id="cli-cidade"></div>
+            <div class="field" style="max-width:120px"><label>Estado <span class="req">*</span></label><input type="text" id="cli-uf" placeholder="PE" maxlength="2"></div>
           </div>
-          <div style="margin-top:12px;display:flex;gap:12px">
+          <div id="cli-erros" class="field-erros" style="display:none"></div>
+          <div class="wizard-nav">
+            <button class="btn btn-secondary" onclick="mostrarStep(1)">← Voltar</button>
+            <div class="spacer"></div>
             <button class="btn btn-primary" onclick="confirmarCliente()">Continuar →</button>
           </div>
         </div>
       </div>
 
       <!-- Step 3: PLANO -->
-      <div id="step-3" class="section-card" style="display:none">
+      <div class="wizard-panel section-card" id="step-3">
         <div class="section-title">Escolha o Plano</div>
         <div class="form-row" style="margin-bottom:16px">
           <div class="field">
@@ -1018,11 +1039,15 @@ select option { background: var(--bg3); }
           </div>
         </div>
         <div class="planos-grid" id="planos-grid"></div>
-        <button class="btn btn-primary" id="btn-plano-continuar" onclick="confirmarPlano()" style="display:none">Continuar →</button>
+        <div class="wizard-nav">
+          <button class="btn btn-secondary" onclick="mostrarStep(2)">← Voltar</button>
+          <div class="spacer"></div>
+          <button class="btn btn-primary" id="btn-plano-continuar" onclick="confirmarPlano()" style="display:none">Continuar →</button>
+        </div>
       </div>
 
       <!-- Step 4: PAGAMENTO -->
-      <div id="step-4" class="section-card" style="display:none">
+      <div class="wizard-panel section-card" id="step-4">
         <div class="section-title">Forma de Pagamento</div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px">
           <div class="plano-card" id="pay-pix" onclick="selecionarPagamento('pix')">
@@ -1061,19 +1086,26 @@ select option { background: var(--bg3); }
             </div>
           </div>
         </div>
-        <button class="btn btn-primary" id="btn-pay-continuar" onclick="irParaConfirmacao()" style="display:none;margin-top:16px">Continuar →</button>
+        <div class="wizard-nav">
+          <button class="btn btn-secondary" onclick="mostrarStep(3)">← Voltar</button>
+          <div class="spacer"></div>
+          <button class="btn btn-primary" id="btn-pay-continuar" onclick="irParaConfirmacao()" style="display:none">Continuar →</button>
+        </div>
       </div>
 
       <!-- Step 5: CONFIRMAÇÃO -->
-      <div id="step-5" class="section-card" style="display:none">
+      <div class="wizard-panel section-card" id="step-5">
         <div class="section-title">Confirmar Ativação</div>
         <div class="info-card" id="resumo-ativacao"></div>
-        <div style="display:flex;gap:12px;margin-top:16px">
+        <div class="wizard-nav">
+          <button class="btn btn-secondary" onclick="mostrarStep(4)">← Voltar</button>
+          <div class="spacer"></div>
           <button class="btn btn-primary" onclick="confirmarAtivacao()">✓ Ativar Agora</button>
-          <button class="btn btn-secondary" onclick="voltarStep(3)">← Voltar</button>
         </div>
         <div id="ativacao-result" style="margin-top:16px"></div>
       </div>
+      </div><!-- /wizard-track -->
+      </div><!-- /wizard-viewport -->
     </div>
 
     <!-- ── MEU PAINEL (vendedor) ─────────────── -->
@@ -3206,30 +3238,50 @@ function selecionarEsimDisponivel(iccid) {
 
 function resetAtivacao() {
   state.ativacao = { iccid: null, iccidData: null, cliente: null, plano: null, ddd: null, pagamento: null, step: 1, tipoAtivacao: 'nova', msisdnPortabilidade: null };
-  irParaStep(1);
+  initWizardObserver();
+  mostrarStep(1);
   document.getElementById('iccid-input').value = '';
   document.getElementById('iccid-result').innerHTML = '';
   document.getElementById('cli-doc').value = '';
   document.getElementById('cli-result').innerHTML = '';
   document.getElementById('cli-form').style.display = 'none';
+  const cErr = document.getElementById('cli-erros'); if (cErr) { cErr.style.display = 'none'; cErr.innerHTML = ''; }
+  const cMsg = document.getElementById('cli-cep-msg'); if (cMsg) cMsg.textContent = '';
   document.getElementById('ativacao-result').innerHTML = '';
-  ['step-2','step-3','step-4','step-5'].forEach(id => document.getElementById(id).style.display = 'none');
-  document.getElementById('step-1').style.display = 'block';
 }
 
-function irParaStep(n) {
+// Wizard: desliza lateralmente para a etapa n (1..5), atualiza a trilha e a altura.
+function mostrarStep(n) {
   state.ativacao.step = n;
   for (let i=1;i<=5;i++) {
     const fs = document.getElementById(`fs-${i}`);
-    fs.className = 'flow-step' + (i===n?' active':i<n?' done':'');
+    if (fs) fs.className = 'flow-step' + (i===n?' active':i<n?' done':'');
   }
+  const track = document.getElementById('wizard-track');
+  if (track) track.style.transform = `translateX(-${(n-1)*100}%)`;
+  ajustarAlturaWizard();
+  const page = document.getElementById('page-ativar');
+  if (page) page.scrollIntoView({ behavior:'smooth', block:'start' });
 }
-
-function voltarStep(n) {
-  irParaStep(n);
-  for (let i=n+1;i<=5;i++) document.getElementById(`step-${i}`).style.display='none';
-  document.getElementById(`step-${n}`).style.display = 'block';
+// Alturas variam por etapa; a viewport acompanha a etapa ativa (com transição suave).
+function ajustarAlturaWizard() {
+  const vp = document.getElementById('wizard-viewport');
+  const panel = document.getElementById('step-' + (state.ativacao?.step || 1));
+  if (vp && panel) vp.style.height = panel.offsetHeight + 'px';
 }
+// Recalcula a altura quando o conteúdo de uma etapa muda (planos carregados, form exibido…).
+let _wizObsInit = false;
+function initWizardObserver() {
+  if (_wizObsInit) return; _wizObsInit = true;
+  if (typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(() => ajustarAlturaWizard());
+    for (let i=1;i<=5;i++) { const p = document.getElementById('step-'+i); if (p) ro.observe(p); }
+  }
+  window.addEventListener('resize', ajustarAlturaWizard);
+}
+// Compat: chamadas antigas continuam funcionando via wizard.
+function irParaStep(n) { mostrarStep(n); }
+function voltarStep(n) { mostrarStep(n); }
 
 function detectarTipoChip(d) {
   const raw = d?.iccidType || d?.type || d?.simType || d?.cardType || '';
@@ -3304,9 +3356,7 @@ function irParaCliente() {
   } else {
     state.ativacao.msisdnPortabilidade = null;
   }
-  document.getElementById('step-2').style.display = 'block';
-  irParaStep(2);
-  setTimeout(() => document.getElementById('step-2').scrollIntoView({ behavior:'smooth' }), 100);
+  mostrarStep(2);
 }
 
 async function buscarCliente() {
@@ -3340,25 +3390,73 @@ async function buscarCliente() {
   }
 }
 
+// Busca o endereço pelo CEP (ViaCEP via backend) e preenche rua/bairro/cidade/UF.
+async function buscarCepAtivacao() {
+  const cep = document.getElementById('cli-cep').value.replace(/\D/g,'');
+  const msg = document.getElementById('cli-cep-msg');
+  if (cep.length !== 8) { if (msg) msg.textContent = ''; return; }
+  if (msg) { msg.textContent = 'Buscando endereço…'; msg.style.color = 'var(--text3)'; }
+  try {
+    const d = await api('GET', `/api/cep/${cep}`);
+    if (d.street) document.getElementById('cli-rua').value = d.street;
+    if (d.neighborhood) document.getElementById('cli-bairro').value = d.neighborhood;
+    if (d.city) document.getElementById('cli-cidade').value = d.city;
+    if (d.uf) document.getElementById('cli-uf').value = d.uf;
+    if (msg) { msg.textContent = '✓ Endereço preenchido pelo CEP'; msg.style.color = 'var(--green,#0c8)'; }
+    const n = document.getElementById('cli-numero'); if (n && !n.value) n.focus();
+  } catch (e) {
+    if (msg) { msg.textContent = 'CEP não encontrado — preencha o endereço manualmente'; msg.style.color = 'var(--yellow)'; }
+  }
+}
+
+// Lista os campos obrigatórios pendentes/ inválidos antes de avançar.
+function validarClienteAtivacao() {
+  const val = id => document.getElementById(id).value.trim();
+  const doc = document.getElementById('cli-doc').value.replace(/\D/g,'');
+  const email = val('cli-email');
+  const cep = document.getElementById('cli-cep').value.replace(/\D/g,'');
+  const e = [];
+  if (!(doc.length === 11 || doc.length === 14)) e.push('CPF/CNPJ válido');
+  if (!val('cli-nome')) e.push('Nome completo');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) e.push('E-mail válido');
+  if (cep.length !== 8) e.push('CEP (8 dígitos)');
+  if (!val('cli-rua')) e.push('Rua');
+  if (!val('cli-numero')) e.push('Número');
+  if (!val('cli-bairro')) e.push('Bairro');
+  if (!val('cli-cidade')) e.push('Cidade');
+  if (!val('cli-uf')) e.push('Estado (UF)');
+  return e;
+}
+
 async function confirmarCliente() {
+  const erros = validarClienteAtivacao();
+  const box = document.getElementById('cli-erros');
+  if (erros.length) {
+    if (box) {
+      box.style.display = 'block';
+      box.innerHTML = '<b>Corrija antes de continuar:</b><ul>' + erros.map(x => `<li>${x}</li>`).join('') + '</ul>';
+      box.scrollIntoView({ behavior:'smooth', block:'center' });
+    }
+    toast('Preencha os campos obrigatórios do cliente', 'error');
+    return;
+  }
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
   const doc = document.getElementById('cli-doc').value.replace(/\D/g,'');
   state.ativacao.cliente = {
     document: doc,
-    name: document.getElementById('cli-nome').value,
-    email: document.getElementById('cli-email').value,
-    phone: document.getElementById('cli-tel').value,
+    name: document.getElementById('cli-nome').value.trim(),
+    email: document.getElementById('cli-email').value.trim(),
+    phone: document.getElementById('cli-tel').value.trim(),
     birthDate: document.getElementById('cli-nasc').value,
-    street: document.getElementById('cli-rua').value,
-    number: document.getElementById('cli-numero').value,
-    neighborhood: document.getElementById('cli-bairro').value,
+    street: document.getElementById('cli-rua').value.trim(),
+    number: document.getElementById('cli-numero').value.trim(),
+    neighborhood: document.getElementById('cli-bairro').value.trim(),
     zipcode: document.getElementById('cli-cep').value.replace(/\D/g,''),
-    city: document.getElementById('cli-cidade').value,
-    uf: document.getElementById('cli-uf').value
+    city: document.getElementById('cli-cidade').value.trim(),
+    uf: document.getElementById('cli-uf').value.trim().toUpperCase()
   };
   await carregarPlanos();
-  document.getElementById('step-3').style.display = 'block';
-  irParaStep(3);
-  setTimeout(() => document.getElementById('step-3').scrollIntoView({ behavior:'smooth' }), 100);
+  mostrarStep(3);
 }
 
 async function carregarPlanos() {
@@ -3400,11 +3498,9 @@ function selecionarPlano(id, nome, valor) {
 }
 
 function confirmarPlano() {
-  if (!state.ativacao.plano) { toast('Selecione um plano','error'); return; }
+  if (!state.ativacao.plano) { toast('Selecione um plano antes de continuar','error'); return; }
   state.ativacao.ddd = document.getElementById('sel-ddd').value;
-  document.getElementById('step-4').style.display = 'block';
-  irParaStep(4);
-  setTimeout(() => document.getElementById('step-4').scrollIntoView({ behavior:'smooth' }), 100);
+  mostrarStep(4);
 }
 
 function selecionarPagamento(tipo) {
@@ -3443,9 +3539,7 @@ function irParaConfirmacao() {
     <div class="info-row"><span class="k">Pagamento</span><span class="v">${payLabels[a.pagamento]}</span></div>
     ${a.recorrencia ? '<div class="info-row"><span class="k">Recorrência</span><span class="v">' + (a.recorrencia === 'BILLET' ? 'Boleto Mensal' : 'Cartão de Crédito') + '</span></div>' : ''}
   `;
-  document.getElementById('step-5').style.display = 'block';
-  irParaStep(5);
-  setTimeout(() => document.getElementById('step-5').scrollIntoView({ behavior:'smooth' }), 100);
+  mostrarStep(5);
 }
 
 async function confirmarAtivacao() {
