@@ -2291,6 +2291,95 @@ app.post('/api/bora/subscriber', authMiddleware, async (req, res) => {
   }
 });
 
+// ─── BUSCA DE CEP (ViaCEP) — preenche endereço no cadastro ────────────────────
+// Proxy server-side (evita CORS/CSP no painel). Só consulta dados públicos de CEP.
+app.get('/api/cep/:cep', authMiddleware, async (req, res) => {
+  const cep = String(req.params.cep || '').replace(/\D/g, '');
+  if (cep.length !== 8) return res.status(400).json({ erro: 'CEP deve ter 8 dígitos' });
+  try {
+    const { data } = await axios.get(`https://viacep.com.br/ws/${cep}/json/`, { timeout: 8000 });
+    if (!data || data.erro) return res.status(404).json({ erro: 'CEP não encontrado' });
+    res.json({
+      cep: String(data.cep || cep).replace(/\D/g, ''),
+      street: data.logradouro || '',
+      neighborhood: data.bairro || '',
+      city: data.localidade || '',
+      uf: data.uf || '',
+      complement: data.complemento || ''
+    });
+  } catch (e) {
+    res.status(e.response?.status || 502).json({ erro: 'Falha ao consultar o CEP' });
+  }
+});
+
+// Criar cadastro do cliente na Bora SEM ativar linha (ex.: preparar o novo titular
+// antes de uma troca de titularidade). Trava: nome, e-mail, CPF/CNPJ e endereço com CEP.
+// Idempotente: se o documento já existir na Bora, devolve o cadastro atual (não é erro).
+app.post('/api/bora/cliente/criar-cadastro', authMiddleware, async (req, res) => {
+  try {
+    const s = req.body?.subscriber || req.body || {};
+    const soDigitos = (v) => String(v || '').replace(/\D/g, '');
+    const doc = soDigitos(s.document);
+    const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s.email || '').trim());
+
+    // Trava de campos obrigatórios (nome, e-mail, CPF/CNPJ e endereço com CEP)
+    const faltando = [];
+    if (!String(s.name || '').trim()) faltando.push('nome');
+    if (!emailOk) faltando.push('e-mail válido');
+    if (!(doc.length === 11 || doc.length === 14)) faltando.push('CPF/CNPJ');
+    if (soDigitos(s.zipcode).length !== 8) faltando.push('CEP (8 dígitos)');
+    if (!String(s.street || '').trim()) faltando.push('rua');
+    if (!String(s.number || '').trim()) faltando.push('número');
+    if (!String(s.neighborhood || '').trim()) faltando.push('bairro');
+    if (!String(s.city || '').trim()) faltando.push('cidade');
+    if (!String(s.uf || '').trim()) faltando.push('UF');
+    if (faltando.length) {
+      return res.status(400).json({ erro: 'Campos obrigatórios ausentes: ' + faltando.join(', ') });
+    }
+
+    // Já existe? Devolve o cadastro atual (útil pro fluxo de titularidade — não recria).
+    let atual = null;
+    try { atual = await boraGet(`/api/Subscriber/${doc}/document`); } catch {}
+    if (atual && (atual.idSubscriberExternal || atual.subscriberId || atual.id)) {
+      return res.json({
+        ok: true, jaExistia: true,
+        clientId: atual.idSubscriberExternal || atual.id || null,
+        subscriberId: atual.subscriberId ?? atual.id ?? null,
+        subscriber: atual
+      });
+    }
+
+    // Payload limpo (mesma forma da ativação, que a Bora aceita)
+    const payload = {
+      document: doc,
+      name: String(s.name).trim(),
+      email: String(s.email).trim(),
+      phone: soDigitos(s.phone) || undefined,
+      birthDate: String(s.birthDate || '').trim() || undefined,
+      street: String(s.street).trim(),
+      number: String(s.number).trim(),
+      complement: String(s.complement || '').trim() || undefined,
+      neighborhood: String(s.neighborhood).trim(),
+      zipcode: soDigitos(s.zipcode),
+      city: String(s.city).trim(),
+      uf: String(s.uf).trim().toUpperCase()
+    };
+    Object.keys(payload).forEach(k => payload[k] === undefined && delete payload[k]);
+
+    const criado = await boraPost('/api/Subscriber', payload);
+    res.json({
+      ok: true, jaExistia: false,
+      clientId: criado?.idSubscriberExternal || criado?.id || null,
+      subscriberId: criado?.subscriberId ?? criado?.id ?? null,
+      subscriber: criado || payload
+    });
+  } catch (e) {
+    const d = e.response?.data;
+    const msg = (d && (d.detail || d.title || d.message)) || (typeof d === 'string' ? d : null) || e.message;
+    res.status(e.response?.status || 500).json({ erro: msg });
+  }
+});
+
 // Editar cadastro do cliente (nome/e-mail/telefone/endereço). Admin edita qualquer um;
 // vendedor só clientes da própria base (garantirLinhaDoUsuario pelo msisdn da linha).
 // POST /api/Subscriber faz upsert por documento; reflete nome/documento no CRM local.
@@ -5165,18 +5254,29 @@ app.post('/api/bora/titularidade/:ticketId/responder', authMiddleware, requirePe
 // Resolve o NOVO titular pelo CPF/CNPJ → customerId (newClientId) + nome p/ confirmação.
 // Precisa já existir como cliente na Bora (ter ou ter tido linha).
 app.get('/api/bora/titularidade/novo-titular/:cpf', authMiddleware, requirePerm('titularidade'), async (req, res) => {
+  const cpf = String(req.params.cpf || '').replace(/\D/g, '');
+  let customerId = null, nome = null, documento = cpf;
+  // 1) tenta pelos dados de assinatura (cliente que já tem/teve linha na Bora)
   try {
-    const details = await boraGet(`/api/Subscription/${req.params.cpf}/details`);
-    const customerId = details?.boraIntegration?.customerId || null;
-    if (!customerId) {
-      return res.status(404).json({ erro: 'CPF/CNPJ não encontrado como cliente na Bora — o novo titular precisa já ter uma linha na Bora' });
-    }
-    res.json({ ok: true, customerId, nome: details?.name || null, documento: details?.document || req.params.cpf });
-  } catch (e) {
-    const code = e.response?.status;
-    if (code === 404) return res.status(404).json({ erro: 'CPF/CNPJ não encontrado como cliente na Bora' });
-    res.status(code || 500).json({ erro: e.response?.data?.detail || e.message });
+    const details = await boraGet(`/api/Subscription/${cpf}/details`);
+    customerId = details?.boraIntegration?.customerId || null;
+    nome = details?.name || nome;
+    documento = details?.document || documento;
+  } catch {}
+  // 2) fallback: cadastro de assinante — basta ter cadastro, mesmo sem linha. Suporta o
+  //    novo titular criado via "Criar Cadastro" (idSubscriberExternal = newClientId, ver doc).
+  if (!customerId) {
+    try {
+      const sub = await boraGet(`/api/Subscriber/${cpf}/document`);
+      customerId = sub?.idSubscriberExternal || sub?.id || null;
+      nome = sub?.name || sub?.nome || nome;
+      documento = sub?.document || documento;
+    } catch {}
   }
+  if (!customerId) {
+    return res.status(404).json({ erro: 'CPF/CNPJ não encontrado na Bora — crie o cadastro do novo titular primeiro' });
+  }
+  res.json({ ok: true, customerId, nome, documento });
 });
 
 // Passo 4 — efetiva a troca. conserveBenefits=true mantém o plano atual.

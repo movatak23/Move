@@ -1813,6 +1813,38 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<div class="modal-overlay" id="modal-criar-cliente">
+  <div class="modal" style="width:580px">
+    <div class="modal-title">🧾 Criar Cadastro do Cliente</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Cria o cliente na Bora <b>sem ativar linha</b> — útil para preparar o novo titular antes de uma troca de titularidade. Campos com <span style="color:var(--red)">*</span> são obrigatórios.</div>
+    <div class="form-row">
+      <div class="field"><label>Nome Completo <span style="color:var(--red)">*</span></label><input type="text" id="cc-nome"></div>
+      <div class="field"><label>CPF/CNPJ <span style="color:var(--red)">*</span></label><input type="text" id="cc-doc" placeholder="Somente números"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>E-mail <span style="color:var(--red)">*</span></label><input type="email" id="cc-email"></div>
+      <div class="field"><label>Telefone</label><input type="text" id="cc-tel"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Data de Nascimento</label><input type="date" id="cc-nasc"></div>
+      <div class="field"><label>CEP <span style="color:var(--red)">*</span></label><input type="text" id="cc-cep" placeholder="00000-000" onblur="buscarCepCriar()"><div id="cc-cep-msg" style="font-size:11px;color:var(--text3);margin-top:3px"></div></div>
+    </div>
+    <div class="form-row">
+      <div class="field" style="flex:2"><label>Rua <span style="color:var(--red)">*</span></label><input type="text" id="cc-rua"></div>
+      <div class="field"><label>Número <span style="color:var(--red)">*</span></label><input type="text" id="cc-numero"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Bairro <span style="color:var(--red)">*</span></label><input type="text" id="cc-bairro"></div>
+      <div class="field"><label>Cidade <span style="color:var(--red)">*</span></label><input type="text" id="cc-cidade"></div>
+      <div class="field" style="max-width:90px"><label>UF <span style="color:var(--red)">*</span></label><input type="text" id="cc-uf" maxlength="2"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-criar-cliente')">Cancelar</button>
+      <button class="btn btn-primary" id="cc-salvar" onclick="salvarCriarCliente()">Criar cadastro</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── TROCA DE TITULARIDADE ────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-titularidade">
   <div class="modal" style="width:540px">
@@ -2336,6 +2368,7 @@ function construirNav() {
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip' },
     { page: 'recarga', icon: '📦', label: 'Pacotes Adicionais' },
     { page: 'consulta', icon: '🔍', label: 'Consultar Linha' },
+    { icon: '🧾', label: 'Criar Cadastro', action: 'abrirCriarCliente()' },
     { page: 'portabilidade', icon: '↔', label: 'Portabilidade' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { page: 'esim', icon: '◈', label: 'E-SIM' },
@@ -2359,6 +2392,7 @@ function construirNav() {
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip', perm: 'ativacao' },
     { page: 'recarga', icon: '📦', label: 'Pacotes Adicionais', perm: 'recarga' },
     { page: 'consulta', icon: '🔍', label: 'Consultar Linha', perm: 'consulta' },
+    { icon: '🧾', label: 'Criar Cadastro', action: 'abrirCriarCliente()', perm: 'criar_cadastro' },
     { page: 'portabilidade', icon: '↔', label: 'Portabilidade', perm: 'portabilidade' },
     { page: 'calculadora', icon: '◎', label: 'Calculadora', perm: 'calculadora' },
     { page: 'esim', icon: '◈', label: 'E-SIM', perm: 'esim' },
@@ -2383,6 +2417,7 @@ function construirNav() {
   });
   nav.innerHTML = podados.map(i => {
     if (i.section) return `<div class="nav-section">${i.section}</div>`;
+    if (i.action) return `<div class="nav-item" onclick="${i.action}"><span class="icon">${i.icon}</span>${i.label}</div>`;
     if (i.link) return `<div class="nav-item" onclick="window.open('${i.link}','_blank')"><span class="icon">${i.icon}</span>${i.label}</div>`;
     return `<div class="nav-item" id="nav-${i.page}" onclick="navegarPara('${i.page}')"><span class="icon">${i.icon}</span>${i.label}</div>`;
   }).join('');
@@ -2793,6 +2828,7 @@ async function confirmarExclusaoVendedor() {
 // A chave (`key`) é gravada em vendedor_permissoes e usada no gating do menu/ação (campo `perm`).
 const PERM_DEFS = [
   { key: 'ativacao',       label: 'Ativar Chip' },
+  { key: 'criar_cadastro', label: 'Criar Cadastro (sem ativar)' },
   { key: 'recarga',        label: 'Recarga / Pacotes' },
   { key: 'consulta',       label: 'Consultar Linha' },
   { key: 'portabilidade',  label: 'Portabilidade' },
@@ -4345,6 +4381,69 @@ async function salvarEditarCliente() {
   }
 }
 
+// ─── Criar cadastro do cliente (sem ativar linha) ─────────────────────────────
+let _ccOnCreated = null;
+function abrirCriarCliente(docPre, onCreated) {
+  _ccOnCreated = (typeof onCreated === 'function') ? onCreated : null;
+  ['cc-nome','cc-doc','cc-email','cc-tel','cc-nasc','cc-cep','cc-rua','cc-numero','cc-bairro','cc-cidade','cc-uf']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const msg = document.getElementById('cc-cep-msg'); if (msg) msg.textContent = '';
+  if (docPre) document.getElementById('cc-doc').value = String(docPre).replace(/\D/g, '');
+  document.getElementById('modal-criar-cliente').classList.add('open');
+}
+async function buscarCepCriar() {
+  const cep = document.getElementById('cc-cep').value.replace(/\D/g, '');
+  const msg = document.getElementById('cc-cep-msg');
+  if (cep.length !== 8) { msg.textContent = ''; return; }
+  msg.textContent = 'Buscando endereço…'; msg.style.color = 'var(--text3)';
+  try {
+    const d = await api('GET', `/api/cep/${cep}`);
+    if (d.street) document.getElementById('cc-rua').value = d.street;
+    if (d.neighborhood) document.getElementById('cc-bairro').value = d.neighborhood;
+    if (d.city) document.getElementById('cc-cidade').value = d.city;
+    if (d.uf) document.getElementById('cc-uf').value = d.uf;
+    msg.textContent = '✓ Endereço preenchido pelo CEP'; msg.style.color = 'var(--green,#0c8)';
+    const nUm = document.getElementById('cc-numero'); if (nUm && !nUm.value) nUm.focus();
+  } catch (e) {
+    msg.textContent = 'CEP não encontrado — preencha o endereço manualmente'; msg.style.color = 'var(--yellow)';
+  }
+}
+async function salvarCriarCliente() {
+  const val = id => document.getElementById(id).value.trim();
+  const doc = document.getElementById('cc-doc').value.replace(/\D/g, '');
+  const email = val('cc-email');
+  const cep = document.getElementById('cc-cep').value.replace(/\D/g, '');
+  const faltando = [];
+  if (!val('cc-nome')) faltando.push('nome');
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) faltando.push('e-mail válido');
+  if (!(doc.length === 11 || doc.length === 14)) faltando.push('CPF/CNPJ');
+  if (cep.length !== 8) faltando.push('CEP');
+  if (!val('cc-rua')) faltando.push('rua');
+  if (!val('cc-numero')) faltando.push('número');
+  if (!val('cc-bairro')) faltando.push('bairro');
+  if (!val('cc-cidade')) faltando.push('cidade');
+  if (!val('cc-uf')) faltando.push('UF');
+  if (faltando.length) { toast('Preencha: ' + faltando.join(', '), 'error'); return; }
+  const subscriber = {
+    document: doc, name: val('cc-nome'), email, phone: val('cc-tel'),
+    birthDate: document.getElementById('cc-nasc').value || '',
+    street: val('cc-rua'), number: val('cc-numero'), neighborhood: val('cc-bairro'),
+    zipcode: cep, city: val('cc-cidade'), uf: val('cc-uf').toUpperCase()
+  };
+  const btn = document.getElementById('cc-salvar');
+  btn.disabled = true; btn.textContent = 'Criando…';
+  try {
+    const r = await api('POST', '/api/bora/cliente/criar-cadastro', { subscriber });
+    toast(r.jaExistia ? 'Cliente já tinha cadastro na Bora — pronto para uso' : 'Cadastro criado na Bora com sucesso');
+    fecharModal('modal-criar-cliente');
+    if (_ccOnCreated) _ccOnCreated(r, doc);
+  } catch (e) {
+    toast(e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Criar cadastro';
+  }
+}
+
 // ── TROCA DE TITULARIDADE ─────────────────────────────────────────────────────
 let _titMsisdn = null, _titTicketId = null, _titNewClientId = null, _titAlternatives = [];
 function _titStep(n) {
@@ -4428,7 +4527,8 @@ async function buscarNovoTitular() {
     out.innerHTML = `<div style="background:var(--bg3);border-radius:8px;padding:10px 12px">Novo titular: <strong>${d.nome || '—'}</strong><br><span style="color:var(--text3);font-size:12px">${d.documento || cpf}</span></div>`;
     btnEf.style.display = 'inline-flex';
   } catch (e) {
-    out.innerHTML = `<div style="color:var(--red)">${e.message || 'CPF/CNPJ não encontrado na Bora'}</div>`;
+    out.innerHTML = `<div style="color:var(--red);margin-bottom:8px">${e.message || 'CPF/CNPJ não encontrado na Bora'}</div>
+      <button class="btn btn-secondary btn-sm" onclick="abrirCriarCliente('${cpf}', function(){ buscarNovoTitular(); })">🧾 Criar cadastro deste titular</button>`;
   }
 }
 async function efetivarTitularidade() {
