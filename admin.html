@@ -1073,7 +1073,7 @@ select option { background: var(--bg3); }
         </div>
         <div id="recorrencia-wrap" style="display:none;margin-top:20px">
           <div class="section-title" style="font-size:13px;margin-bottom:12px">Recorrência Mensal</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div id="rec-cards" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
             <div class="plano-card" id="rec-billet" onclick="selecionarRecorrencia('BILLET')">
               <div style="font-size:20px;margin-bottom:6px">📄</div>
               <div class="pnome">Boleto Mensal</div>
@@ -1084,6 +1084,9 @@ select option { background: var(--bg3); }
               <div class="pnome">Cartão de Crédito</div>
               <div class="pcomissao">Recorrência via cartão</div>
             </div>
+          </div>
+          <div id="rec-combo-info" style="display:none;background:var(--accent-dim);border:1px solid var(--accent);border-radius:var(--r);padding:12px 14px;font-size:13px;color:var(--text)">
+            🔄 <strong>Boleto Combado</strong> — a recorrência acompanha automaticamente a forma de pagamento (boleto combado).
           </div>
         </div>
         <div class="wizard-nav">
@@ -3516,12 +3519,30 @@ function selecionarPagamento(tipo) {
   document.getElementById('pay-'+tipo)?.classList.add('selected');
   state.ativacao.pagamento = tipo;
   state.ativacao.recorrencia = null;
-  // BilletCombo já tem recorrência embutida, e no Cartão a recorrência é escolhida
-  // dentro do próprio link de pagamento da Bora — nenhum dos dois precisa desse passo.
-  const precisaRec = tipo === 'pix' || tipo === 'billet';
-  document.getElementById('recorrencia-wrap').style.display = precisaRec ? 'block' : 'none';
   ['rec-billet','rec-credit'].forEach(id => document.getElementById(id)?.classList.remove('selected'));
-  document.getElementById('btn-pay-continuar').style.display = precisaRec ? 'none' : 'inline-flex';
+  const wrap = document.getElementById('recorrencia-wrap');
+  const cards = document.getElementById('rec-cards');
+  const comboInfo = document.getElementById('rec-combo-info');
+  const btn = document.getElementById('btn-pay-continuar');
+  if (tipo === 'billetcombo') {
+    // Regra: Boleto Combado => a recorrência também é Boleto Combado (automática, sem escolha).
+    state.ativacao.recorrencia = 'billetcombo';
+    wrap.style.display = 'block';
+    if (cards) cards.style.display = 'none';
+    if (comboInfo) comboInfo.style.display = 'block';
+    btn.style.display = 'inline-flex';
+  } else if (tipo === 'pix' || tipo === 'billet') {
+    // Precisa escolher a recorrência (Boleto Mensal ou Cartão) antes de continuar.
+    wrap.style.display = 'block';
+    if (cards) cards.style.display = 'grid';
+    if (comboInfo) comboInfo.style.display = 'none';
+    btn.style.display = 'none';
+  } else {
+    // Cartão: a recorrência é definida no próprio link de pagamento da Bora.
+    wrap.style.display = 'none';
+    if (comboInfo) comboInfo.style.display = 'none';
+    btn.style.display = 'inline-flex';
+  }
 }
 
 function selecionarRecorrencia(tipo) {
@@ -3545,7 +3566,7 @@ function irParaConfirmacao() {
     <div class="info-row"><span class="k">Plano</span><span class="v">${a.plano.nome}</span></div>
     <div class="info-row"><span class="k">Valor</span><span class="v currency">${formatBRL(a.plano.valor)}</span></div>
     <div class="info-row"><span class="k">Pagamento</span><span class="v">${payLabels[a.pagamento]}</span></div>
-    ${a.recorrencia ? '<div class="info-row"><span class="k">Recorrência</span><span class="v">' + (a.recorrencia === 'BILLET' ? 'Boleto Mensal' : 'Cartão de Crédito') + '</span></div>' : ''}
+    ${a.recorrencia ? '<div class="info-row"><span class="k">Recorrência</span><span class="v">' + (a.recorrencia === 'BILLET' ? 'Boleto Mensal' : a.recorrencia === 'billetcombo' ? 'Boleto Combado' : 'Cartão de Crédito') + '</span></div>' : ''}
   `;
   mostrarStep(5);
 }
