@@ -671,6 +671,52 @@ function vendedorPrincipalOnly(req, res, next) {
   next();
 }
 
+// true se o usuário logado tem a permissão (admin sempre tem). Mesma fonte do requirePerm.
+async function usuarioTemPermissao(req, permissao) {
+  if (req.user?.role === 'admin') return true;
+  const { rows } = await pool.query(
+    'SELECT 1 FROM vendedor_permissoes WHERE vendedor_id=$1 AND permissao=$2 LIMIT 1',
+    [req.user.id, permissao]
+  );
+  return rows.length > 0;
+}
+
+// ── Trava de planos FAMÍLIA/EMPRESA ───────────────────────────────────────────
+// A liberação é por vendedor (permissão 'planos_empresa_familia', padrão desligada).
+// O nome do plano é resolvido pelo planId direto na Bora (fonte autoritativa) — não
+// confia no nome enviado pelo cliente. Cache de 5 min pra não pesar na ativação.
+const REGEX_EMPRESA_FAMILIA = /fam[ií]lia|empresa/i;
+let _planosAtivacaoCache = { at: 0, lista: [] };
+async function planosAtivacaoBora() {
+  const agora = Date.now();
+  if (_planosAtivacaoCache.lista.length && (agora - _planosAtivacaoCache.at) < 5 * 60 * 1000) {
+    return _planosAtivacaoCache.lista;
+  }
+  const data = await boraGet('/api/Plan/Activation');
+  const lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
+  _planosAtivacaoCache = { at: agora, lista };
+  return lista;
+}
+async function planoEhEmpresaFamilia(planId, nomeFallback) {
+  try {
+    const lista = await planosAtivacaoBora();
+    const p = lista.find(x => String(x.idPlanExternal || x.id || x.planId) === String(planId));
+    const nome = p ? (p.name || p.nome || p.description || '') : (nomeFallback || '');
+    return REGEX_EMPRESA_FAMILIA.test(String(nome));
+  } catch {
+    return REGEX_EMPRESA_FAMILIA.test(String(nomeFallback || ''));
+  }
+}
+// Bloqueia (retorna true e responde 403) se o plano é FAMÍLIA/EMPRESA e o usuário não tem a permissão.
+async function bloqueiaEmpresaFamilia(req, res, planId, nomeFallback) {
+  if (await usuarioTemPermissao(req, 'planos_empresa_familia')) return false;
+  if (await planoEhEmpresaFamilia(planId, nomeFallback)) {
+    res.status(403).json({ erro: 'Planos Empresa/Família não estão liberados para o seu acesso.' });
+    return true;
+  }
+  return false;
+}
+
 function supabaseStorageConfigurado() {
   return Boolean(SUPABASE_URL && SUPABASE_SECRET_KEY && SUPABASE_BUCKET);
 }
@@ -2943,6 +2989,9 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
   try {
     const { subscriber, cartPayload, paymentType, recorrencia, vendedor_id, plano_id, plano_nome } = req.body;
 
+    // Trava: planos FAMÍLIA/EMPRESA exigem a permissão 'planos_empresa_familia'.
+    if (await bloqueiaEmpresaFamilia(req, res, cartPayload?.planId || plano_id, plano_nome)) return;
+
     // Bloqueio por limite de eSIMs pendentes (não pagos) no mês — só para eSIM.
     // Administradores não são bloqueados por esse limite.
     const ehEsim = cartPayload?.tipoChip === 'esim' || cartPayload?.iccidType === 'E-SIM'
@@ -5155,6 +5204,9 @@ app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
   try {
     if (!(await garantirLinhaDoUsuario(req, res, req.body.msisdn))) return;
     const { msisdn, planId, paymentType } = req.body;
+
+    // Trava: troca para planos FAMÍLIA/EMPRESA exige a permissão 'planos_empresa_familia'.
+    if (await bloqueiaEmpresaFamilia(req, res, planId, req.body.plano_nome || req.body.planName)) return;
 
     // Passo 1: cancela a recorrência atual e cria a nova ativação do plano escolhido.
     const data = await boraPost('/api/Subscription/changeplan', req.body);
