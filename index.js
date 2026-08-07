@@ -2848,7 +2848,9 @@ app.get('/api/app/planos/ativacao', authApp, async (req, res) => {
     const filtrado = habilitados.size > 0
       ? lista.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || '')))
       : lista;
-    res.json(filtrado);
+    // App (cliente final): não oferta planos FAMÍLIA/EMPRESA.
+    const semEmpresaFamilia = filtrado.filter(p => !REGEX_EMPRESA_FAMILIA.test(String(p.name || p.nome || p.description || '')));
+    res.json(semEmpresaFamilia);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -2872,6 +2874,11 @@ app.get('/api/app/iccid/:iccid', authApp, async (req, res) => {
 app.post('/api/app/ativar', authApp, async (req, res) => {
   try {
     const { subscriber, tipoChip, ddd, planId, planType, paymentType, recorrencia, plano_id, plano_nome, plano_valor } = req.body;
+
+    // App (cliente final): planos FAMÍLIA/EMPRESA não são ofertados no autoatendimento.
+    if (await planoEhEmpresaFamilia(planId || plano_id, plano_nome)) {
+      return res.status(403).json({ erro: 'Plano indisponível para autoatendimento.' });
+    }
 
     // Cria ou busca subscriber na Bora antes do loop (evita criar duplicado a cada tentativa)
     let clientId = null;
