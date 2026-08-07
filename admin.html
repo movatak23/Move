@@ -2856,6 +2856,7 @@ async function confirmarExclusaoVendedor() {
 // A chave (`key`) é gravada em vendedor_permissoes e usada no gating do menu/ação (campo `perm`).
 const PERM_DEFS = [
   { key: 'ativacao',       label: 'Ativar Chip' },
+  { key: 'planos_empresa_familia', label: 'Planos Empresa/Família' },
   { key: 'criar_cadastro', label: 'Criar Cadastro (sem ativar)' },
   { key: 'recarga',        label: 'Recarga / Pacotes' },
   { key: 'consulta',       label: 'Consultar Linha' },
@@ -2877,6 +2878,17 @@ const PERMS = PERM_DEFS.map(d => d.key);
 // true se o usuário logado pode usar o recurso (admin sempre pode; vendedor depende da permissão)
 function podeRecurso(perm) {
   return state.user?.role === 'admin' || (state.permissoes && state.permissoes.includes(perm));
+}
+
+// Planos FAMÍLIA/EMPRESA: só aparecem para quem tem a permissão 'planos_empresa_familia'
+// (padrão: desligada p/ todos os vendedores). Admin sempre vê. Aplicar nas listagens de plano.
+function planoEhEmpresaFamilia(p) {
+  const nome = String(p?.name || p?.nome || p?.description || p?.plano_nome || '');
+  return /fam[ií]lia|empresa/i.test(nome);
+}
+function filtrarPlanosVisiveis(lista) {
+  if (podeRecurso('planos_empresa_familia')) return lista || [];
+  return (lista || []).filter(p => !planoEhEmpresaFamilia(p));
 }
 
 function renderPermsGrid() {
@@ -3491,7 +3503,7 @@ async function carregarPlanos() {
       api('GET', '/api/bora/ddds'),
       api('GET', '/api/planos-comissao')
     ]);
-    const listaPlanos = Array.isArray(planos) ? planos : (planos.plans || planos.items || []);
+    const listaPlanos = filtrarPlanosVisiveis(Array.isArray(planos) ? planos : (planos.plans || planos.items || []));
     const listaDdds = Array.isArray(ddds) ? ddds : (ddds.ddds || ddds.items || []);
     const mapaComissoes = {};
     comissoes.forEach(c => mapaComissoes[c.plano_id] = c);
@@ -6054,6 +6066,7 @@ async function abrirTrocarPlano(msisdn) {
     if (habilitados.size > 0) {
       planos = planos.filter(p => habilitados.has(String(p.idPlanExternal || p.id || p.planId || '')));
     }
+    planos = filtrarPlanosVisiveis(planos);   // esconde FAMÍLIA/EMPRESA de quem não tem permissão
     if (!planos.length) {
       document.getElementById('trocar-plano-lista').innerHTML = '<div style="color:var(--text2);padding:12px">Nenhum plano cadastrado/visível disponível para troca</div>';
       return;
