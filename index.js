@@ -6393,6 +6393,7 @@ async function verificarDocBora() {
     );
     console.warn(`[bora-doc] ${mudancas.length} mudança(s) na API da Bora:`,
       mudancas.slice(0, 10).map(m => `${m.tipo} ${m.alvo}`).join(' | '));
+    await notificarAdminsMudancaBora(mudancas).catch(e => console.error('[bora-doc] aviso WhatsApp falhou:', e.message));
     return { ok: true, mudancas };
   } catch (e) {
     console.error('[bora-doc] falha ao checar documentação:', e.message);
@@ -6402,10 +6403,33 @@ async function verificarDocBora() {
   }
 }
 
-// Diário, 08:05 (horário do servidor)
+// Avisa os administradores no WhatsApp quando a mudança pode quebrar a integração.
+// Só para mudanças críticas — mudança comum fica só no banner do painel.
+async function notificarAdminsMudancaBora(mudancas) {
+  const criticas = mudancas.filter(mudancaCritica);
+  if (!criticas.length) return;
+  const { rows } = await pool.query(
+    "SELECT nome, telefone FROM vendedores WHERE role='admin' AND ativo=true AND telefone IS NOT NULL AND telefone <> ''"
+  );
+  if (!rows.length) return;
+
+  const lista = criticas.slice(0, 8)
+    .map(m => `• ${ROTULOS_MUDANCA_BORA[m.tipo] || m.tipo}: ${m.alvo}${m.detalhe ? ` (${m.detalhe})` : ''}`)
+    .join('\n');
+  const resto = criticas.length > 8 ? `\n• ...e mais ${criticas.length - 8}` : '';
+  const msg = `⚠ *API da Bora mudou*\n\n${criticas.length} alteração(ões) que pode(m) quebrar a integração:\n\n${lista}${resto}\n\n`
+            + `Total de mudanças nesta checagem: ${mudancas.length}.\nDetalhes no painel: https://app.movechip5g.com.br`;
+
+  for (const admin of rows) {
+    await enviarWhatsAppMove(admin.telefone, msg)
+      .catch(e => console.error(`[bora-doc] WhatsApp p/ ${admin.nome} falhou:`, e.message));
+  }
+}
+
+// Diário às 08:05 de Brasília
 cron.schedule('5 8 * * *', () => {
   verificarDocBora().catch(e => console.error('[bora-doc]', e.message));
-});
+}, { timezone: 'America/Sao_Paulo' });
 
 // Situação atual pro banner do painel (admin)
 app.get('/api/admin/bora-api/status', authMiddleware, adminOnly, async (req, res) => {

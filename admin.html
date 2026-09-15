@@ -803,6 +803,8 @@ select option { background: var(--bg3); }
           <button class="btn btn-secondary btn-sm" onclick="forcaPolling()" title="Forçar checagem de recargas agora">⟳ Polling</button>
         </div>
       </div>
+      <!-- Situação da documentação da API da Bora (sempre visível p/ admin) -->
+      <div id="status-api-bora" style="display:none;color:var(--text3);font-size:12px;margin:-4px 0 16px 0;gap:10px;align-items:center;flex-wrap:wrap"></div>
       <div class="stats-grid dash-2linhas" id="dash-stats">
         <div class="stat-card"><div class="stat-label">Total Vendedores</div><div class="stat-value" id="st-vendedores">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Ativações</div><div class="stat-value" id="st-ativacoes">—</div></div>
@@ -5252,7 +5254,43 @@ async function carregarStatusApiBora() {
   try {
     _apiBoraStatus = await api('GET', '/api/admin/bora-api/status');
     renderBannerApiBora();
+    renderStatusApiBora();
   } catch { /* monitor é secundário: nunca atrapalha o painel */ }
+}
+
+// Linha fixa no Dashboard: última checagem + botão de verificar na hora.
+function renderStatusApiBora() {
+  const el = document.getElementById('status-api-bora');
+  if (!el) return;
+  const s = _apiBoraStatus;
+  if (!s) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+
+  if (s.semDados) {
+    el.innerHTML = `<span>API Bora: primeira leitura da documentação ainda não feita.</span>
+      <button class="btn btn-secondary btn-sm" onclick="verificarApiBoraAgora(this)">⟳ Verificar</button>`;
+    return;
+  }
+  const quando = s.verificadoEm ? tempoRelativo(s.verificadoEm) : '—';
+  const alerta = s.pendente
+    ? `<span style="color:${s.criticas ? 'var(--red)' : 'var(--yellow)'};font-weight:600">${(s.mudancas||[]).length} mudança(s) não vista(s)</span> ·`
+    : '<span style="color:var(--green,#0c8)">sem mudanças</span> ·';
+  el.innerHTML = `<span>📘 <b style="color:var(--text2)">API Bora</b> ${s.versao || '—'}${s.buildApi ? ` · build ${s.buildApi}` : ''} · ${s.totalEndpoints || 0} endpoints ·</span>
+    <span>${alerta} verificado ${quando}</span>
+    <button class="btn btn-secondary btn-sm" onclick="verificarApiBoraAgora(this)">⟳ Verificar</button>
+    <a class="btn btn-secondary btn-sm" href="${s.docUrl}" target="_blank" rel="noopener">Documentação</a>`;
+}
+
+// "há 3 min" / "há 2 h" / "há 4 dias"
+function tempoRelativo(iso) {
+  const min = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (!isFinite(min) || min < 0) return '—';
+  if (min < 1) return 'agora há pouco';
+  if (min < 60) return `há ${min} min`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `há ${h} h`;
+  const d = Math.floor(h / 24);
+  return `há ${d} dia${d > 1 ? 's' : ''}`;
 }
 
 function renderBannerApiBora() {
@@ -5320,8 +5358,7 @@ async function marcarApiBoraVisto(btn) {
   btn.disabled = true;
   try {
     await api('POST', '/api/admin/bora-api/marcar-visto');
-    _apiBoraStatus = null;
-    renderBannerApiBora();
+    await carregarStatusApiBora();   // recarrega: some o banner, mantém a linha do Dashboard
     toast('Aviso arquivado. Você será avisado na próxima mudança.');
   } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
 }
