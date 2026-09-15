@@ -177,6 +177,18 @@ function extrairPaymentLink(resp) {
   return goto?.href || resp.paymentLink || resp.url || resp.link || null;
 }
 
+// Converte a forma de pagamento do painel para o PaymentTypeEnum da Bora
+// (Credit | Billet | Pix | ComboBillet). Valores desconhecidos seguem como vieram.
+function paymentTypeEnumBora(tipo) {
+  const t = String(tipo || '').trim().toLowerCase().replace(/[\s_-]/g, '');
+  if (!t) return tipo;
+  if (t === 'billetcombo' || t === 'combobillet' || t === 'boletocombado') return 'ComboBillet';
+  if (ehPagamentoCartao(t)) return 'Credit';
+  if (t === 'billet' || t === 'boleto') return 'Billet';
+  if (t === 'pix') return 'Pix';
+  return tipo;
+}
+
 // true quando a forma de pagamento escolhida é cartão de crédito (aceita variações).
 function ehPagamentoCartao(tipo) {
   return /^cred|^cart|card/i.test(String(tipo || '').trim());
@@ -5140,12 +5152,16 @@ app.get('/api/bora/linha/:msisdn/cartoes', authMiddleware, async (req, res) => {
     if (!accountId) throw new Error('accountId não encontrado para esta linha');
     const data = await boraGet(`/api/Subscription/${accountId}/card`);
     const lista = Array.isArray(data) ? data : (data?.cards || data?.items || data?.data || []);
+    // Shape Bora (ListSubscriptionCardsResponseModel): paymentId, name, document, validity,
+    // binCode, lastDigits, flag, flagImageUrl, type.
     const cartoes = lista.map(c => ({
       paymentId: c.paymentId || c.id || c.paymentMethodId || null,
-      brand:     c.brand || c.bandeira || c.cardBrand || null,
-      last4:     c.last4 || c.lastFourDigits || c.finalDigits || (c.number ? String(c.number).slice(-4) : null),
-      holder:    c.holderName || c.holder || c.name || null,
-      validade:  c.expiration || c.expiryDate || (c.expMonth && c.expYear ? `${c.expMonth}/${c.expYear}` : null),
+      brand:     c.flag || c.brand || c.bandeira || c.cardBrand || null,
+      brandImg:  c.flagImageUrl || null,
+      last4:     (c.lastDigits ? String(c.lastDigits).slice(-4) : null) || c.last4 || c.lastFourDigits || c.finalDigits || (c.number ? String(c.number).slice(-4) : null),
+      holder:    c.name || c.holderName || c.holder || null,
+      validade:  c.validity || c.expiration || c.expiryDate || (c.expMonth && c.expYear ? `${c.expMonth}/${c.expYear}` : null),
+      tipo:      c.type || null,
       principal: c.main === true || c.default === true || c.principal === true,
     }));
     res.json({ ok: true, accountId, recurrenceType: details?.recurrenceType || details?.recurrence?.paymentType || null, cartoes, raw: data });
@@ -5216,18 +5232,20 @@ app.post('/api/bora/trocar-plano', authMiddleware, async (req, res) => {
     if (await bloqueiaEmpresaFamilia(req, res, planId, req.body.plano_nome || req.body.planName)) return;
 
     // Passo 1: cancela a recorrência atual e cria a nova ativação do plano escolhido.
-    const data = await boraPost('/api/Subscription/changeplan', req.body);
+    // PaymentTypeEnum da Bora: Credit | Billet | Pix | ComboBillet (não aceita "BilletCombo").
+    const paymentTypeBora = paymentTypeEnumBora(paymentType);
+    const data = await boraPost('/api/Subscription/changeplan', { ...req.body, paymentType: paymentTypeBora });
 
-    // Passo 2 (Boleto/Cartão): a Bora devolve um carrinho que precisa ser finalizado
-    // "conforme fluxo padrão de uma recarga". Só o Boleto Combado já vem finalizado.
-    // BilletCombo → nada a fazer. Billet → recharge/billet. Cartão → PaymentTransaction.
+    // Passo 2 (Boleto/Cartão): a Bora devolve 200 com {cartId, clientId, planId, msisdn}, e o
+    // carrinho precisa ser finalizado "conforme fluxo padrão de uma recarga".
+    // ComboBillet → 204 (já finalizado). Billet → recharge/billet. Cartão → PaymentTransaction.
     const cartId = data?.cartId || data?.cart?.id || data?.id || null;
     let paymentLink = null;
     let pixData = data?.pix || null;
     let billetData = data?.billet || null;
-    const tipo = String(paymentType || '').toLowerCase();
+    const tipo = String(paymentTypeBora || '').toLowerCase();
 
-    if (cartId && tipo && tipo !== 'billetcombo') {
+    if (cartId && tipo && tipo !== 'combobillet') {
       let pagamentoResp;
       if (ehPagamentoCartao(tipo)) {
         pagamentoResp = await boraPagamentoCartao(cartId);
@@ -5355,15 +5373,16 @@ app.post('/api/bora/titularidade/efetivar', authMiddleware, requirePerm('titular
 });
 
 // ─── TROCA DE SIM (sim-swap Bora) ─────────────────────────────────────────────
-// Fluxo Bora: POST /api/Subscription/sim-swap/{numero} {newiccid} -> {questionQuantity};
-//   depois PUT /api/Subscription/sim-swap/{numero} {response, iccid} (1ª com response="")
-//   devolve cada {question, alternatives}; ao responder a última, retorna se comprovou a
-//   identidade. Estado (msisdn/iccid) mantido no cliente. requirePerm('sim_swap') + carteira.
+// Fluxo Bora (Swagger build 2026-09-08):
+//   POST /api/Subscription/sim-swap/{numero} {newIccid} -> {questionQuantity, needsQuestionConfirmation}
+//     needsQuestionConfirmation=false => troca já concluída, sem perguntas.
+//   PUT /api/Subscription/sim-swap/{numero} {response} (1ª com response="") devolve cada
+//     {question, alternatives}. Concluído = 200 com question/alternatives nulos; resposta
+//     incorreta = 422. (iccid segue no PUT por compatibilidade com o fluxo do PDF v6.)
+//   Estado (msisdn/iccid) mantido no cliente. requirePerm('sim_swap') + carteira.
 function simSwapSucesso(data) {
-  const txt = JSON.stringify(data || {}).toLowerCase();
-  if (data && (data.success === true || data.swapped === true || data.status === 'success')) return true;
-  return /(sucesso|realizad|conclu[ií]d|trocad|aprovad)/.test(txt)
-      && !/(n[aã]o foi poss|inv[aá]lid|incorret|fail|erro|negad)/.test(txt);
+  // 200 sem próxima pergunta = questionário concluído e troca efetivada (falha vem como 422)
+  return !(data && data.question) && !(data && Array.isArray(data.alternatives) && data.alternatives.length);
 }
 
 async function atualizarSimLocal({ msisdn, iccid }) {
@@ -5399,8 +5418,13 @@ app.post('/api/bora/sim-swap/:msisdn/iniciar', authMiddleware, requirePerm('sim_
     const iccid = String(req.body.newIccid || req.body.iccid || '').replace(/\s/g, '');
     if (!iccid) return res.status(400).json({ erro: 'Informe o ICCID do novo chip' });
     const numero = normalizarMsisdnParaBora(req.params.msisdn);
-    const abertura = await boraPost(`/api/Subscription/sim-swap/${encodeURIComponent(numero)}`, { newiccid: iccid });
+    const abertura = await boraPost(`/api/Subscription/sim-swap/${encodeURIComponent(numero)}`, { newIccid: iccid });
     const totalQuestoes = abertura?.questionQuantity || 5;
+    // Swagger Bora (build 2026-09-08): needsQuestionConfirmation=false => troca já efetivada, sem perguntas.
+    if (abertura && abertura.needsQuestionConfirmation === false) {
+      const crm = await registrarSimSwapConcluido(req, numero, iccid, abertura);
+      return res.json({ ok: true, msisdn: numero, iccid, totalQuestoes: 0, done: true, sucesso: true, resultado: abertura, crm });
+    }
     const q1 = await boraPut(`/api/Subscription/sim-swap/${encodeURIComponent(numero)}`, { response: '', iccid });
     const temQuestao = q1 && q1.question && Array.isArray(q1.alternatives) && q1.alternatives.length;
     res.json({
@@ -5419,21 +5443,33 @@ app.post('/api/bora/sim-swap/:msisdn/responder', authMiddleware, requirePerm('si
     if (!iccid) return res.status(400).json({ erro: 'iccid obrigatório' });
     if (response === undefined || response === null || response === '') return res.status(400).json({ erro: 'Informe a resposta escolhida' });
     const numero = normalizarMsisdnParaBora(req.params.msisdn);
-    const data = await boraPut(`/api/Subscription/sim-swap/${encodeURIComponent(numero)}`, { response, iccid });
+    let data;
+    try {
+      data = await boraPut(`/api/Subscription/sim-swap/${encodeURIComponent(numero)}`, { response, iccid });
+    } catch (e) {
+      // 422 = "O formulário foi respondido incorretamente" → resultado final negativo, não erro técnico
+      if (e.response?.status === 422) {
+        const pd = e.response.data || {};
+        return res.json({ done: true, sucesso: false, resultado: { message: pd.detail || pd.title || 'Não foi possível comprovar a identidade.' }, crm: { linhasAfetadas: 0 } });
+      }
+      throw e;
+    }
     const temQuestao = data && data.question && Array.isArray(data.alternatives) && data.alternatives.length;
     if (temQuestao) return res.json({ done: false, question: data.question, alternatives: data.alternatives });
     const sucesso = simSwapSucesso(data);
-    let crm = { linhasAfetadas: 0 };
-    if (sucesso) {
-      crm = await atualizarSimLocal({ msisdn: numero, iccid });
-      await pool.query(
-        `INSERT INTO sim_swap_historico (linha_id,msisdn,iccid_novo,iccid_anterior,status,usuario_id,detalhe) VALUES ($1,$2,$3,$4,'concluida',$5,$6)`,
-        [crm.linhaId || null, numero, iccid, crm.iccidAnterior || null, req.user?.id || null, JSON.stringify(data || {}).slice(0, 1000)]
-      ).catch(err => console.error('[sim-swap] hist:', err.message));
-    }
+    const crm = sucesso ? await registrarSimSwapConcluido(req, numero, iccid, data) : { linhasAfetadas: 0 };
     res.json({ done: true, sucesso, resultado: data || {}, crm });
-  } catch (e) { res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message }); }
+  } catch (e) { res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.response?.data?.title || e.message }); }
 });
+
+async function registrarSimSwapConcluido(req, numero, iccid, detalhe) {
+  const crm = await atualizarSimLocal({ msisdn: numero, iccid });
+  await pool.query(
+    `INSERT INTO sim_swap_historico (linha_id,msisdn,iccid_novo,iccid_anterior,status,usuario_id,detalhe) VALUES ($1,$2,$3,$4,'concluida',$5,$6)`,
+    [crm.linhaId || null, numero, iccid, crm.iccidAnterior || null, req.user?.id || null, JSON.stringify(detalhe || {}).slice(0, 1000)]
+  ).catch(err => console.error('[sim-swap] hist:', err.message));
+  return crm;
+}
 
 // Fallback: força a atualização do CRM (swap ok na Bora mas heurística não reconheceu)
 app.post('/api/bora/sim-swap/:msisdn/sincronizar', authMiddleware, requirePerm('sim_swap'), async (req, res) => {
