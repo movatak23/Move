@@ -6263,6 +6263,189 @@ app.post('/api/admin/polling/forcar', authMiddleware, adminOnly, async (req, res
   res.json({ ok: true, mensagem: 'Polling iniciado em background' });
 });
 
+// ─── MONITOR DA DOCUMENTAÇÃO DA API DA BORA ───────────────────────────────────
+// A Bora publica a doc viva em /swagger/v1/swagger.json (o PDF que circula fica
+// desatualizado). Este job baixa o Swagger, guarda uma "fotografia" dos endpoints e
+// dos campos, e compara com a anterior — mudança silenciosa lá já quebrou fluxo aqui
+// (ex.: telefone do cadastro, sim-swap). Só leitura: não chama nada que altere dados.
+const BORA_SWAGGER_URL = `${BORA_BASE}/swagger/v1/swagger.json`;
+
+// Fotografia comparável do Swagger: endpoints (MÉTODO caminho) e campos de cada schema.
+function fotografarSwaggerBora(doc) {
+  const endpoints = [];
+  for (const [caminho, metodos] of Object.entries(doc?.paths || {})) {
+    for (const metodo of Object.keys(metodos || {})) endpoints.push(`${metodo.toUpperCase()} ${caminho}`);
+  }
+  const schemas = {};
+  for (const [nome, sch] of Object.entries(doc?.components?.schemas || {})) {
+    const props = Object.keys(sch?.properties || {}).sort();
+    const obrigatorios = [...(sch?.required || [])].sort();
+    schemas[nome] = { campos: props, obrigatorios };
+  }
+  return { versao: doc?.info?.version || null, endpoints: endpoints.sort(), schemas };
+}
+
+// Diferença legível entre duas fotografias. [] = nada mudou.
+function compararSwaggerBora(antes, agora) {
+  const mudancas = [];
+  const anteriores = new Set(antes?.endpoints || []);
+  const atuais = new Set(agora?.endpoints || []);
+  for (const ep of atuais) if (!anteriores.has(ep)) mudancas.push({ tipo: 'endpoint_novo', alvo: ep });
+  for (const ep of anteriores) if (!atuais.has(ep)) mudancas.push({ tipo: 'endpoint_removido', alvo: ep });
+
+  const schAntes = antes?.schemas || {}, schAgora = agora?.schemas || {};
+  for (const [nome, s] of Object.entries(schAgora)) {
+    const a = schAntes[nome];
+    if (!a) { mudancas.push({ tipo: 'schema_novo', alvo: nome }); continue; }
+    const novos = s.campos.filter(c => !a.campos.includes(c));
+    const sumiram = a.campos.filter(c => !s.campos.includes(c));
+    const virouObrigatorio = s.obrigatorios.filter(c => !a.obrigatorios.includes(c));
+    const deixouObrigatorio = a.obrigatorios.filter(c => !s.obrigatorios.includes(c));
+    if (novos.length) mudancas.push({ tipo: 'campo_novo', alvo: nome, detalhe: novos.join(', ') });
+    if (sumiram.length) mudancas.push({ tipo: 'campo_removido', alvo: nome, detalhe: sumiram.join(', ') });
+    if (virouObrigatorio.length) mudancas.push({ tipo: 'campo_virou_obrigatorio', alvo: nome, detalhe: virouObrigatorio.join(', ') });
+    if (deixouObrigatorio.length) mudancas.push({ tipo: 'campo_deixou_obrigatorio', alvo: nome, detalhe: deixouObrigatorio.join(', ') });
+  }
+  for (const nome of Object.keys(schAntes)) if (!schAgora[nome]) mudancas.push({ tipo: 'schema_removido', alvo: nome });
+
+  if ((antes?.versao || null) !== (agora?.versao || null)) {
+    mudancas.unshift({ tipo: 'versao', alvo: `${antes?.versao || '—'} → ${agora?.versao || '—'}` });
+  }
+  return mudancas;
+}
+
+// Rótulos amigáveis dos tipos de mudança (usados no painel)
+const ROTULOS_MUDANCA_BORA = {
+  versao: 'Versão da API',
+  endpoint_novo: 'Endpoint novo',
+  endpoint_removido: 'Endpoint removido',
+  schema_novo: 'Estrutura nova',
+  schema_removido: 'Estrutura removida',
+  campo_novo: 'Campo novo',
+  campo_removido: 'Campo removido',
+  campo_virou_obrigatorio: 'Campo virou obrigatório',
+  campo_deixou_obrigatorio: 'Campo deixou de ser obrigatório',
+};
+
+// Mudanças que costumam quebrar integração — destacadas no painel
+function mudancaCritica(m) {
+  return ['endpoint_removido', 'campo_removido', 'campo_virou_obrigatorio', 'schema_removido'].includes(m.tipo);
+}
+
+async function garantirTabelaBoraApiDoc() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bora_api_doc (
+      id SERIAL PRIMARY KEY,
+      verificado_em TIMESTAMPTZ DEFAULT NOW(),
+      versao VARCHAR(50),
+      build_api VARCHAR(50),
+      total_endpoints INTEGER,
+      fotografia JSONB,
+      mudancas JSONB,
+      visto_em TIMESTAMPTZ,
+      visto_por INTEGER
+    )
+  `);
+}
+
+let checagemBoraEmAndamento = false;
+
+// Baixa o Swagger, compara com a última fotografia e grava uma nova linha quando muda.
+// Sempre atualiza `verificado_em` da última linha quando nada mudou (pra mostrar "checado há X").
+async function verificarDocBora() {
+  if (checagemBoraEmAndamento) return { ok: false, motivo: 'checagem já em andamento' };
+  checagemBoraEmAndamento = true;
+  try {
+    const { data: doc } = await axios.get(BORA_SWAGGER_URL, { timeout: 30000 });
+    const agora = fotografarSwaggerBora(doc);
+    let buildApi = null;
+    try {
+      const v = await axios.get(`${BORA_BASE}/api/Version`, { timeout: 15000 });
+      buildApi = v.data?.version || null;
+    } catch { /* /api/Version é extra: se falhar, a comparação do Swagger basta */ }
+
+    const ultima = await pool.query('SELECT * FROM bora_api_doc ORDER BY id DESC LIMIT 1');
+    const anterior = ultima.rows[0] || null;
+
+    if (!anterior) {
+      await pool.query(
+        `INSERT INTO bora_api_doc (versao, build_api, total_endpoints, fotografia, mudancas, visto_em)
+         VALUES ($1,$2,$3,$4,$5,NOW())`,
+        [agora.versao, buildApi, agora.endpoints.length, JSON.stringify(agora), JSON.stringify([])]
+      );
+      console.log(`[bora-doc] 1ª fotografia guardada: ${agora.endpoints.length} endpoints.`);
+      return { ok: true, primeira: true, mudancas: [] };
+    }
+
+    const mudancas = compararSwaggerBora(anterior.fotografia, agora);
+    const mudouBuild = buildApi && anterior.build_api && buildApi !== anterior.build_api;
+
+    if (!mudancas.length) {
+      // Nada mudou na doc: só registra que foi checado agora (mantém o build mais recente).
+      await pool.query('UPDATE bora_api_doc SET verificado_em=NOW(), build_api=COALESCE($2,build_api) WHERE id=$1', [anterior.id, buildApi]);
+      return { ok: true, mudancas: [], buildAlterado: mudouBuild };
+    }
+
+    await pool.query(
+      `INSERT INTO bora_api_doc (versao, build_api, total_endpoints, fotografia, mudancas)
+       VALUES ($1,$2,$3,$4,$5)`,
+      [agora.versao, buildApi, agora.endpoints.length, JSON.stringify(agora), JSON.stringify(mudancas)]
+    );
+    console.warn(`[bora-doc] ${mudancas.length} mudança(s) na API da Bora:`,
+      mudancas.slice(0, 10).map(m => `${m.tipo} ${m.alvo}`).join(' | '));
+    return { ok: true, mudancas };
+  } catch (e) {
+    console.error('[bora-doc] falha ao checar documentação:', e.message);
+    return { ok: false, erro: e.message };
+  } finally {
+    checagemBoraEmAndamento = false;
+  }
+}
+
+// Diário, 08:05 (horário do servidor)
+cron.schedule('5 8 * * *', () => {
+  verificarDocBora().catch(e => console.error('[bora-doc]', e.message));
+});
+
+// Situação atual pro banner do painel (admin)
+app.get('/api/admin/bora-api/status', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM bora_api_doc ORDER BY id DESC LIMIT 1');
+    const ultima = r.rows[0];
+    if (!ultima) return res.json({ ok: true, semDados: true, pendente: false });
+    const mudancas = Array.isArray(ultima.mudancas) ? ultima.mudancas : [];
+    res.json({
+      ok: true,
+      pendente: !ultima.visto_em && mudancas.length > 0,
+      verificadoEm: ultima.verificado_em,
+      versao: ultima.versao,
+      buildApi: ultima.build_api,
+      totalEndpoints: ultima.total_endpoints,
+      criticas: mudancas.filter(mudancaCritica).length,
+      mudancas: mudancas.map(m => ({ ...m, rotulo: ROTULOS_MUDANCA_BORA[m.tipo] || m.tipo, critica: mudancaCritica(m) })),
+      docUrl: `${BORA_BASE}/swagger/index.html`
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Checagem sob demanda (botão "Verificar agora")
+app.post('/api/admin/bora-api/verificar', authMiddleware, adminOnly, async (req, res) => {
+  const r = await verificarDocBora();
+  if (!r.ok) return res.status(502).json({ erro: r.erro || r.motivo || 'Falha ao consultar a documentação da Bora' });
+  res.json({ ok: true, mudancas: r.mudancas || [], primeira: !!r.primeira });
+});
+
+// Marca as mudanças como lidas (some o banner até a próxima alteração)
+app.post('/api/admin/bora-api/marcar-visto', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    await pool.query(
+      'UPDATE bora_api_doc SET visto_em=NOW(), visto_por=$1 WHERE id=(SELECT id FROM bora_api_doc ORDER BY id DESC LIMIT 1)',
+      [req.user?.id || null]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ─── Serve o frontend ─────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'admin.html'));
@@ -6380,6 +6563,7 @@ async function rodarMigrations(tentativa = 1) {
     ['tabelas suporte', garantirTabelasSuporte],
     ['tabela permissoes', garantirTabelaPermissoes],
     ['tabela sim-swap', garantirTabelaSimSwap],
+    ['tabela doc API Bora', garantirTabelaBoraApiDoc],
     ['permissoes padrao', garantirPermissoesPadrao],
   ];
   let falhas = [];
@@ -6414,5 +6598,7 @@ app.listen(PORT, () => {
     await esperarBanco();
     await rodarMigrations().catch(e => console.error('[DB] Erro nas migrations:', detalheErroDB(e)));
     setTimeout(checarRecargas, 30 * 1000);
+    // Primeira fotografia da doc da Bora logo após o boot (depois o cron diário cuida)
+    setTimeout(() => verificarDocBora().catch(e => console.error('[bora-doc]', e.message)), 60 * 1000);
   })();
 });

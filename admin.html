@@ -784,6 +784,10 @@ select option { background: var(--bg3); }
   <!-- Main -->
   <div class="main-content" id="main-content">
 
+    <!-- Aviso de mudança na documentação da API da Bora (só admin) -->
+    <div id="banner-bora-api" style="display:none;margin:0 0 18px 0"></div>
+
+
     <!-- ── DASHBOARD ADMIN ──────────────────── -->
     <div class="page" id="page-dashboard">
       <div id="banner-promocoes" style="display:none;margin:0 0 20px 0"></div>
@@ -2370,6 +2374,7 @@ async function iniciarApp() {
     loadAdmins();
     setTimeout(verificarAlertaEsim, 2000);
     setTimeout(loadPromocoes, 1000);
+    setTimeout(carregarStatusApiBora, 1500);
   } else {
     navegarPara('meu-painel');
     loadMeuPainel();
@@ -5236,6 +5241,90 @@ async function realizarPortabilidade() {
 }
 
 
+
+// ── MONITOR DA DOCUMENTAÇÃO DA API DA BORA (banner do topo, só admin) ─────────
+// O backend baixa o Swagger da Bora todo dia e compara com a fotografia anterior.
+// Aqui só mostramos o resultado: mudou algo → banner no topo até marcar como visto.
+let _apiBoraStatus = null;
+
+async function carregarStatusApiBora() {
+  if (state.user?.role !== 'admin') return;
+  try {
+    _apiBoraStatus = await api('GET', '/api/admin/bora-api/status');
+    renderBannerApiBora();
+  } catch { /* monitor é secundário: nunca atrapalha o painel */ }
+}
+
+function renderBannerApiBora() {
+  const banner = document.getElementById('banner-bora-api');
+  if (!banner) return;
+  const s = _apiBoraStatus;
+  if (!s || !s.pendente) { banner.style.display = 'none'; return; }
+
+  const criticas = s.criticas || 0;
+  const cor = criticas ? 'var(--red)' : 'var(--yellow)';
+  const fundo = criticas ? 'var(--red-dim)' : 'var(--yellow-dim)';
+  const total = (s.mudancas || []).length;
+  const quando = s.verificadoEm ? new Date(s.verificadoEm).toLocaleString('pt-BR') : '—';
+  const linhas = (s.mudancas || []).map(m => `
+    <div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px">
+      <span style="color:${m.critica ? 'var(--red)' : 'var(--text3)'};min-width:190px;font-weight:${m.critica ? '700' : '500'}">${m.critica ? '⚠ ' : ''}${m.rotulo}</span>
+      <span style="color:var(--text);font-family:var(--mono);word-break:break-all">${escapeHtmlAttr(m.alvo || '')}${m.detalhe ? ` <span style="color:var(--text2)">(${escapeHtmlAttr(m.detalhe)})</span>` : ''}</span>
+    </div>`).join('');
+
+  banner.style.display = 'block';
+  banner.innerHTML = `
+    <div style="background:${fundo};border:1px solid ${cor};border-radius:var(--r);padding:14px 18px">
+      <div style="display:flex;gap:14px;align-items:flex-start">
+        <span style="font-size:22px;flex-shrink:0">${criticas ? '⚠' : '📘'}</span>
+        <div style="flex:1">
+          <div style="color:${cor};font-weight:700;font-size:14px;margin-bottom:3px">
+            A documentação da API da Bora mudou — ${total} alteração(ões)${criticas ? `, ${criticas} que pode(m) quebrar a integração` : ''}
+          </div>
+          <div style="color:var(--text);font-size:13px;line-height:1.5">
+            Versão ${s.versao || '—'}${s.buildApi ? ` · build ${s.buildApi}` : ''} · ${s.totalEndpoints || 0} endpoints · verificado em ${quando}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+            <button class="btn btn-secondary btn-sm" onclick="toggleDetalhesApiBora()" id="btn-det-bora">Ver o que mudou</button>
+            <a class="btn btn-secondary btn-sm" href="${s.docUrl}" target="_blank" rel="noopener">Abrir documentação</a>
+            <button class="btn btn-secondary btn-sm" onclick="verificarApiBoraAgora(this)">⟳ Verificar agora</button>
+            <button class="btn btn-secondary btn-sm" onclick="marcarApiBoraVisto(this)">✔ Marcar como visto</button>
+          </div>
+          <div id="det-bora" style="display:none;margin-top:12px;max-height:280px;overflow:auto">${linhas}</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function toggleDetalhesApiBora() {
+  const det = document.getElementById('det-bora');
+  const btn = document.getElementById('btn-det-bora');
+  if (!det) return;
+  const abrir = det.style.display === 'none';
+  det.style.display = abrir ? 'block' : 'none';
+  if (btn) btn.textContent = abrir ? 'Ocultar' : 'Ver o que mudou';
+}
+
+async function verificarApiBoraAgora(btn) {
+  btn.disabled = true; btn.textContent = 'Verificando...';
+  try {
+    const r = await api('POST', '/api/admin/bora-api/verificar');
+    toast((r.mudancas || []).length ? `${r.mudancas.length} mudança(s) na API da Bora` : 'Nenhuma mudança na API da Bora',
+          (r.mudancas || []).length ? 'info' : 'success');
+    await carregarStatusApiBora();
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '⟳ Verificar agora'; }
+}
+
+async function marcarApiBoraVisto(btn) {
+  btn.disabled = true;
+  try {
+    await api('POST', '/api/admin/bora-api/marcar-visto');
+    _apiBoraStatus = null;
+    renderBannerApiBora();
+    toast('Aviso arquivado. Você será avisado na próxima mudança.');
+  } catch (e) { toast(e.message, 'error'); btn.disabled = false; }
+}
 
 // ── PROMOÇÕES ─────────────────────────────────────────────────────────────────
 let editPromoId = null;
