@@ -905,6 +905,42 @@ function normalizarMsisdnParaBora(valor) {
   return fone;
 }
 
+// Telefone do CADASTRO no formato que a Bora exige: DDI + DDD + número, só dígitos
+// (ex.: "5511971892324" — AddSubscriberCommand.phone no Swagger). Sem o 55 a Bora
+// responde "telefone fora dos padrões". Devolve null quando não dá pra montar.
+function telefoneParaBora(valor) {
+  let fone = String(valor || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (!fone) return null;
+  if (fone.length === 10 || fone.length === 11) return '55' + fone;          // DDD + número
+  if (fone.startsWith('55') && (fone.length === 12 || fone.length === 13)) return fone;
+  return null;                                                               // sem DDD / inválido
+}
+
+// Mensagem de erro da Bora legível: o BadRequestProblemDetails traz os campos reprovados
+// em "errors" ({campo: [mensagens]}) — sem isso só sobra um título genérico.
+function erroBora(e) {
+  const d = e?.response?.data;
+  if (!d) return e?.message || 'Erro desconhecido';
+  if (typeof d === 'string') return d;
+  const campos = d.errors && typeof d.errors === 'object'
+    ? Object.entries(d.errors).map(([campo, msgs]) => `${campo}: ${[].concat(msgs).join(' ')}`)
+    : [];
+  const base = d.detail || d.title || d.message || '';
+  return [base, campos.join(' | ')].filter(Boolean).join(' — ') || e.message;
+}
+
+// Cópia do subscriber com o telefone normalizado pro padrão da Bora.
+// Telefone inválido é removido em vez de ir errado (a Bora recusa o cadastro inteiro).
+function normalizarSubscriberBora(sub) {
+  if (!sub || typeof sub !== 'object') return sub;
+  const out = { ...sub };
+  if ('phone' in out) {
+    const fone = telefoneParaBora(out.phone);
+    if (fone) out.phone = fone; else delete out.phone;
+  }
+  return out;
+}
+
 function variantesMsisdn(valor) {
   const digitos = String(valor || '').replace(/\D/g, '').replace(/^0+/, '');
   const set = new Set([String(valor || '').trim(), digitos]);
@@ -2342,7 +2378,7 @@ app.post('/api/esim/:iccid/enviar-qrcode', authMiddleware, async (req, res) => {
 
 app.post('/api/bora/subscriber', authMiddleware, async (req, res) => {
   try {
-    const data = await boraPost('/api/Subscriber', req.body);
+    const data = await boraPost('/api/Subscriber', normalizarSubscriberBora(req.body));
     res.json(data);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
@@ -2385,6 +2421,7 @@ app.post('/api/bora/cliente/criar-cadastro', authMiddleware, async (req, res) =>
     if (!String(s.name || '').trim()) faltando.push('nome');
     if (!emailOk) faltando.push('e-mail válido');
     if (!(doc.length === 11 || doc.length === 14)) faltando.push('CPF/CNPJ');
+    if (!telefoneParaBora(s.phone)) faltando.push('telefone com DDD');
     if (soDigitos(s.zipcode).length !== 8) faltando.push('CEP (8 dígitos)');
     if (!String(s.street || '').trim()) faltando.push('rua');
     if (!String(s.number || '').trim()) faltando.push('número');
@@ -2412,7 +2449,7 @@ app.post('/api/bora/cliente/criar-cadastro', authMiddleware, async (req, res) =>
       document: doc,
       name: String(s.name).trim(),
       email: String(s.email).trim(),
-      phone: soDigitos(s.phone) || undefined,
+      phone: telefoneParaBora(s.phone) || undefined,
       birthDate: String(s.birthDate || '').trim() || undefined,
       street: String(s.street).trim(),
       number: String(s.number).trim(),
@@ -2432,9 +2469,8 @@ app.post('/api/bora/cliente/criar-cadastro', authMiddleware, async (req, res) =>
       subscriber: criado || payload
     });
   } catch (e) {
-    const d = e.response?.data;
-    const msg = (d && (d.detail || d.title || d.message)) || (typeof d === 'string' ? d : null) || e.message;
-    res.status(e.response?.status || 500).json({ erro: msg });
+    console.error('[criar-cadastro] Bora recusou:', JSON.stringify(e.response?.data || e.message));
+    res.status(e.response?.status || 500).json({ erro: erroBora(e) });
   }
 });
 
@@ -2496,7 +2532,7 @@ app.put('/api/bora/cliente/cadastro', authMiddleware, async (req, res) => {
       document: doc,
       name:         v(subscriber.name, atual.name, atual.nome),
       email:        v(subscriber.email, atual.email),
-      phone:        v(subscriber.phone, atual.phone, atual.telefone),
+      phone:        telefoneParaBora(v(subscriber.phone, atual.phone, atual.telefone)) || undefined,
       birthDate:    v(subscriber.birthDate, atual.birthDate),
       street:       v(subscriber.street, atual.street),
       number:       v(subscriber.number, atual.number),
@@ -2899,7 +2935,7 @@ app.post('/api/app/ativar', authApp, async (req, res) => {
       clientId = existing?.idSubscriberExternal || existing?.id || null;
     } catch {}
     if (!clientId) {
-      const subResp = await boraPost('/api/Subscriber', subscriber);
+      const subResp = await boraPost('/api/Subscriber', normalizarSubscriberBora(subscriber));
       clientId = subResp?.idSubscriberExternal || subResp?.id || null;
     }
     if (!clientId) throw new Error('Não foi possível registrar o cliente');
@@ -3033,7 +3069,7 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
     } catch {}
 
     if (!clientId) {
-      const subResp = await boraPost('/api/Subscriber', subscriber);
+      const subResp = await boraPost('/api/Subscriber', normalizarSubscriberBora(subscriber));
       clientId = subResp?.idSubscriberExternal || subResp?.id || null;
     }
 

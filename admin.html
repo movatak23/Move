@@ -1854,7 +1854,7 @@ select option { background: var(--bg3); }
     </div>
     <div class="form-row">
       <div class="field"><label>E-mail <span style="color:var(--red)">*</span></label><input type="email" id="cc-email"></div>
-      <div class="field"><label>Telefone</label><input type="text" id="cc-tel" onblur="mascararTelefone(this)"></div>
+      <div class="field"><label>Telefone <span class="req">*</span></label><input type="text" id="cc-tel" placeholder="(11) 97189-2324" onblur="mascararTelefone(this)"></div>
     </div>
     <div class="form-row">
       <div class="field"><label>Data de Nascimento</label><input type="date" id="cc-nasc"></div>
@@ -3452,6 +3452,9 @@ function validarClienteAtivacao() {
   if (!(doc.length === 11 || doc.length === 14)) e.push('CPF/CNPJ válido');
   if (!val('cli-nome')) e.push('Nome completo');
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) e.push('E-mail válido');
+  // A Bora exige telefone com DDD (ela monta o 55 + DDD + número no cadastro)
+  const tel = document.getElementById('cli-tel').value.replace(/\D/g,'').replace(/^0+/,'');
+  if (!(tel.length === 10 || tel.length === 11 || (tel.startsWith('55') && (tel.length === 12 || tel.length === 13)))) e.push('Telefone com DDD');
   if (cep.length !== 8) e.push('CEP (8 dígitos)');
   if (!val('cli-rua')) e.push('Rua');
   if (!val('cli-numero')) e.push('Número');
