@@ -479,7 +479,56 @@ function authApp(req, res, next) {
   next();
 }
 
-// Envia mensagem via Z-API (instância Move)
+// ─── ENVIO DE WHATSAPP (Evolution ou Z-API) ──────────────────────────────────
+// Motor escolhido por env WHATSAPP_PROVIDER ('evolution' | 'zapi'). Se não vier nada,
+// usa Evolution quando ela estiver configurada — mesmo padrão do LoggZap.
+// Motivo da troca (15/09/2026): a instância Z-API da Move parou com "you must subscribe
+// to this instance again" e derrubou o código de acesso do app do cliente.
+// Voltar pro Z-API = setar WHATSAPP_PROVIDER=zapi no Railway (efeito imediato, sem deploy).
+const EVOLUTION_URL      = (process.env.EVOLUTION_URL || '').replace(/\/+$/, '');
+const EVOLUTION_API_KEY  = process.env.EVOLUTION_API_KEY || '';
+const EVOLUTION_INSTANCE = process.env.EVOLUTION_INSTANCE || '';
+const EVOLUTION_CONFIGURADA = Boolean(EVOLUTION_URL && EVOLUTION_API_KEY && EVOLUTION_INSTANCE);
+const WHATSAPP_PROVIDER = (process.env.WHATSAPP_PROVIDER || (EVOLUTION_CONFIGURADA ? 'evolution' : 'zapi')).toLowerCase();
+
+// Mensagem de erro que o usuário final entende (vale pros dois motores)
+function erroWhatsappAmigavel(e, bruta) {
+  const texto = String(bruta || '').toLowerCase();
+  if (/subscribe to this instance|not connected|disconnected|desconect|close|need.*subscribe|reconnect/.test(texto)) {
+    return '📵 O WhatsApp está temporariamente desconectado e precisa ser reconectado. Avise o administrador para reconectar a conta e tente de novo.';
+  }
+  if (e?.code === 'ECONNABORTED' || /timeout/i.test(String(e?.message || ''))) {
+    return '⏳ O WhatsApp demorou para responder. Tente novamente em alguns instantes.';
+  }
+  if (/phone|number|invalid|exists.*false|não é whatsapp|not a whatsapp/.test(texto)) {
+    return '📱 Não foi possível enviar: verifique se o número tem WhatsApp ativo.';
+  }
+  return '😕 Não conseguimos enviar a mensagem pelo WhatsApp agora. Tente novamente em instantes.';
+}
+
+// Evolution API (self-hosted): POST /message/sendText/{instancia}, header apikey.
+// A v2 aceita {number,text}; versões antigas querem {number,textMessage:{text}} — tentamos
+// o formato novo e, só se ele for recusado por formato, repetimos no antigo.
+async function enviarWhatsAppEvolution(fone, mensagem) {
+  const url = `${EVOLUTION_URL}/message/sendText/${encodeURIComponent(EVOLUTION_INSTANCE)}`;
+  const opcoes = { headers: { 'Content-Type': 'application/json', apikey: EVOLUTION_API_KEY }, timeout: 20000 };
+  try {
+    await axios.post(url, { number: fone, text: mensagem }, opcoes);
+  } catch (e) {
+    const status = e.response?.status;
+    if (status === 400 || status === 422) {
+      try {
+        await axios.post(url, { number: fone, textMessage: { text: mensagem } }, opcoes);
+        return;
+      } catch (e2) { e = e2; }
+    }
+    const d = e.response?.data;
+    const bruta = d?.message || d?.error || d?.response?.message || (typeof d === 'string' ? d : JSON.stringify(d || {}));
+    console.error('[evolution-move] erro:', e.response?.status, bruta);
+    throw new Error(erroWhatsappAmigavel(e, bruta));
+  }
+}
+
 async function enviarWhatsAppMove(telefone, mensagem) {
   let fone = String(telefone).replace(/\D/g, '');
   // Remove zeros à esquerda
@@ -487,6 +536,13 @@ async function enviarWhatsAppMove(telefone, mensagem) {
   // Garante DDI 55: se tem 10-11 dígitos (DDD + número), prefixa 55
   if (fone.length === 10 || fone.length === 11) fone = '55' + fone;
   if (fone.length < 12) throw new Error('Telefone inválido: ' + telefone);
+
+  if (WHATSAPP_PROVIDER === 'evolution') {
+    if (!EVOLUTION_CONFIGURADA) {
+      throw new Error('😕 O envio de WhatsApp não está configurado (faltam EVOLUTION_URL, EVOLUTION_API_KEY ou EVOLUTION_INSTANCE).');
+    }
+    return enviarWhatsAppEvolution(fone, mensagem);
+  }
 
   try {
     await axios.post(
@@ -507,18 +563,7 @@ async function enviarWhatsAppMove(telefone, mensagem) {
     const status = e.response?.status;
     const zapiMsg = e.response?.data?.message || e.response?.data?.error || e.response?.data?.value || '';
     console.error('[zapi-move] erro:', status, zapiMsg || JSON.stringify(e.response?.data || {}));
-    const bruta = String(zapiMsg).toLowerCase();
-    let amigavel;
-    if (/subscribe to this instance|not connected|disconnected|desconect|need.*subscribe|reconnect/.test(bruta)) {
-      amigavel = '📵 O WhatsApp está temporariamente desconectado e precisa ser reconectado. Avise o administrador para reconectar a conta e tente de novo.';
-    } else if (e.code === 'ECONNABORTED' || /timeout/i.test(String(e.message || ''))) {
-      amigavel = '⏳ O WhatsApp demorou para responder. Tente novamente em alguns instantes.';
-    } else if (/phone|number|invalid|não é whatsapp|not a whatsapp/.test(bruta)) {
-      amigavel = '📱 Não foi possível enviar: verifique se o número tem WhatsApp ativo.';
-    } else {
-      amigavel = '😕 Não conseguimos enviar a mensagem pelo WhatsApp agora. Tente novamente em instantes.';
-    }
-    throw new Error(amigavel);
+    throw new Error(erroWhatsappAmigavel(e, zapiMsg));
   }
 }
 
@@ -6515,6 +6560,39 @@ app.post('/api/admin/cache-status/forcar', authMiddleware, adminOnly, async (req
   res.json({ ok: true, mensagem: 'Sincronização de cache iniciada em background' });
 });
 
+
+// ─── DIAGNÓSTICO DO WHATSAPP (admin) ─────────────────────────────────────────
+// Responde qual motor está ativo e se a conta está conectada — foi a falta disso que
+// fez a queda do Z-API aparecer só como "não conseguimos enviar o código agora".
+app.get('/api/admin/whatsapp/status', authMiddleware, adminOnly, async (req, res) => {
+  const base = { provider: WHATSAPP_PROVIDER, evolutionConfigurada: EVOLUTION_CONFIGURADA, instancia: EVOLUTION_INSTANCE || null };
+  if (WHATSAPP_PROVIDER !== 'evolution') {
+    return res.json({ ...base, conectado: null, detalhe: 'Motor Z-API: o estado da conexão só aparece na tentativa de envio.' });
+  }
+  if (!EVOLUTION_CONFIGURADA) {
+    return res.json({ ...base, conectado: false, detalhe: 'Faltam EVOLUTION_URL, EVOLUTION_API_KEY ou EVOLUTION_INSTANCE no Railway.' });
+  }
+  try {
+    const { data } = await axios.get(
+      `${EVOLUTION_URL}/instance/connectionState/${encodeURIComponent(EVOLUTION_INSTANCE)}`,
+      { headers: { apikey: EVOLUTION_API_KEY }, timeout: 15000 }
+    );
+    const estado = data?.instance?.state || data?.state || null;
+    res.json({ ...base, conectado: estado === 'open', estado, detalhe: estado === 'open' ? 'WhatsApp conectado.' : `Instância em estado "${estado}" — reconecte pelo Manager da Evolution.` });
+  } catch (e) {
+    res.json({ ...base, conectado: false, detalhe: 'Não consegui falar com a Evolution: ' + (e.response?.data?.message || e.message) });
+  }
+});
+
+// Envio de teste, para o admin provar o canal sem depender de um cliente real
+app.post('/api/admin/whatsapp/teste', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const fone = telefoneParaBora(req.body?.telefone);
+    if (!fone) return res.status(400).json({ erro: 'Informe um telefone com DDD.' });
+    await enviarWhatsAppMove(fone, '✅ Teste do WhatsApp da Move. Se você recebeu esta mensagem, o envio está funcionando.');
+    res.json({ ok: true, enviadoPara: mascararFone(fone), provider: WHATSAPP_PROVIDER });
+  } catch (e) { res.status(502).json({ erro: e.message }); }
+});
 
 // Endpoint para forçar polling manualmente
 app.post('/api/admin/polling/forcar', authMiddleware, adminOnly, async (req, res) => {
