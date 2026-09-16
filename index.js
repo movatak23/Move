@@ -1106,6 +1106,30 @@ async function donoDaLinha(identificador) {
   return rows[0] || null;
 }
 
+// Quem atende a linha, com nome — para mostrar em qualquer tela de linha.
+// Usa o mesmo casamento tolerante do donoDaLinha (msisdn com/sem 55, iccid, documento).
+async function vendedorDaLinha(identificador) {
+  const dono = await donoDaLinha(identificador);
+  if (!dono) return null;
+  const { rows } = await pool.query(
+    `SELECT v.id, v.nome, v.nome_exibicao, v.telefone,
+            s.id AS sub_id, s.nome AS sub_nome
+       FROM vendedores v
+       LEFT JOIN vendedores s ON s.id = $2
+      WHERE v.id = $1`,
+    [dono.vendedor_id, dono.subvendedor_id || null]
+  );
+  const v = rows[0];
+  if (!v) return null;
+  return {
+    vendedorId: v.id,
+    nome: v.nome_exibicao || v.nome,
+    telefone: v.telefone || null,
+    subvendedorId: v.sub_id || null,
+    subvendedorNome: v.sub_nome || null
+  };
+}
+
 // Guard de isolamento (não-admin). NÃO bloqueia por "não achei na sua carteira" — isso
 // dava 403 falso quando a linha era do vendedor mas o dado local não batia (ex.:
 // documento_cliente vazio ao gerar PIX/boleto por CPF). Bloqueia SÓ quando a linha casa
@@ -3352,7 +3376,10 @@ app.get('/api/bora/linha/:identificador', authMiddleware, async (req, res) => {
   try {
     if (!(await garantirLinhaDoUsuario(req, res, req.params.identificador))) return;
     const data = await boraGet(`/api/Subscription/${req.params.identificador}/details`);
-    res.json(data);
+    // A Bora não sabe de vendedor — esse vínculo é nosso. Vai junto para a tela
+    // sempre mostrar de quem é a linha.
+    const vendedor = await vendedorDaLinha(req.params.identificador).catch(() => null);
+    res.json({ ...data, moveVendedor: vendedor });
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data || e.message });
   }
@@ -4829,6 +4856,12 @@ app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
       });
       if (!detalhes.length) return res.status(403).json({ erro: 'Nenhuma linha deste CPF está na sua carteira' });
     }
+
+    // Anexa o vendedor responsável por cada linha (dado nosso, não da Bora)
+    detalhes = await Promise.all(detalhes.map(async d => ({
+      ...d,
+      moveVendedor: await vendedorDaLinha(d?.msisdn || d?.iccid || d?.document).catch(() => null)
+    })));
 
     res.json({ linhas: detalhes });
   } catch (e) {
