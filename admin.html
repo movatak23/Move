@@ -805,6 +805,8 @@ select option { background: var(--bg3); }
       </div>
       <!-- Situação da documentação da API da Bora (sempre visível p/ admin) -->
       <div id="status-api-bora" style="display:none;color:var(--text3);font-size:12px;margin:-4px 0 16px 0;gap:10px;align-items:center;flex-wrap:wrap"></div>
+      <!-- Planos em uso sem comissão cadastrada (venda registra, mas paga R$ 0) -->
+      <div id="alerta-planos-sem-comissao" style="display:none;margin-bottom:16px"></div>
       <!-- Link do app do cliente, sempre à mão (venda online) -->
       <div id="card-app-admin" style="display:none;margin-bottom:16px"></div>
       <div class="stats-grid dash-2linhas" id="dash-stats">
@@ -2428,6 +2430,7 @@ async function iniciarApp() {
     setTimeout(loadPromocoes, 1000);
     setTimeout(carregarStatusApiBora, 1500);
     setTimeout(carregarCardAppCliente, 1800);
+    setTimeout(carregarPlanosSemComissao, 2100);
   } else {
     navegarPara('meu-painel');
     loadMeuPainel();
@@ -5322,6 +5325,33 @@ async function realizarPortabilidade() {
 }
 
 
+
+// ── PLANOS SEM COMISSÃO CADASTRADA (alerta do Dashboard) ─────────────────────
+// Plano em linha ativa que não existe em Planos & Comissões = venda registrada com
+// comissão R$ 0. Era isso que fazia recarga/ativação sumir do painel do vendedor.
+async function carregarPlanosSemComissao() {
+  const alvo = document.getElementById('alerta-planos-sem-comissao');
+  if (!alvo || state.user?.role !== 'admin') return;
+  try {
+    const r = await api('GET', '/api/admin/planos-sem-comissao');
+    if (!r.planos?.length) { alvo.style.display = 'none'; return; }
+    alvo.style.display = 'block';
+    alvo.innerHTML = `
+      <div style="background:var(--yellow-dim);border:1px solid var(--yellow);border-radius:var(--r);padding:14px 18px">
+        <div style="color:var(--yellow);font-weight:700;font-size:14px;margin-bottom:4px">
+          ⚠ ${r.planos.length} plano(s) em uso sem comissão cadastrada — ${r.total} linha(s) ativa(s)
+        </div>
+        <div style="color:var(--text);font-size:13px;line-height:1.5;margin-bottom:8px">
+          Recargas e ativações desses planos entram no painel do vendedor com <b>comissão R$ 0</b>.
+          Cadastre em <b>Planos &amp; Comissões</b> para voltar a pagar.
+        </div>
+        <div style="font-size:12px;color:var(--text2);font-family:var(--mono)">
+          ${r.planos.slice(0, 8).map(p => `${p.plano_nome} (${p.linhas} linha${p.linhas > 1 ? 's' : ''})`).join(' · ')}
+          ${r.planos.length > 8 ? ` · +${r.planos.length - 8}` : ''}
+        </div>
+      </div>`;
+  } catch { alvo.style.display = 'none'; }
+}
 
 // ── MEU WHATSAPP (vendedor conecta o próprio número) ─────────────────────────
 // O QR vem pronto do servidor em 640px (o base64 da Evolution é pequeno e o celular

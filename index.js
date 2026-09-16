@@ -6447,6 +6447,32 @@ async function enviarEmailBoleto({ email, nome, barcode, url }) {
 }
 
 // ─── CRON — Polling de recargas via /details ─────────────────────────────────
+// ─── COMISSÃO DO PLANO: casa por id e, se não achar, por NOME ────────────────
+// Por que existe: muita linha ficou com `plano_id` NULO ou com id antigo/numérico
+// ('3126', '1680'), enquanto o cadastro de comissões usa o id atual da Bora (UUID).
+// A busca só por id não achava nada → comissão 0 → a transação NÃO era registrada e
+// a recarga/ativação sumia do painel do vendedor. Agora o nome é a segunda chance,
+// e quando casa por nome a gente corrige o `plano_id` da linha (backfill).
+async function buscarComissaoPlano({ planoId, planoNome, linhaId = null }) {
+  if (planoId) {
+    const { rows } = await pool.query('SELECT * FROM planos_comissao WHERE plano_id=$1', [planoId]);
+    if (rows.length) return { ...rows[0], casadoPor: 'id' };
+  }
+  if (planoNome) {
+    const { rows } = await pool.query(
+      `SELECT * FROM planos_comissao WHERE UPPER(TRIM(plano_nome)) = UPPER(TRIM($1)) LIMIT 1`, [planoNome]
+    );
+    if (rows.length) {
+      if (linhaId && rows[0].plano_id) {
+        await pool.query('UPDATE linhas SET plano_id=$1 WHERE id=$2', [rows[0].plano_id, linhaId]).catch(() => null);
+        console.log(`[PLANO] Linha ${linhaId}: plano_id corrigido para ${rows[0].plano_id} (casou por nome "${planoNome}")`);
+      }
+      return { ...rows[0], casadoPor: 'nome' };
+    }
+  }
+  return { comissao_ativacao: 0, comissao_recarga: 0, plano_valor: null, casadoPor: null };
+}
+
 async function checarRecargas() {
   console.log(`[CRON] Iniciando polling — ${new Date().toISOString()}`);
   try {
@@ -6515,20 +6541,21 @@ async function checarRecargas() {
           continue;
         }
 
-        const { rows: planoRows } = await pool.query(
-          'SELECT comissao_recarga, plano_nome FROM planos_comissao WHERE plano_id=$1',
-          [linha.plano_id]
-        );
-        const comissao = parseFloat(planoRows[0]?.comissao_recarga || 0);
-        if (comissao === 0) {
-          await pool.query('UPDATE linhas SET ultima_checagem=NOW() WHERE id=$1', [linha.id]);
-          continue;
+        const plano = await buscarComissaoPlano({
+          planoId: linha.plano_id, planoNome: linha.plano_nome, linhaId: linha.id
+        });
+        const comissao = parseFloat(plano.comissao_recarga || 0);
+        // Antes, comissão 0 fazia `continue` e a recarga NÃO era registrada — o vendedor
+        // não via a renovação do cliente no painel. Agora registra sempre: o evento é
+        // informação do vendedor, a comissão é só um dos campos.
+        if (!plano.casadoPor) {
+          console.warn(`[CRON] Plano sem cadastro de comissão: "${linha.plano_nome}" (id ${linha.plano_id || 'nulo'}) — recarga registrada com comissão 0`);
         }
 
         await pool.query(
-          `INSERT INTO transacoes (linha_id, vendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
-           VALUES ($1,$2,'recarga',$3,$4,$5,$6,'bora_details')`,
-          [linha.id, linha.vendedor_id, linha.plano_id, linha.plano_nome, comissao, mesRef]
+          `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, comissao, periodo_referencia, fonte)
+           VALUES ($1,$2,$3,'recarga',$4,$5,$6,$7,'bora_details')`,
+          [linha.id, linha.vendedor_id, linha.subvendedor_id, linha.plano_id, linha.plano_nome, comissao, mesRef]
         );
         detectadas++;
         console.log(`[CRON] Recarga registrada: ${linha.msisdn} (${linha.vendedor_nome}) plano=${linha.plano_nome} comissão=R$${comissao}`);
@@ -6663,20 +6690,22 @@ async function sincronizarCacheStatus() {
             [linha.id]
           );
           if (!jaCreditada.length) {
-            const { rows: planoRows } = await pool.query(
-              'SELECT comissao_ativacao, plano_valor FROM planos_comissao WHERE plano_id=$1',
-              [linha.plano_id]
-            );
-            const comissaoAtiv = parseFloat(planoRows[0]?.comissao_ativacao || 0);
-            if (comissaoAtiv > 0) {
-              await pool.query(
-                `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
-                 VALUES ($1,$2,$3,'ativacao',$4,$5,$6,$7,'bora_confirmado')`,
-                [linha.id, linha.vendedor_id, linha.subvendedor_id, linha.plano_id, linha.plano_nome, planoRows[0]?.plano_valor || null, comissaoAtiv]
-              );
-              comissoesAtivacao++;
-              console.log(`[CACHE-STATUS] Comissão de ativação creditada: ${linha.msisdn} (vendedor ${linha.vendedor_id}) comissão=R$${comissaoAtiv}`);
+            const plano = await buscarComissaoPlano({
+              planoId: linha.plano_id, planoNome: linha.plano_nome, linhaId: linha.id
+            });
+            const comissaoAtiv = parseFloat(plano.comissao_ativacao || 0);
+            // Registra a ativação mesmo sem comissão cadastrada: antes ela sumia do painel
+            // do vendedor, que ficava sem ver a própria venda confirmada.
+            if (!plano.casadoPor) {
+              console.warn(`[CACHE-STATUS] Plano sem cadastro de comissão: "${linha.plano_nome}" (id ${linha.plano_id || 'nulo'}) — ativação registrada com comissão 0`);
             }
+            await pool.query(
+              `INSERT INTO transacoes (linha_id, vendedor_id, subvendedor_id, tipo, plano_id, plano_nome, valor_plano, comissao, fonte)
+               VALUES ($1,$2,$3,'ativacao',$4,$5,$6,$7,'bora_confirmado')`,
+              [linha.id, linha.vendedor_id, linha.subvendedor_id, linha.plano_id, linha.plano_nome, plano.plano_valor || null, comissaoAtiv]
+            );
+            comissoesAtivacao++;
+            console.log(`[CACHE-STATUS] Ativação registrada: ${linha.msisdn} (vendedor ${linha.vendedor_id}) comissão=R$${comissaoAtiv}`);
           }
         }
 
@@ -6782,6 +6811,23 @@ app.post('/api/admin/whatsapp/teste', authMiddleware, adminOnly, async (req, res
     await enviarWhatsAppMove(fone, '✅ Teste do WhatsApp da Move. Se você recebeu esta mensagem, o envio está funcionando.');
     res.json({ ok: true, enviadoPara: mascararFone(fone), provider: WHATSAPP_PROVIDER });
   } catch (e) { res.status(502).json({ erro: e.message }); }
+});
+
+// Planos que estão em linhas ativas mas NÃO têm comissão cadastrada.
+// Enquanto ficarem assim, a venda aparece no painel mas com comissão R$ 0.
+app.get('/api/admin/planos-sem-comissao', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT l.plano_nome, l.plano_id, COUNT(*)::int AS linhas
+        FROM linhas l
+        LEFT JOIN planos_comissao pc
+               ON pc.plano_id = l.plano_id
+               OR UPPER(TRIM(pc.plano_nome)) = UPPER(TRIM(l.plano_nome))
+       WHERE l.status='ativa' AND pc.id IS NULL AND COALESCE(l.plano_nome,'') <> ''
+       GROUP BY l.plano_nome, l.plano_id
+       ORDER BY linhas DESC`);
+    res.json({ ok: true, total: rows.reduce((s, r) => s + r.linhas, 0), planos: rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // Endpoint para forçar polling manualmente
