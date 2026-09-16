@@ -5434,6 +5434,7 @@ async function atualizarEstadoWhatsapp() {
       ${s.numero ? `<div style="color:var(--text2);font-size:13px;margin-top:4px">Número: <b>${s.numero.replace('55','')}</b></div>` : ''}`;
     acoes.innerHTML = s.conectado
       ? `<button class="btn btn-primary btn-sm" onclick="dispararAvisos(this)">📣 Avisar meus clientes agora</button>
+         <button class="btn btn-secondary btn-sm" onclick="testarMeuWhatsapp(this)">✉ Enviar teste pra mim</button>
          <button class="btn btn-secondary btn-sm" onclick="desconectarWhatsapp(this)">Desconectar</button>`
       : `<button class="btn btn-primary btn-sm" onclick="conectarWhatsapp(this)">📱 Conectar meu WhatsApp</button>`;
     if (s.conectado) { clearInterval(_mwPoll); _mwPoll = null; document.getElementById('mw-qr').innerHTML = ''; }
@@ -5470,15 +5471,28 @@ async function desconectarWhatsapp(btn) {
   finally { btn.disabled = false; atualizarEstadoWhatsapp(); }
 }
 
+async function testarMeuWhatsapp(btn) {
+  const numero = prompt('Enviar o teste para qual número? (deixe como está para usar o seu cadastro)', '');
+  btn.disabled = true; btn.textContent = 'Enviando...';
+  const msg = document.getElementById('mw-msg');
+  try {
+    const r = await api('POST', '/api/meu-whatsapp/teste', numero ? { telefone: numero } : {});
+    msg.innerHTML = `<span style="color:var(--green,#0c8)">✔ Teste enviado para ${r.enviadoPara}. Confira o WhatsApp.</span>`;
+  } catch (e) { msg.innerHTML = `<span style="color:var(--red)">${e.message}</span>`; }
+  finally { btn.disabled = false; btn.textContent = '✉ Enviar teste pra mim'; }
+}
+
 async function dispararAvisos(btn) {
   btn.disabled = true; btn.textContent = 'Enviando...';
   const msg = document.getElementById('mw-msg');
   try {
     const r = await api('POST', '/api/meu-whatsapp/disparar-avisos');
+    const detalhes = (r.falhas || []).map(f =>
+      `<div style="color:var(--text2);font-size:12px;margin-top:4px">• ${f.cliente || f.msisdn}: ${f.motivo}</div>`).join('');
     msg.innerHTML = `<span style="color:var(--green,#0c8)">✔ ${r.enviados} aviso(s) enviado(s)</span>
       <span style="color:var(--text3)"> · ${r.pulados} fora da janela de ${r.dias} dia(s)
       ${r.semWhatsapp ? ` · ${r.semWhatsapp} linha(s) de vendedor sem WhatsApp conectado` : ''}
-      ${r.erros ? ` · ${r.erros} erro(s)` : ''}</span>`;
+      ${r.erros ? ` · <span style="color:var(--red)">${r.erros} erro(s)</span>` : ''}</span>${detalhes}`;
   } catch (e) { msg.innerHTML = `<span style="color:var(--red)">${e.message}</span>`; }
   finally { btn.disabled = false; btn.textContent = '📣 Avisar meus clientes agora'; }
 }

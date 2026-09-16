@@ -500,7 +500,10 @@ function erroWhatsappAmigavel(e, bruta) {
   if (e?.code === 'ECONNABORTED' || /timeout/i.test(String(e?.message || ''))) {
     return '⏳ O WhatsApp demorou para responder. Tente novamente em alguns instantes.';
   }
-  if (/phone|number|invalid|exists.*false|não é whatsapp|not a whatsapp/.test(texto)) {
+  if (/"exists"\s*:\s*false|exists.*false|não é whatsapp|not a whatsapp/.test(texto)) {
+    return '📱 Este número não tem WhatsApp. A mensagem vai para o número da linha Move do cliente — se ele usa WhatsApp em outro número, atualize o contato.';
+  }
+  if (/phone|number|invalid/.test(texto)) {
     return '📱 Não foi possível enviar: verifique se o número tem WhatsApp ativo.';
   }
   return '😕 Não conseguimos enviar a mensagem pelo WhatsApp agora. Tente novamente em instantes.';
@@ -523,8 +526,12 @@ async function enviarWhatsAppEvolution(fone, mensagem, instancia = EVOLUTION_INS
       } catch (e2) { e = e2; }
     }
     const d = e.response?.data;
-    const bruta = d?.message || d?.error || d?.response?.message || (typeof d === 'string' ? d : JSON.stringify(d || {}));
-    console.error('[evolution-move] erro:', e.response?.status, bruta);
+    // A Evolution põe o motivo REAL em response.message (às vezes um array, ex.:
+    // [{jid, exists:false}] = número sem WhatsApp) e deixa "Bad Request" no topo.
+    // Ler o topo primeiro transformava tudo num erro genérico.
+    const detalhe = d?.response?.message ?? d?.message ?? d?.error ?? d;
+    const bruta = typeof detalhe === 'string' ? detalhe : JSON.stringify(detalhe || {});
+    console.error('[evolution-move] erro:', e.response?.status, `instancia=${instancia}`, bruta);
     throw new Error(erroWhatsappAmigavel(e, bruta));
   }
 }
@@ -5316,6 +5323,7 @@ async function executarAvisoAntecipado({ vendedorId = null, dias = DIAS_AVISO_AN
   `, vendedorId ? [vendedorId] : []);
 
   let enviados = 0, pulados = 0, erros = 0, semWhatsapp = 0;
+  const falhas = [];
   const instanciaCache = new Map();
 
   for (const linha of linhas) {
@@ -5359,11 +5367,14 @@ async function executarAvisoAntecipado({ vendedorId = null, dias = DIAS_AVISO_AN
       await aguardar(1500);
     } catch (e) {
       erros++;
+      // Guarda o motivo por linha: sem isso o vendedor só via "deu erro" e ninguém
+      // sabia se era o WhatsApp dele, o número do cliente ou a Evolution.
+      falhas.push({ msisdn: linha.msisdn, cliente: linha.nome_cliente || null, motivo: e.message });
       console.error(`[AVISO-${dias}D] ✗ ${linha.msisdn}:`, e.message);
     }
   }
   console.log(`[AVISO-${dias}D] enviados: ${enviados} | pulados: ${pulados} | sem WhatsApp do vendedor: ${semWhatsapp} | erros: ${erros}`);
-  return { enviados, pulados, semWhatsapp, erros, dias };
+  return { enviados, pulados, semWhatsapp, erros, dias, falhas: falhas.slice(0, 10) };
 }
 
 // Diário às 9h de Brasília (o de 24h sai às 8h — não empilha os dois no mesmo horário)
@@ -5399,6 +5410,24 @@ app.post('/api/meu-whatsapp/conectar', authMiddleware, vendedorPrincipalOnly, as
     await pool.query(`UPDATE vendedores SET evolution_instance=$1 WHERE id=$2`, [instancia, req.user.id]);
     res.json({ ok: true, instancia, ...r });
   } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Teste de um clique: manda pro próprio número do vendedor. Prova o canal sem
+// envolver cliente nenhum e devolve o motivo exato quando falha.
+app.post('/api/meu-whatsapp/teste', authMiddleware, vendedorPrincipalOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT telefone, evolution_instance FROM vendedores WHERE id=$1', [req.user.id]);
+    const destino = telefoneParaBora(req.body?.telefone || rows[0]?.telefone);
+    if (!destino) {
+      return res.status(400).json({ erro: 'Informe um número com DDD (ou cadastre seu WhatsApp em Minha Marca no App).' });
+    }
+    const instancia = await instanciaConectadaDoVendedor(req.user.id);
+    if (!instancia) {
+      return res.status(409).json({ erro: 'Seu WhatsApp não está conectado. Leia o QR de novo nesta página.' });
+    }
+    await enviarWhatsAppMove(destino, '✅ Teste do seu WhatsApp na Move. Se você recebeu, seus clientes também vão receber.', { instancia });
+    res.json({ ok: true, enviadoPara: mascararFone(destino), instancia });
+  } catch (e) { res.status(502).json({ erro: e.message }); }
 });
 
 app.post('/api/meu-whatsapp/desconectar', authMiddleware, vendedorPrincipalOnly, async (req, res) => {
