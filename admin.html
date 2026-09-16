@@ -805,6 +805,8 @@ select option { background: var(--bg3); }
       </div>
       <!-- Situação da documentação da API da Bora (sempre visível p/ admin) -->
       <div id="status-api-bora" style="display:none;color:var(--text3);font-size:12px;margin:-4px 0 16px 0;gap:10px;align-items:center;flex-wrap:wrap"></div>
+      <!-- Link do app do cliente, sempre à mão (venda online) -->
+      <div id="card-app-admin" style="display:none;margin-bottom:16px"></div>
       <div class="stats-grid dash-2linhas" id="dash-stats">
         <div class="stat-card"><div class="stat-label">Total Vendedores</div><div class="stat-value" id="st-vendedores">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Ativações</div><div class="stat-value" id="st-ativacoes">—</div></div>
@@ -1131,6 +1133,8 @@ select option { background: var(--bg3); }
           <button class="btn btn-secondary" onclick="loadMeuPainel()">Filtrar</button>
         </div>
       </div>
+      <!-- Link do app do cliente, sempre à mão (venda online) -->
+      <div id="card-app-vendedor" style="display:none;margin-bottom:16px"></div>
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-label">Ativações</div><div class="stat-value" id="mp-ativ">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Recargas Detectadas</div><div class="stat-value" id="mp-rec">—</div></div>
@@ -2402,9 +2406,11 @@ async function iniciarApp() {
     setTimeout(verificarAlertaEsim, 2000);
     setTimeout(loadPromocoes, 1000);
     setTimeout(carregarStatusApiBora, 1500);
+    setTimeout(carregarCardAppCliente, 1800);
   } else {
     navegarPara('meu-painel');
     loadMeuPainel();
+    setTimeout(carregarCardAppCliente, 1200);
   }
   // Datas padrão (mês atual)
   const hoje = new Date().toISOString().split('T')[0];
@@ -5297,6 +5303,35 @@ async function realizarPortabilidade() {
 // ── APP DO CLIENTE (link + QR + envio por WhatsApp) ──────────────────────────
 // Disponível para admin e vendedor: é assim que o app chega na mão do cliente.
 let _appClienteUrl = null;
+
+// Card fixo com o link do app — no Dashboard (admin) e no Meu Painel (vendedor).
+// Serve para venda online: copiar o link e mandar pro cliente sem abrir modal nenhum.
+async function carregarCardAppCliente() {
+  const alvo = document.getElementById(state.user?.role === 'admin' ? 'card-app-admin' : 'card-app-vendedor');
+  if (!alvo) return;
+  try {
+    const r = await api('GET', '/api/app-cliente/link', null, { cache: 600000 });
+    _appClienteUrl = r.url;
+    alvo.style.display = 'block';
+    alvo.innerHTML = `
+      <div class="section-card" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+        <img src="${r.qr}" alt="QR do app do cliente" style="width:108px;height:108px;background:#fff;padding:6px;border-radius:10px">
+        <div style="flex:1;min-width:230px">
+          <div style="font-weight:700;color:var(--accent);margin-bottom:3px">📱 App do Cliente</div>
+          <div style="color:var(--text2);font-size:13px;margin-bottom:10px">
+            Mande este link na venda online, ou mostre o QR na venda presencial.
+            O cliente entra com o CPF e um código no WhatsApp.
+          </div>
+          <input type="text" readonly value="${r.url}" style="font-family:var(--mono);font-size:13px;margin-bottom:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm" onclick="copiarLinkApp(this)">📋 Copiar link</button>
+            <a class="btn btn-secondary btn-sm" href="https://wa.me/?text=${encodeURIComponent('Instale o app da Move e acompanhe sua linha: ' + r.url)}" target="_blank" rel="noopener">📲 Enviar no WhatsApp</a>
+            <button class="btn btn-secondary btn-sm" onclick="abrirAppCliente()">Enviar para um número</button>
+          </div>
+        </div>
+      </div>`;
+  } catch { alvo.style.display = 'none'; }
+}
 
 async function abrirAppCliente() {
   document.getElementById('modal-app-cliente').classList.add('open');
