@@ -17,19 +17,34 @@
     --accent:#00bfff; --green:#00e5a0; --yellow:#f5b041; --red:#e05a5a;
     --r:14px; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   }
-  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  /* CAUSA DO LAYOUT QUEBRADO NO CELULAR REAL: o Android infla o texto por conta
+     própria (ajuste de fonte do sistema/navegador). Com texto inflado e largura fixa,
+     o conteúdo passa da tela e a página ganha rolagem lateral — foi o que apareceu no
+     print. text-size-adjust desliga a inflação automática; o resto é rede de proteção. */
+  html{-webkit-text-size-adjust:100%;text-size-adjust:100%;color-scheme:dark;overflow-x:clip}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;min-width:0}
   body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-       font-size:16px;padding-bottom:calc(80px + env(safe-area-inset-bottom))}
-  .wrap{max-width:600px;margin:0 auto;padding:18px}
+       font-size:16px;overflow-x:clip;overflow-wrap:anywhere;
+       padding-top:env(safe-area-inset-top);
+       padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+  button,a{touch-action:manipulation}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+  img{max-width:100%;height:auto}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+  .wrap{width:100%;max-width:600px;margin:0 auto;padding:18px}
   .topo{display:flex;align-items:center;gap:10px;padding:18px 18px 4px;max-width:600px;margin:0 auto}
-  .logo{font-size:30px;font-weight:900;letter-spacing:-1px;color:var(--accent)}
+  /* nome comprido não pode empurrar o cabeçalho: corta em 2 linhas */
+  .topo .quem{margin-left:auto;text-align:right;min-width:0}
+  .topo .quem .nome{font-size:15px;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .logo{font-size:30px;font-weight:900;letter-spacing:-1px;color:var(--accent);flex:0 0 auto}
   .sub{color:var(--text3);font-size:14px}
   .card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-bottom:16px}
-  .rotulo{color:var(--text3);font-size:13px;text-transform:uppercase;letter-spacing:.5px}
+  .rotulo{display:block;color:var(--text3);font-size:13px;text-transform:uppercase;letter-spacing:.5px}
   .valor{font-size:20px;font-weight:700;margin-top:4px}
-  /* clamp: grande onde cabe, sem quebrar o número em duas linhas no celular estreito */
-  .linha-num{font-family:var(--mono);font-size:clamp(24px,7vw,32px);font-weight:800;color:var(--accent);
-             letter-spacing:.5px;white-space:nowrap}
+  /* Número: escala pela LARGURA da tela (vw), então cabe mesmo com fonte ampliada.
+     Sem nowrap — texto que não pode quebrar é o que empurra a página pro lado. */
+  .linha-num{font-family:var(--mono);font-size:clamp(22px,6.5vw,32px);font-weight:800;color:var(--accent);
+             letter-spacing:.5px;font-variant-numeric:tabular-nums}
   input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px;
         color:var(--text);font-size:18px;outline:none}
   input:focus{border-color:var(--accent)}
@@ -42,7 +57,7 @@
   .barra > div{height:11px;border-radius:6px}
   .nav{position:fixed;bottom:0;left:0;right:0;background:var(--bg2);border-top:1px solid var(--border);
        display:flex;justify-content:center;padding-bottom:env(safe-area-inset-bottom);z-index:20}
-  .nav button{flex:1;max-width:170px;background:none;border:0;color:var(--text3);padding:12px 4px;font-size:13px;cursor:pointer}
+  .nav button{flex:1;max-width:170px;min-height:56px;background:none;border:0;color:var(--text3);padding:10px 4px;font-size:13px;cursor:pointer}
   .nav button.on{color:var(--accent)}
   .nav .ic{display:block;font-size:23px;margin-bottom:3px}
   .badge{display:inline-block;padding:4px 11px;border-radius:20px;font-size:13px;font-weight:700}
@@ -56,7 +71,7 @@
       padding:13px 15px;font-size:15px;margin-top:12px}
   .aviso{background:rgba(0,191,255,.1);border:1px solid var(--accent);border-radius:var(--r);padding:16px;margin-bottom:16px}
   textarea{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;color:var(--text);
-           font-family:var(--mono);font-size:14px;padding:13px;line-height:1.5}
+           font-family:var(--mono);font-size:14px;padding:13px;line-height:1.5;word-break:break-all}
   .carregando{color:var(--text3);text-align:center;padding:28px;font-size:16px}
   a{color:var(--accent)}
 
@@ -87,8 +102,9 @@
 
     <div class="card">
       <div id="passo-cpf">
-        <div class="rotulo">Seu CPF</div>
-        <input id="in-cpf" type="tel" inputmode="numeric" placeholder="000.000.000-00" autocomplete="off">
+        <label class="rotulo" for="in-cpf">Seu CPF</label>
+        <input id="in-cpf" name="cpf" type="tel" inputmode="numeric" placeholder="000.000.000-00"
+               autocomplete="username" spellcheck="false" enterkeyhint="send">
         <button class="btn" id="btn-codigo" onclick="pedirCodigo()">Receber código no WhatsApp</button>
         <div style="color:var(--text3);font-size:16px;margin-top:12px;line-height:1.5">
           Enviamos um código para o WhatsApp do número da sua linha Move. Sem senha para decorar.
@@ -96,41 +112,42 @@
       </div>
 
       <div id="passo-codigo" style="display:none">
-        <div class="rotulo">Código enviado para <span id="destino-fone" style="color:var(--accent)"></span></div>
-        <input id="in-codigo" type="tel" inputmode="numeric" maxlength="6" placeholder="000000"
-               style="letter-spacing:9px;text-align:center;font-family:var(--mono);font-size:30px">
+        <label class="rotulo" for="in-codigo">Código enviado para <span id="destino-fone" style="color:var(--accent)"></span></label>
+        <input id="in-codigo" name="codigo" type="tel" inputmode="numeric" maxlength="6" placeholder="000000"
+               autocomplete="one-time-code" spellcheck="false" enterkeyhint="go"
+               style="letter-spacing:9px;text-align:center;font-family:var(--mono);font-size:clamp(24px,8vw,30px)">
         <button class="btn" id="btn-entrar" onclick="entrar()">Entrar</button>
         <button class="btn btn2" onclick="voltarCpf()">Trocar CPF</button>
       </div>
-      <div id="login-msg"></div>
+      <div id="login-msg" role="status" aria-live="polite"></div>
     </div>
   </div>
 </div>
 
 <!-- ── APP ────────────────────────────────────────────────────────────────── -->
 <div id="tela-app" style="display:none">
-  <div class="topo">
-    <div class="logo">move</div>
-    <div style="margin-left:auto;text-align:right">
-      <div id="cli-nome" style="font-size:15px;font-weight:600"></div>
+  <header class="topo">
+    <div class="logo" translate="no">move</div>
+    <div class="quem">
+      <div id="cli-nome" class="nome"></div>
       <div class="sub" id="cli-cpf"></div>
     </div>
-  </div>
+  </header>
 
   <div class="wrap">
     <div id="banner-instalar" style="display:none"></div>
 
-    <div id="pg-linha"></div>
-    <div id="pg-cobrancas" style="display:none"></div>
-    <div id="pg-recarga" style="display:none"></div>
-    <div id="pg-conta" style="display:none"></div>
+    <div id="pg-linha" role="region" aria-label="Minha linha" aria-live="polite"></div>
+    <div id="pg-cobrancas" role="region" aria-label="Cobranças" aria-live="polite" style="display:none"></div>
+    <div id="pg-recarga" role="region" aria-label="Recarregar" aria-live="polite" style="display:none"></div>
+    <div id="pg-conta" role="region" aria-label="Conta" style="display:none"></div>
   </div>
 
-  <nav class="nav">
-    <button id="nav-linha" class="on" onclick="irPara('linha')"><span class="ic">📶</span>Minha linha</button>
-    <button id="nav-cobrancas" onclick="irPara('cobrancas')"><span class="ic">💳</span>Pagar</button>
-    <button id="nav-recarga" onclick="irPara('recarga')"><span class="ic">⚡</span>Recarregar</button>
-    <button id="nav-conta" onclick="irPara('conta')"><span class="ic">⚙</span>Conta</button>
+  <nav class="nav" aria-label="Seções do app">
+    <button id="nav-linha" class="on" onclick="irPara('linha')"><span class="ic" aria-hidden="true">📶</span>Minha linha</button>
+    <button id="nav-cobrancas" onclick="irPara('cobrancas')"><span class="ic" aria-hidden="true">💳</span>Pagar</button>
+    <button id="nav-recarga" onclick="irPara('recarga')"><span class="ic" aria-hidden="true">⚡</span>Recarregar</button>
+    <button id="nav-conta" onclick="irPara('conta')"><span class="ic" aria-hidden="true">⚙</span>Conta</button>
   </nav>
 </div>
 
@@ -219,7 +236,9 @@ function irPara(pg) {
   S.pagina = pg;
   ['linha', 'cobrancas', 'recarga', 'conta'].forEach(p => {
     document.getElementById('pg-' + p).style.display = p === pg ? 'block' : 'none';
-    document.getElementById('nav-' + p).classList.toggle('on', p === pg);
+    const botao = document.getElementById('nav-' + p);
+    botao.classList.toggle('on', p === pg);
+    if (p === pg) botao.setAttribute('aria-current', 'page'); else botao.removeAttribute('aria-current');
   });
   if (pg === 'cobrancas') carregarCobrancas();
   if (pg === 'recarga') carregarRecarga();
