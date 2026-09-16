@@ -26,27 +26,27 @@
   /* TIPOGRAFIA FLUIDA: tudo em rem e a raiz acompanha a largura da tela. Assim o app
      fica grande no celular (que é onde ele vive) e não encolhe quando o navegador
      abre numa viewport larga — foi o que deixou tudo minúsculo no aparelho real. */
-  html{font-size:clamp(19px, 5vw, 24px);
+  html{font-size:clamp(23px, 5.6vw, 28px);
        -webkit-text-size-adjust:100%;text-size-adjust:100%;color-scheme:dark;overflow-x:clip}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;min-width:0}
   body{margin:0;background:var(--bg);color:var(--text);overflow-x:clip;overflow-wrap:break-word;
        font:1rem/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-       padding-bottom:calc(9rem + env(safe-area-inset-bottom))}
+       padding-bottom:calc(7.5rem + env(safe-area-inset-bottom))}
   button,a{touch-action:manipulation;font-family:inherit}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
   img{max-width:100%}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
   /* ── Cabeçalho de parceria (igual ao BrandingHeader do nativo) ── */
-  .branding{display:flex;align-items:center;justify-content:center;background:var(--bg2);
+  .branding{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;background:var(--bg2);
             border-bottom:1px solid var(--border);padding:calc(.6rem + env(safe-area-inset-top)) .8rem .6rem;gap:.7rem}
-  .branding .move{font-size:1.7rem;font-weight:900;color:var(--accent);letter-spacing:-2px;line-height:1}
-  .branding img.move-logo{width:6.2rem;height:2.4rem;object-fit:contain}
-  .branding .divisor{width:1px;height:2.2rem;background:var(--border2)}
-  .branding .parceiro{max-width:9rem;text-align:center}
-  .branding .parceria-txt{color:var(--text3);font-size:.6rem;text-transform:uppercase;letter-spacing:.8px;margin-bottom:.2rem}
-  .branding .parceiro-nome{color:var(--text);font-size:.85rem;font-weight:700;line-height:1.2}
-  .branding img.parceiro-logo{width:6.6rem;height:2.6rem;object-fit:contain}
+  .branding .move{font-size:2.2rem;font-weight:900;color:var(--accent);letter-spacing:-2px;line-height:1}
+  .branding img.move-logo{width:8rem;height:3.1rem;max-width:42vw;object-fit:contain}
+  .branding .divisor{width:1px;height:2.9rem;background:var(--border2)}
+  .branding .parceiro{max-width:11.7rem;text-align:center}
+  .branding .parceria-txt{color:var(--text3);font-size:.78rem;text-transform:uppercase;letter-spacing:.8px;margin-bottom:.2rem}
+  .branding .parceiro-nome{color:var(--text);font-size:1.1rem;font-weight:700;line-height:1.2}
+  .branding img.parceiro-logo{width:8.6rem;height:3.4rem;max-width:44vw;object-fit:contain}
 
   .conteudo{max-width:34rem;margin:0 auto}
   .cabecalho{display:flex;justify-content:space-between;align-items:center;padding:1rem .9rem .6rem;gap:.7rem}
@@ -81,21 +81,14 @@
   .barra{height:.6rem;background:var(--bg4);border-radius:.3rem;overflow:hidden}
   .barra>div{height:.6rem;border-radius:.3rem}
 
-  /* ── Faixa "Faturas mensais", fixa acima das abas ── */
-  .faturas{position:fixed;left:0;right:0;bottom:calc(4.4rem + env(safe-area-inset-bottom));z-index:19;
-           display:flex;align-items:center;justify-content:space-between;gap:.7rem;width:100%;min-height:3.4rem;
-           background:var(--bg2);border:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);
-           padding:.85rem 1.1rem;color:var(--text);font-size:1rem;font-weight:700;cursor:pointer}
-  .faturas .seta{color:var(--accent);font-size:1.4rem}
-
   /* ── Abas ── */
   .abas{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;background:var(--bg2);
         border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom)}
-  .abas button{flex:1;min-height:4.4rem;background:none;border:0;color:var(--text3);cursor:pointer;
+  .abas button{flex:1;min-height:5.4rem;background:none;border:0;color:var(--text3);cursor:pointer;
                font-size:.7rem;font-weight:700;padding:.5rem .15rem;display:flex;flex-direction:column;
                align-items:center;justify-content:center;gap:.25rem;line-height:1.15}
   .abas button.on{color:var(--accent)}
-  .abas svg{width:1.5rem;height:1.5rem;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .abas svg{width:2.25rem;height:2.25rem;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 
   /* ── Formulários e botões ── */
   label.campo{display:block;color:var(--text2);font-size:.8rem;font-weight:700;letter-spacing:.8px;
@@ -192,10 +185,6 @@
     <div id="pg-perfil" role="region" aria-label="Perfil" style="display:none"></div>
     <div id="pg-faturas" role="region" aria-label="Faturas mensais" aria-live="polite" style="display:none"></div>
   </div>
-
-  <button class="faturas" id="faixa-faturas" onclick="irPara('faturas')">
-    <span>📄 Faturas mensais</span><span class="seta" aria-hidden="true">›</span>
-  </button>
 
   <nav class="abas" aria-label="Seções do app">
     <button id="aba-linha" class="on" onclick="irPara('linha')">
@@ -343,8 +332,6 @@ function irPara(pg) {
     b.classList.toggle('on', ativo);
     if (ativo) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
-  // A faixa de faturas é atalho da tela principal (como no app nativo)
-  document.getElementById('faixa-faturas').style.display = pg === 'linha' ? 'flex' : 'none';
   if (pg === 'faturas') carregarFaturas();
   if (pg === 'recarga') carregarRecarga();
   if (pg === 'reativar') renderReativar();
@@ -451,6 +438,10 @@ function renderLinha() {
     <div class="card">
       <div class="rotulo">ICCID</div>
       <div class="val" style="font-family:var(--mono);font-size:.8rem">${l.iccid || '—'}</div>
+    </div>
+
+    <div style="margin:0 .9rem 1rem">
+      <button class="btn" onclick="irPara('faturas')">📄 Faturas mensais</button>
     </div>`;
 }
 
