@@ -1177,6 +1177,27 @@ select option { background: var(--bg3); }
 
 
     <!-- ── MINHA MARCA NO APP ─────────────────── -->
+    <!-- ── MEU WHATSAPP (vendedor principal) ─────────────────── -->
+    <div class="page" id="page-meu-whatsapp">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Meu WhatsApp</div>
+          <div class="page-sub">Conecte seu número para avisar seus clientes do seu próprio WhatsApp</div>
+        </div>
+      </div>
+      <div class="section-card">
+        <div style="background:var(--accent-dim);border:1px solid var(--accent);border-radius:var(--r);padding:14px;margin-bottom:18px;font-size:13px;color:var(--text)">
+          Ao conectar, o <b>aviso de vencimento antecipado</b> das suas linhas sai do <b>seu número</b>,
+          e não de um número genérico da Move. O cliente reconhece você e responde direto no seu WhatsApp.<br>
+          O envio automático roda todo dia às 9h; você também pode disparar na hora pelo botão abaixo.
+        </div>
+        <div id="mw-estado" class="loading">Verificando...</div>
+        <div id="mw-qr" style="text-align:center;margin-top:16px"></div>
+        <div id="mw-acoes" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px"></div>
+        <div id="mw-msg" style="margin-top:12px;font-size:13px"></div>
+      </div>
+    </div>
+
     <div class="page" id="page-minha-marca">
       <div class="page-header">
         <div>
@@ -2453,7 +2474,8 @@ function construirNav() {
     { page: 'meu-painel', icon: '◈', label: 'Meu Painel' },
     ...(isVendedorPrincipal ? [
       { page: 'vendedores', icon: '◉', label: 'Meus Vendedores' },
-      { page: 'minha-marca', icon: '▣', label: 'Minha Marca no App' }
+      { page: 'minha-marca', icon: '▣', label: 'Minha Marca no App' },
+      { page: 'meu-whatsapp', icon: '💬', label: 'Meu WhatsApp' }
     ] : []),
     { section: 'Operação' },
     { page: 'ativar', icon: '⊕', label: 'Ativar Chip', perm: 'ativacao' },
@@ -2509,6 +2531,7 @@ function navegarPara(page) {
   if (page === 'admins') loadAdmins();
   if (page === 'vendedores') loadVendedores();
   if (page === 'minha-marca') loadMinhaMarca();
+  if (page === 'meu-whatsapp') loadMeuWhatsapp();
   if (page === 'recarga') resetRecarga();
   if (page === 'calculadora') initCalculadora();
   if (page === 'esim') loadEsim();
@@ -5299,6 +5322,83 @@ async function realizarPortabilidade() {
 }
 
 
+
+// ── MEU WHATSAPP (vendedor conecta o próprio número) ─────────────────────────
+// O QR vem pronto do servidor em 640px (o base64 da Evolution é pequeno e o celular
+// erra a leitura). Enquanto a tela estiver aberta, ficamos perguntando se conectou.
+let _mwPoll = null;
+
+async function loadMeuWhatsapp() {
+  clearInterval(_mwPoll); _mwPoll = null;
+  document.getElementById('mw-qr').innerHTML = '';
+  document.getElementById('mw-msg').innerHTML = '';
+  await atualizarEstadoWhatsapp();
+}
+
+async function atualizarEstadoWhatsapp() {
+  const box = document.getElementById('mw-estado');
+  const acoes = document.getElementById('mw-acoes');
+  if (!box) return null;
+  try {
+    const s = await api('GET', '/api/meu-whatsapp/status');
+    const cores = { open: 'var(--green,#0c8)', connecting: 'var(--yellow)', close: 'var(--red)' };
+    const rotulos = {
+      open: '✅ Conectado', connecting: '⏳ Aguardando leitura do QR',
+      close: '⚠ Desconectado', inexistente: '○ Ainda não conectado'
+    };
+    box.innerHTML = `<div style="font-size:15px;font-weight:600;color:${cores[s.estado] || 'var(--text2)'}">
+        ${rotulos[s.estado] || s.estado}</div>
+      ${s.numero ? `<div style="color:var(--text2);font-size:13px;margin-top:4px">Número: <b>${s.numero.replace('55','')}</b></div>` : ''}`;
+    acoes.innerHTML = s.conectado
+      ? `<button class="btn btn-primary btn-sm" onclick="dispararAvisos(this)">📣 Avisar meus clientes agora</button>
+         <button class="btn btn-secondary btn-sm" onclick="desconectarWhatsapp(this)">Desconectar</button>`
+      : `<button class="btn btn-primary btn-sm" onclick="conectarWhatsapp(this)">📱 Conectar meu WhatsApp</button>`;
+    if (s.conectado) { clearInterval(_mwPoll); _mwPoll = null; document.getElementById('mw-qr').innerHTML = ''; }
+    return s;
+  } catch (e) { box.innerHTML = `<div style="color:var(--red)">${e.message}</div>`; return null; }
+}
+
+async function conectarWhatsapp(btn) {
+  btn.disabled = true; btn.textContent = 'Gerando QR...';
+  try {
+    const r = await api('POST', '/api/meu-whatsapp/conectar');
+    if (r.conectado) { await atualizarEstadoWhatsapp(); return; }
+    document.getElementById('mw-qr').innerHTML = `
+      <img src="${r.qr}" alt="QR do WhatsApp" style="width:280px;max-width:100%;background:#fff;padding:10px;border-radius:12px">
+      <div style="color:var(--text2);font-size:13px;margin-top:10px;line-height:1.6">
+        No celular do <b>seu número</b>: WhatsApp → <b>Aparelhos conectados</b> → <b>Conectar um aparelho</b><br>
+        <span style="color:var(--text3)">O código expira em ~40 segundos. Se expirar, clique em "Gerar novo QR".</span>
+      </div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="conectarWhatsapp(this)">Gerar novo QR</button>`;
+    clearInterval(_mwPoll);
+    _mwPoll = setInterval(async () => {
+      const s = await atualizarEstadoWhatsapp();
+      if (s?.conectado) toast('WhatsApp conectado! Seus avisos vão sair do seu número.');
+    }, 5000);
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '📱 Conectar meu WhatsApp'; }
+}
+
+async function desconectarWhatsapp(btn) {
+  if (!confirm('Desconectar seu WhatsApp? Os avisos das suas linhas deixam de ser enviados até você conectar de novo.')) return;
+  btn.disabled = true;
+  try { await api('POST', '/api/meu-whatsapp/desconectar'); toast('WhatsApp desconectado'); }
+  catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; atualizarEstadoWhatsapp(); }
+}
+
+async function dispararAvisos(btn) {
+  btn.disabled = true; btn.textContent = 'Enviando...';
+  const msg = document.getElementById('mw-msg');
+  try {
+    const r = await api('POST', '/api/meu-whatsapp/disparar-avisos');
+    msg.innerHTML = `<span style="color:var(--green,#0c8)">✔ ${r.enviados} aviso(s) enviado(s)</span>
+      <span style="color:var(--text3)"> · ${r.pulados} fora da janela de ${r.dias} dia(s)
+      ${r.semWhatsapp ? ` · ${r.semWhatsapp} linha(s) de vendedor sem WhatsApp conectado` : ''}
+      ${r.erros ? ` · ${r.erros} erro(s)` : ''}</span>`;
+  } catch (e) { msg.innerHTML = `<span style="color:var(--red)">${e.message}</span>`; }
+  finally { btn.disabled = false; btn.textContent = '📣 Avisar meus clientes agora'; }
+}
 
 // ── APP DO CLIENTE (link + QR + envio por WhatsApp) ──────────────────────────
 // Disponível para admin e vendedor: é assim que o app chega na mão do cliente.

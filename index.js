@@ -509,8 +509,8 @@ function erroWhatsappAmigavel(e, bruta) {
 // Evolution API (self-hosted): POST /message/sendText/{instancia}, header apikey.
 // A v2 aceita {number,text}; versões antigas querem {number,textMessage:{text}} — tentamos
 // o formato novo e, só se ele for recusado por formato, repetimos no antigo.
-async function enviarWhatsAppEvolution(fone, mensagem) {
-  const url = `${EVOLUTION_URL}/message/sendText/${encodeURIComponent(EVOLUTION_INSTANCE)}`;
+async function enviarWhatsAppEvolution(fone, mensagem, instancia = EVOLUTION_INSTANCE) {
+  const url = `${EVOLUTION_URL}/message/sendText/${encodeURIComponent(instancia)}`;
   const opcoes = { headers: { 'Content-Type': 'application/json', apikey: EVOLUTION_API_KEY }, timeout: 20000 };
   try {
     await axios.post(url, { number: fone, text: mensagem }, opcoes);
@@ -529,7 +529,9 @@ async function enviarWhatsAppEvolution(fone, mensagem) {
   }
 }
 
-async function enviarWhatsAppMove(telefone, mensagem) {
+// `instancia` manda pela linha de OUTRO número (a do vendedor dono da linha). Sem ela,
+// sai pela instância central da Move.
+async function enviarWhatsAppMove(telefone, mensagem, { instancia } = {}) {
   let fone = String(telefone).replace(/\D/g, '');
   // Remove zeros à esquerda
   fone = fone.replace(/^0+/, '');
@@ -541,7 +543,10 @@ async function enviarWhatsAppMove(telefone, mensagem) {
     if (!EVOLUTION_CONFIGURADA) {
       throw new Error('😕 O envio de WhatsApp não está configurado (faltam EVOLUTION_URL, EVOLUTION_API_KEY ou EVOLUTION_INSTANCE).');
     }
-    return enviarWhatsAppEvolution(fone, mensagem);
+    return enviarWhatsAppEvolution(fone, mensagem, instancia);
+  }
+  if (instancia) {
+    throw new Error('😕 Envio pelo WhatsApp do vendedor exige o motor Evolution (WHATSAPP_PROVIDER=evolution).');
   }
 
   try {
@@ -565,6 +570,74 @@ async function enviarWhatsAppMove(telefone, mensagem) {
     console.error('[zapi-move] erro:', status, zapiMsg || JSON.stringify(e.response?.data || {}));
     throw new Error(erroWhatsappAmigavel(e, zapiMsg));
   }
+}
+
+// ─── WHATSAPP DO VENDEDOR (uma instância Evolution por vendedor) ─────────────
+// O aviso antecipado de vencimento tem que sair do número do vendedor que atende
+// aquela linha — é ele que o cliente conhece. Cada vendedor principal conecta o
+// próprio WhatsApp lendo um QR no painel dele, como no LoggZap (instância por loja).
+const INSTANCIA_VENDEDOR = (id) => `move_v${id}`;
+
+async function evolutionApi(metodo, caminho, corpo) {
+  if (!EVOLUTION_CONFIGURADA) throw new Error('Evolution não configurada (EVOLUTION_URL / EVOLUTION_API_KEY / EVOLUTION_INSTANCE).');
+  const { data } = await axios({
+    method: metodo,
+    url: `${EVOLUTION_URL}${caminho}`,
+    data: corpo,
+    headers: { 'Content-Type': 'application/json', apikey: EVOLUTION_API_KEY },
+    timeout: 25000
+  });
+  return data;
+}
+
+async function evolutionEstado(instancia) {
+  try {
+    const d = await evolutionApi('get', `/instance/connectionState/${encodeURIComponent(instancia)}`);
+    return d?.instance?.state || d?.state || 'desconhecido';
+  } catch (e) {
+    if (e.response?.status === 404) return 'inexistente';
+    throw e;
+  }
+}
+
+// Cria a instância se ainda não existir (idempotente) e devolve o QR já em PNG grande.
+// GOTCHA aprendido na mão: o base64 que a Evolution devolve sai pequeno e o celular
+// erra a leitura — geramos o PNG a partir do campo `code` (payload cru) em 640px.
+async function evolutionQrCode(instancia) {
+  let estado = await evolutionEstado(instancia);
+  if (estado === 'inexistente') {
+    await evolutionApi('post', '/instance/create', {
+      instanceName: instancia, integration: 'WHATSAPP-BAILEYS', qrcode: true
+    });
+    estado = 'connecting';
+  } else if (estado === 'open') {
+    return { conectado: true, qr: null };
+  } else {
+    // Sessão velha presa faz o telefone recusar o QR — limpar antes de gerar outro.
+    await evolutionApi('delete', `/instance/logout/${encodeURIComponent(instancia)}`).catch(() => null);
+  }
+  const d = await evolutionApi('get', `/instance/connect/${encodeURIComponent(instancia)}`);
+  const payload = d?.code || d?.qrcode?.code;
+  if (!payload) throw new Error('A Evolution não devolveu o QR agora. Tente de novo em alguns segundos.');
+  const qr = await QRCode.toDataURL(payload, { width: 640, margin: 3, errorCorrectionLevel: 'M' });
+  return { conectado: false, qr, tentativa: d?.count || null };
+}
+
+async function garantirColunaInstanciaVendedor() {
+  await pool.query(`ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS evolution_instance VARCHAR(80)`);
+}
+
+// Instância conectada do vendedor dono da linha — ou null (aí o envio sai pela Move).
+async function instanciaConectadaDoVendedor(vendedorId) {
+  if (!vendedorId || !EVOLUTION_CONFIGURADA) return null;
+  const { rows } = await pool.query(
+    `SELECT evolution_instance FROM vendedores WHERE id=$1 AND role='vendedor' AND parent_id IS NULL`, [vendedorId]
+  );
+  const instancia = rows[0]?.evolution_instance;
+  if (!instancia) return null;
+  try {
+    return (await evolutionEstado(instancia)) === 'open' ? instancia : null;
+  } catch { return null; }
 }
 
 // Migration: tabela de controle de notificações WhatsApp (evita duplicata no mesmo dia)
@@ -5203,6 +5276,123 @@ cron.schedule('0 11 * * *', () => {
   executarNotifVencimento().catch(e => console.error('[NOTIF-WPP] Erro cron:', e.message));
 });
 
+// ─── AVISO ANTECIPADO DE VENCIMENTO (pelo WhatsApp do vendedor) ──────────────
+// Diferente do aviso de 24h (que sai pela linha central da Move): este sai do número
+// do VENDEDOR dono da linha, porque é o contato que o cliente reconhece. Vendedor sem
+// WhatsApp conectado é PULADO — mandar pela Move descaracterizaria o aviso.
+const DIAS_AVISO_ANTECIPADO = Number(process.env.DIAS_AVISO_ANTECIPADO || 3);
+
+async function executarAvisoAntecipado({ vendedorId = null, dias = DIAS_AVISO_ANTECIPADO } = {}) {
+  const tipoNotif = `vencimento_${dias}d`;
+  const { rows: linhas } = await pool.query(`
+    SELECT l.id, l.msisdn, l.plano_nome, l.nome_cliente, l.vendedor_id
+      FROM linhas l
+     WHERE l.status = 'ativa' AND l.msisdn IS NOT NULL
+       ${vendedorId ? 'AND l.vendedor_id = $1' : ''}
+  `, vendedorId ? [vendedorId] : []);
+
+  let enviados = 0, pulados = 0, erros = 0, semWhatsapp = 0;
+  const instanciaCache = new Map();
+
+  for (const linha of linhas) {
+    try {
+      if (!instanciaCache.has(linha.vendedor_id)) {
+        instanciaCache.set(linha.vendedor_id, await instanciaConectadaDoVendedor(linha.vendedor_id));
+      }
+      const instancia = instanciaCache.get(linha.vendedor_id);
+      if (!instancia) { semWhatsapp++; continue; }
+
+      const details = await boraGet(`/api/Subscription/${linha.msisdn}/details`);
+      const planos = Array.isArray(details?.plan) ? details.plan : [];
+      const vencimento = planos[planos.length - 1]?.expiration;
+      if (!vencimento) { pulados++; continue; }
+
+      const faltam = Math.ceil((new Date(vencimento) - new Date()) / 86400000);
+      if (faltam !== dias) { pulados++; continue; }
+
+      const jaEnviou = await pool.query(
+        `SELECT 1 FROM move_notif_whatsapp
+          WHERE msisdn=$1 AND tipo=$2
+            AND DATE(enviado_em AT TIME ZONE 'America/Recife') = CURRENT_DATE`,
+        [linha.msisdn, tipoNotif]
+      );
+      if (jaEnviou.rows.length) { pulados++; continue; }
+
+      const nome = (linha.nome_cliente || '').split(' ')[0] || 'cliente';
+      const foneFmt = String(linha.msisdn).replace('55', '').replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+      let msg = `Olá, ${nome}! 👋\n\n`;
+      msg += `📅 Seu plano Move vence em *${dias} dia${dias > 1 ? 's' : ''}* (${new Date(vencimento).toLocaleDateString('pt-BR')}).\n\n`;
+      msg += `📱 Linha: ${foneFmt}\n📋 Plano: ${linha.plano_nome || '—'}\n\n`;
+      msg += `Garanta a renovação para não ficar sem internet. Pelo app da Move você vê o valor e paga por pix:\n${APP_CLIENTE_URL}\n\n`;
+      msg += `Qualquer dúvida é só responder aqui. 😉`;
+
+      await enviarWhatsAppMove(linha.msisdn, msg, { instancia });
+      await pool.query(
+        `INSERT INTO move_notif_whatsapp (msisdn, tipo) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [linha.msisdn, tipoNotif]
+      );
+      enviados++;
+      await aguardar(1500);
+    } catch (e) {
+      erros++;
+      console.error(`[AVISO-${dias}D] ✗ ${linha.msisdn}:`, e.message);
+    }
+  }
+  console.log(`[AVISO-${dias}D] enviados: ${enviados} | pulados: ${pulados} | sem WhatsApp do vendedor: ${semWhatsapp} | erros: ${erros}`);
+  return { enviados, pulados, semWhatsapp, erros, dias };
+}
+
+// Diário às 9h de Brasília (o de 24h sai às 8h — não empilha os dois no mesmo horário)
+cron.schedule('0 9 * * *', () => {
+  executarAvisoAntecipado().catch(e => console.error('[AVISO-ANTECIPADO] cron:', e.message));
+}, { timezone: 'America/Sao_Paulo' });
+
+// ── Painel do vendedor: conectar o próprio WhatsApp e disparar os avisos ──────
+function escopoWhatsappVendedor(req) {
+  // Admin opera a instância central; vendedor principal, a dele.
+  return req.user.role === 'admin' ? null : req.user.id;
+}
+
+app.get('/api/meu-whatsapp/status', authMiddleware, vendedorPrincipalOnly, async (req, res) => {
+  try {
+    const instancia = INSTANCIA_VENDEDOR(req.user.id);
+    const estado = await evolutionEstado(instancia);
+    let numero = null;
+    if (estado === 'open') {
+      const lista = await evolutionApi('get', '/instance/fetchInstances').catch(() => []);
+      const itens = Array.isArray(lista) ? lista : (lista?.instances || []);
+      const achou = itens.map(i => i.instance || i).find(i => (i.name || i.instanceName) === instancia);
+      numero = (achou?.ownerJid || achou?.owner || '').split('@')[0] || null;
+    }
+    res.json({ ok: true, instancia, estado, conectado: estado === 'open', numero });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/meu-whatsapp/conectar', authMiddleware, vendedorPrincipalOnly, async (req, res) => {
+  try {
+    const instancia = INSTANCIA_VENDEDOR(req.user.id);
+    const r = await evolutionQrCode(instancia);
+    await pool.query(`UPDATE vendedores SET evolution_instance=$1 WHERE id=$2`, [instancia, req.user.id]);
+    res.json({ ok: true, instancia, ...r });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+app.post('/api/meu-whatsapp/desconectar', authMiddleware, vendedorPrincipalOnly, async (req, res) => {
+  try {
+    await evolutionApi('delete', `/instance/logout/${encodeURIComponent(INSTANCIA_VENDEDOR(req.user.id))}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Disparo manual: vendedor dispara só as linhas dele; admin dispara geral.
+app.post('/api/meu-whatsapp/disparar-avisos', authMiddleware, async (req, res) => {
+  try {
+    const dias = Number(req.body?.dias) > 0 ? Number(req.body.dias) : DIAS_AVISO_ANTECIPADO;
+    const resultado = await executarAvisoAntecipado({ vendedorId: escopoWhatsappVendedor(req), dias });
+    res.json({ ok: true, ...resultado });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Rota de disparo manual (admin) — para testar sem esperar o cron
 app.post('/api/admin/notif/disparar-vencimentos', authMiddleware, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ erro: 'Apenas admin' });
@@ -6995,6 +7185,7 @@ async function rodarMigrations(tentativa = 1) {
     ['tabela sim-swap', garantirTabelaSimSwap],
     ['tabela doc API Bora', garantirTabelaBoraApiDoc],
     ['tabela OTP do cliente', garantirTabelaClienteOtp],
+    ['coluna instancia do vendedor', garantirColunaInstanciaVendedor],
     ['permissoes padrao', garantirPermissoesPadrao],
   ];
   let falhas = [];
