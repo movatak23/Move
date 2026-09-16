@@ -14,19 +14,24 @@
   /* Paleta e medidas copiadas do app nativo (src/theme.js + telas), pro PWA ficar
      igual ao que o cliente já conhece: fundo preto, azul Move, cards de borda fina. */
   :root{
-    --bg:#000; --bg2:#0a0a0a; --bg3:#111; --bg4:#1a1a1a;
-    --border:#222; --border2:#2a2a2a;
-    --text:#f0f0f0; --text2:#888; --text3:#444;
-    --accent:#00bfff; --accent-dim:rgba(0,191,255,.12);
-    --green:#00e5a0; --yellow:#f5b041; --red:#e05a5a;
+    --bg:#000; --bg2:#0e0e0e; --bg3:#161616; --bg4:#222;
+    --border:#2b2b2b; --border2:#383838;
+    /* Contraste subido de propósito: o cinza do app nativo (#888/#444) é ilegível pra
+       quem enxerga pouco. Agora todo texto passa de 4.5:1 sobre o preto. */
+    --text:#fff; --text2:#c3c3c3; --text3:#9a9a9a;
+    --accent:#22c8ff; --accent-dim:rgba(34,200,255,.14);
+    --green:#00e5a0; --yellow:#ffc14d; --red:#ff7b7b;
     --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   }
-  /* O Android infla texto sozinho; sem isto o conteúdo estoura a largura da tela. */
-  html{-webkit-text-size-adjust:100%;text-size-adjust:100%;color-scheme:dark;overflow-x:clip}
+  /* TIPOGRAFIA FLUIDA: tudo em rem e a raiz acompanha a largura da tela. Assim o app
+     fica grande no celular (que é onde ele vive) e não encolhe quando o navegador
+     abre numa viewport larga — foi o que deixou tudo minúsculo no aparelho real. */
+  html{font-size:clamp(19px, 5vw, 24px);
+       -webkit-text-size-adjust:100%;text-size-adjust:100%;color-scheme:dark;overflow-x:clip}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;min-width:0}
-  body{margin:0;background:var(--bg);color:var(--text);overflow-x:clip;overflow-wrap:anywhere;
-       font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-       padding-bottom:calc(120px + env(safe-area-inset-bottom))}
+  body{margin:0;background:var(--bg);color:var(--text);overflow-x:clip;overflow-wrap:break-word;
+       font:1rem/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding-bottom:calc(9rem + env(safe-area-inset-bottom))}
   button,a{touch-action:manipulation;font-family:inherit}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
   img{max-width:100%}
@@ -34,90 +39,88 @@
 
   /* ── Cabeçalho de parceria (igual ao BrandingHeader do nativo) ── */
   .branding{display:flex;align-items:center;justify-content:center;background:var(--bg2);
-            border-bottom:1px solid var(--border);padding:calc(14px + env(safe-area-inset-top)) 16px 12px;gap:14px}
-  .branding .move{font-size:32px;font-weight:900;color:var(--accent);letter-spacing:-2px;line-height:1}
-  .branding img.move-logo{width:108px;height:42px;object-fit:contain}
-  .branding .divisor{width:1px;height:38px;background:var(--border2)}
-  .branding .parceiro{max-width:150px;text-align:center}
-  .branding .parceria-txt{color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px}
-  .branding .parceiro-nome{color:var(--text);font-size:14px;font-weight:700}
-  .branding img.parceiro-logo{width:118px;height:46px;object-fit:contain}
+            border-bottom:1px solid var(--border);padding:calc(.6rem + env(safe-area-inset-top)) .8rem .6rem;gap:.7rem}
+  .branding .move{font-size:1.7rem;font-weight:900;color:var(--accent);letter-spacing:-2px;line-height:1}
+  .branding img.move-logo{width:6.2rem;height:2.4rem;object-fit:contain}
+  .branding .divisor{width:1px;height:2.2rem;background:var(--border2)}
+  .branding .parceiro{max-width:9rem;text-align:center}
+  .branding .parceria-txt{color:var(--text3);font-size:.6rem;text-transform:uppercase;letter-spacing:.8px;margin-bottom:.2rem}
+  .branding .parceiro-nome{color:var(--text);font-size:.85rem;font-weight:700;line-height:1.2}
+  .branding img.parceiro-logo{width:6.6rem;height:2.6rem;object-fit:contain}
 
-  .conteudo{max-width:640px;margin:0 auto}
-  .cabecalho{display:flex;justify-content:space-between;align-items:center;padding:20px;gap:12px}
-  .cabecalho .logo{font-size:28px;font-weight:900;color:var(--accent);letter-spacing:-1px}
-  .cabecalho .ola{color:var(--text2);font-size:14px;text-align:right}
-  .secao{color:var(--text3);font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
-         margin:4px 16px 8px}
+  .conteudo{max-width:34rem;margin:0 auto}
+  .cabecalho{display:flex;justify-content:space-between;align-items:center;padding:1rem .9rem .6rem;gap:.7rem}
+  .cabecalho .logo{font-size:1.6rem;font-weight:900;color:var(--accent);letter-spacing:-1px}
+  .cabecalho .ola{color:var(--text2);font-size:.95rem;text-align:right}
+  .secao{color:var(--text3);font-size:.72rem;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
+         margin:.5rem .9rem .4rem}
 
-  /* ── Chips das linhas: rolam na horizontal, com bolinha de status ── */
-  .linhas-scroll{display:flex;gap:10px;overflow-x:auto;padding:0 16px 12px;scrollbar-width:none}
+  /* ── Chips das linhas ── */
+  .linhas-scroll{display:flex;gap:.5rem;overflow-x:auto;padding:0 .9rem .7rem;scrollbar-width:none}
   .linhas-scroll::-webkit-scrollbar{display:none}
-  .chip{display:flex;align-items:center;gap:8px;flex:0 0 auto;background:var(--bg2);border:1.5px solid var(--border);
-        border-radius:20px;padding:8px 14px;color:var(--text2);font-size:13px;font-weight:600;cursor:pointer}
+  .chip{display:flex;align-items:center;gap:.45rem;flex:0 0 auto;background:var(--bg2);border:2px solid var(--border);
+        border-radius:2rem;padding:.6rem .9rem;min-height:2.9rem;color:var(--text2);
+        font-size:.9rem;font-weight:700;cursor:pointer}
   .chip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
-  .chip .ponto{width:8px;height:8px;border-radius:4px;flex:0 0 auto}
+  .chip .ponto{width:.55rem;height:.55rem;border-radius:50%;flex:0 0 auto}
 
-  .card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px;margin:0 16px 12px}
-  .card-topo{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
-  .rotulo{color:var(--text3);font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px}
-  .msisdn{color:var(--text);font-size:clamp(20px,6vw,24px);font-weight:700;font-variant-numeric:tabular-nums}
-  .selo{border:1px solid;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;white-space:nowrap}
-  .grade{display:grid;grid-template-columns:1fr 1fr;gap:12px 12px;margin-bottom:10px}
-  .val{color:var(--text);font-size:14px;font-weight:500}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:1rem;padding:1rem;margin:0 .9rem .7rem}
+  .card-topo{display:flex;justify-content:space-between;align-items:center;gap:.7rem;margin-bottom:1rem;flex-wrap:wrap}
+  .rotulo{color:var(--text3);font-size:.72rem;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:.25rem}
+  .msisdn{color:var(--text);font-size:min(1.55rem,8vw);font-weight:800;font-variant-numeric:tabular-nums;
+          line-height:1.15;white-space:nowrap}
+  .selo{border:2px solid;border-radius:2rem;padding:.3rem .7rem;font-size:.72rem;font-weight:800;white-space:nowrap}
+  .grade{display:grid;grid-template-columns:1fr 1fr;gap:.9rem;margin-bottom:.9rem}
+  .val{color:var(--text);font-size:1rem;font-weight:600;line-height:1.3;hyphens:auto}
 
-  .consumo{margin-bottom:14px}
+  .consumo{margin-bottom:1.1rem}
   .consumo:last-child{margin-bottom:0}
-  .consumo-topo{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px}
-  .consumo-nome{color:var(--text);font-size:13px;font-weight:600}
-  .consumo-val{color:var(--text2);font-size:12px;font-variant-numeric:tabular-nums;text-align:right}
-  .barra{height:6px;background:var(--bg4);border-radius:3px;overflow:hidden}
-  .barra>div{height:6px;border-radius:3px}
+  .consumo-topo{display:flex;justify-content:space-between;gap:.6rem;margin-bottom:.4rem;flex-wrap:wrap}
+  .consumo-nome{color:var(--text);font-size:1rem;font-weight:700}
+  .consumo-val{color:var(--text2);font-size:.95rem;font-variant-numeric:tabular-nums;text-align:right}
+  .barra{height:.6rem;background:var(--bg4);border-radius:.3rem;overflow:hidden}
+  .barra>div{height:.6rem;border-radius:.3rem}
 
-  /* ── Faixa "Faturas mensais", fixa acima das abas (igual ao nativo) ── */
-  .faturas{position:fixed;left:0;right:0;bottom:calc(64px + env(safe-area-inset-bottom));z-index:19;
-           display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
+  /* ── Faixa "Faturas mensais", fixa acima das abas ── */
+  .faturas{position:fixed;left:0;right:0;bottom:calc(4.4rem + env(safe-area-inset-bottom));z-index:19;
+           display:flex;align-items:center;justify-content:space-between;gap:.7rem;width:100%;min-height:3.4rem;
            background:var(--bg2);border:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);
-           padding:16px 20px;color:var(--text);font-size:15px;font-weight:600;cursor:pointer}
-  .faturas .seta{color:var(--accent);font-size:20px}
+           padding:.85rem 1.1rem;color:var(--text);font-size:1rem;font-weight:700;cursor:pointer}
+  .faturas .seta{color:var(--accent);font-size:1.4rem}
 
   /* ── Abas ── */
   .abas{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;background:var(--bg2);
         border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom)}
-  .abas button{flex:1;min-height:64px;background:none;border:0;color:var(--text3);cursor:pointer;
-               font-size:11px;font-weight:600;padding:8px 2px;display:flex;flex-direction:column;
-               align-items:center;justify-content:center;gap:4px}
+  .abas button{flex:1;min-height:4.4rem;background:none;border:0;color:var(--text3);cursor:pointer;
+               font-size:.7rem;font-weight:700;padding:.5rem .15rem;display:flex;flex-direction:column;
+               align-items:center;justify-content:center;gap:.25rem;line-height:1.15}
   .abas button.on{color:var(--accent)}
-  .abas svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .abas svg{width:1.5rem;height:1.5rem;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
 
   /* ── Formulários e botões ── */
-  label.campo{display:block;color:var(--text3);font-size:11px;font-weight:700;letter-spacing:1px;
-              text-transform:uppercase;margin-bottom:6px}
-  input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;
-        color:var(--text);font-size:16px;outline:none}
+  label.campo{display:block;color:var(--text2);font-size:.8rem;font-weight:700;letter-spacing:.8px;
+              text-transform:uppercase;margin-bottom:.4rem}
+  input{width:100%;background:var(--bg3);border:2px solid var(--border);border-radius:.7rem;padding:.9rem;
+        color:var(--text);font-size:1.15rem;outline:none;min-height:3.2rem}
   input:focus{border-color:var(--accent)}
-  .btn{display:block;width:100%;background:var(--accent);color:#000;border:0;border-radius:10px;padding:16px;
-       font-size:16px;font-weight:700;cursor:pointer;margin-top:12px}
+  .btn{display:block;width:100%;background:var(--accent);color:#000;border:0;border-radius:.7rem;
+       padding:1rem;min-height:3.4rem;font-size:1.05rem;font-weight:800;cursor:pointer;margin-top:.7rem}
   .btn:disabled{opacity:.6}
   .btn2{background:var(--bg2);color:var(--accent);border:2px solid var(--accent)}
-  .btn3{background:var(--bg3);color:var(--text);border:1px solid var(--border)}
-  .btn-sm{width:auto;display:inline-block;padding:11px 14px;font-size:14px;margin-top:0}
-  textarea{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;color:var(--text);
-           font-family:var(--mono);font-size:13px;padding:12px;word-break:break-all;line-height:1.5}
-  .aviso{background:var(--accent-dim);border:1px solid var(--accent);border-radius:12px;padding:14px;margin:0 16px 12px;font-size:13px}
-  .erro{background:rgba(224,90,90,.12);border:1px solid var(--red);color:#ffb4b4;border-radius:10px;padding:12px 14px;font-size:14px;margin-top:12px}
-  .ok{background:rgba(0,229,160,.12);border:1px solid var(--green);color:var(--green);border-radius:10px;padding:12px 14px;font-size:14px;margin-top:12px}
-  .vazio{padding:48px 24px;text-align:center;color:var(--text2);font-size:14px}
-  .vazio .ic{font-size:40px;display:block;margin-bottom:12px}
-  .carregando{color:var(--text2);text-align:center;padding:28px;font-size:14px}
+  .btn3{background:var(--bg3);color:var(--text);border:2px solid var(--border)}
+  .btn-sm{width:auto;display:inline-block;padding:.7rem .9rem;min-height:2.8rem;font-size:.95rem;margin-top:0}
+  textarea{width:100%;background:var(--bg3);border:2px solid var(--border);border-radius:.7rem;color:var(--text);
+           font-family:var(--mono);font-size:.9rem;padding:.8rem;word-break:break-all;line-height:1.5}
+  .aviso{background:var(--accent-dim);border:2px solid var(--accent);border-radius:.9rem;padding:.9rem;
+         margin:0 .9rem .7rem;font-size:.95rem;line-height:1.5}
+  .erro{background:rgba(255,123,123,.14);border:2px solid var(--red);color:#ffc9c9;border-radius:.7rem;
+        padding:.8rem .9rem;font-size:.95rem;margin-top:.7rem;line-height:1.45}
+  .ok{background:rgba(0,229,160,.14);border:2px solid var(--green);color:var(--green);border-radius:.7rem;
+      padding:.8rem .9rem;font-size:.95rem;margin-top:.7rem;line-height:1.45}
+  .vazio{padding:2.6rem 1.2rem;text-align:center;color:var(--text2);font-size:1rem;line-height:1.6}
+  .vazio .ic{font-size:2.4rem;display:block;margin-bottom:.6rem}
+  .carregando{color:var(--text2);text-align:center;padding:1.6rem;font-size:1rem}
   a{color:var(--accent)}
-
-  @media (min-width:700px){
-    body{font-size:17px}
-    .conteudo{max-width:760px}
-    .card,.aviso{margin-left:auto;margin-right:auto;max-width:728px}
-    .msisdn{font-size:28px}
-  }
 
   /* ── Tela de abertura (propaganda), igual ao nativo: 4s e "Continuar" ── */
   #tela-propaganda{position:fixed;inset:0;background:#000;z-index:50;display:none}
@@ -143,7 +146,7 @@
   <div class="conteudo" style="padding:32px 24px">
     <div style="text-align:center;margin:36px 0 34px">
       <div style="font-size:clamp(52px,16vw,72px);font-weight:900;color:var(--accent);letter-spacing:-4px;line-height:1">move</div>
-      <div style="color:var(--text2);font-size:14px;margin-top:16px">Sua linha na palma da mão</div>
+      <div style="color:var(--text2);font-size:.95rem;margin-top:16px">Sua linha na palma da mão</div>
     </div>
 
     <div id="passo-cpf">
@@ -151,7 +154,7 @@
       <input id="in-cpf" name="cpf" type="tel" inputmode="numeric" placeholder="000.000.000-00"
              autocomplete="username" spellcheck="false" enterkeyhint="send">
       <button class="btn" id="btn-codigo" onclick="pedirCodigo()">Receber código no WhatsApp</button>
-      <div style="color:var(--text3);font-size:13px;margin-top:14px;line-height:1.6">
+      <div style="color:var(--text3);font-size:.9rem;margin-top:14px;line-height:1.6">
         O código chega no WhatsApp do número da sua linha Move. Sem senha para decorar.
       </div>
     </div>
@@ -447,7 +450,7 @@ function renderLinha() {
 
     <div class="card">
       <div class="rotulo">ICCID</div>
-      <div class="val" style="font-family:var(--mono);font-size:12px">${l.iccid || '—'}</div>
+      <div class="val" style="font-family:var(--mono);font-size:.8rem">${l.iccid || '—'}</div>
     </div>`;
 }
 
@@ -481,11 +484,11 @@ async function carregarFaturas() {
           <div class="card-topo" style="margin-bottom:10px">
             <div>
               <div class="rotulo">${fmtNum(c.msisdn)}</div>
-              <div class="msisdn" style="font-size:20px">R$ ${Number(c.valor || 0).toFixed(2).replace('.', ',')}</div>
+              <div class="msisdn" style="font-size:1.35rem">R$ ${Number(c.valor || 0).toFixed(2).replace('.', ',')}</div>
             </div>
             <span class="selo" style="color:var(--yellow);border-color:var(--yellow)">VENCE ${fmtData(c.vencimento)}</span>
           </div>
-          <div style="color:var(--text2);font-size:13px">${c.plano || ''}</div>
+          <div style="color:var(--text2);font-size:.9rem">${c.plano || ''}</div>
           ${c.pixCode ? `<textarea readonly rows="3" style="margin-top:12px">${c.pixCode}</textarea>
             <button class="btn" onclick="copiar(${JSON.stringify(c.pixCode).replace(/"/g, '&quot;')}, this)">Copiar código pix</button>` : ''}
           ${c.url ? `<a class="btn btn3" style="text-align:center;text-decoration:none" href="${c.url}" target="_blank" rel="noopener">Abrir boleto</a>` : ''}
@@ -522,11 +525,11 @@ async function carregarRecarga() {
         <div class="card">
           <div class="card-topo" style="margin-bottom:0">
             <div>
-              <div class="val" style="font-size:16px;font-weight:700">${p.name || p.nome}</div>
-              <div style="color:var(--text3);font-size:12px">${p.durationTime ? p.durationTime + ' dias' : ''}</div>
+              <div class="val" style="font-size:1.05rem;font-weight:700">${p.name || p.nome}</div>
+              <div style="color:var(--text3);font-size:.8rem">${p.durationTime ? p.durationTime + ' dias' : ''}</div>
             </div>
             <div style="text-align:right">
-              <div style="color:var(--accent);font-weight:800;font-size:17px">${fmtBRL(p.value)}</div>
+              <div style="color:var(--accent);font-weight:800;font-size:1.1rem">${fmtBRL(p.value)}</div>
               <button class="btn btn-sm" style="margin-top:6px"
                 onclick="escolherPagamento('${p.idPlanExternal || p.id}', ${JSON.stringify(p.name || p.nome).replace(/"/g, '&quot;')}, ${p.value || 0})">
                 Contratar</button>
@@ -541,7 +544,7 @@ function escolherPagamento(planoId, planoNome, valor) {
   document.getElementById('recarga-resultado').innerHTML = `
     <div class="card">
       <div class="rotulo">Como você quer pagar</div>
-      <div class="val" style="font-size:16px;font-weight:700;margin-bottom:10px">${planoNome} — ${fmtBRL(valor)}</div>
+      <div class="val" style="font-size:1.05rem;font-weight:700;margin-bottom:10px">${planoNome} — ${fmtBRL(valor)}</div>
       <button class="btn" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'pix', this)">Pix</button>
       <button class="btn btn3" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'billet', this)">Boleto</button>
       <button class="btn btn3" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'credit', this)">Cartão de crédito</button>
@@ -561,7 +564,7 @@ async function recarregar(planoId, planoNome, pagamento, btn) {
     if (r.billet?.barcode) html += `<textarea readonly rows="2" style="margin-top:12px">${r.billet.barcode}</textarea>`;
     if (r.billet?.url) html += `<a class="btn btn3" style="text-align:center;text-decoration:none" href="${r.billet.url}" target="_blank" rel="noopener">Abrir boleto</a>`;
     if (r.paymentLink) html += `<a class="btn" style="text-align:center;text-decoration:none" href="${r.paymentLink}" target="_blank" rel="noopener">Pagar com cartão</a>
-      <div style="color:var(--text3);font-size:12px;margin-top:8px">A página do cartão é da operadora Bora. A Move não guarda o número do seu cartão.</div>`;
+      <div style="color:var(--text3);font-size:.8rem;margin-top:8px">A página do cartão é da operadora Bora. A Move não guarda o número do seu cartão.</div>`;
     document.getElementById('pagamento-saida').innerHTML = html;
   } catch (e) {
     document.getElementById('pagamento-saida').innerHTML = `<div class="erro">${e.message}</div>`;
@@ -580,7 +583,7 @@ function renderReativar() {
       : `<div class="card">
            <div class="rotulo">Linha inativa</div>
            <div class="val" style="margin:6px 0 4px">${fmtNum(l.msisdn)}</div>
-           <div style="color:var(--text2);font-size:13px">Reative com o mesmo plano que você já usava.</div>
+           <div style="color:var(--text2);font-size:.9rem">Reative com o mesmo plano que você já usava.</div>
            <button class="btn" onclick="reativar(this)">Reativar minha linha</button>
            <div id="reativar-saida"></div>
          </div>`;
@@ -614,8 +617,8 @@ async function carregarHistorico() {
           <div class="card-topo" style="margin-bottom:0">
             <div>
               <div class="rotulo">${fmtNum(c.msisdn)}</div>
-              <div class="val" style="font-size:16px;font-weight:700">R$ ${Number(c.valor || 0).toFixed(2).replace('.', ',')}</div>
-              <div style="color:var(--text3);font-size:12px">${c.plano || ''}</div>
+              <div class="val" style="font-size:1.05rem;font-weight:700">R$ ${Number(c.valor || 0).toFixed(2).replace('.', ',')}</div>
+              <div style="color:var(--text3);font-size:.8rem">${c.plano || ''}</div>
             </div>
             <span class="selo" style="color:var(--green);border-color:var(--green)">PAGO ${fmtData(c.vencimento)}</span>
           </div>
@@ -630,19 +633,19 @@ function renderPerfil() {
   document.getElementById('pg-perfil').innerHTML = `
     <div class="card">
       <div class="rotulo">Seus dados</div>
-      <div class="val" style="font-size:16px;font-weight:700;margin-top:4px">${S.cliente?.nome || 'Cliente Move'}</div>
-      <div style="color:var(--text2);font-size:13px;font-family:var(--mono)">
+      <div class="val" style="font-size:1.05rem;font-weight:700;margin-top:4px">${S.cliente?.nome || 'Cliente Move'}</div>
+      <div style="color:var(--text2);font-size:.9rem;font-family:var(--mono)">
         ${cpf ? cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : ''}</div>
     </div>
     <div class="card">
       <div class="rotulo">App na tela do celular</div>
-      <div style="color:var(--text2);font-size:13px;margin-top:6px">Deixe a Move a um toque, sem loja de aplicativos.</div>
+      <div style="color:var(--text2);font-size:.9rem;margin-top:6px">Deixe a Move a um toque, sem loja de aplicativos.</div>
       <div id="perfil-instalar"></div>
     </div>
     ${S.suporte ? `
     <div class="card">
       <div class="rotulo">Precisa de ajuda?</div>
-      <div style="color:var(--text2);font-size:13px;margin-top:6px">
+      <div style="color:var(--text2);font-size:.9rem;margin-top:6px">
         ${S.suporteEhDoVendedor
           ? `Fale direto com ${S.marca?.parceiroNome || 'o seu vendedor'}, quem cuida da sua linha.`
           : 'Fale com o atendimento Move.'}
@@ -693,14 +696,14 @@ function renderBotaoInstalar(alvoId) {
   if (promptInstalar) {
     alvo.innerHTML = '<button class="btn" onclick="instalarAgora(this)">Instalar agora</button>';
   } else if (ehIOS && ehSafari) {
-    alvo.innerHTML = `<div style="color:var(--text2);font-size:13px;margin-top:8px;line-height:1.6">
+    alvo.innerHTML = `<div style="color:var(--text2);font-size:.9rem;margin-top:8px;line-height:1.6">
       1. Toque em <b>Compartilhar</b> ⬆ na barra do Safari<br>
       2. Escolha <b>Adicionar à Tela de Início</b><br>
       3. Confirme em <b>Adicionar</b></div>`;
   } else if (ehIOS) {
-    alvo.innerHTML = '<div style="color:var(--text2);font-size:13px;margin-top:8px">No iPhone, abra este link no <b>Safari</b> para instalar o app.</div>';
+    alvo.innerHTML = '<div style="color:var(--text2);font-size:.9rem;margin-top:8px">No iPhone, abra este link no <b>Safari</b> para instalar o app.</div>';
   } else {
-    alvo.innerHTML = `<div style="color:var(--text2);font-size:13px;margin-top:8px">
+    alvo.innerHTML = `<div style="color:var(--text2);font-size:.9rem;margin-top:8px">
       Use o menu do navegador (⋮) e toque em <b>Instalar aplicativo</b>.</div>`;
   }
 }
