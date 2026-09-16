@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Move — Minha Linha</title>
+<link rel="manifest" href="/app/manifest.webmanifest">
+<meta name="theme-color" content="#070c1a">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Move">
+<style>
+  :root{
+    --bg:#070c1a; --bg2:#0d1426; --bg3:#131c33; --border:#1e2942;
+    --text:#eaf1ff; --text2:#9fb0cc; --text3:#67789a;
+    --accent:#00bfff; --green:#00e5a0; --yellow:#f5b041; --red:#e05a5a;
+    --r:14px; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding-bottom:calc(76px + env(safe-area-inset-bottom))}
+  .wrap{max-width:560px;margin:0 auto;padding:16px}
+  .topo{display:flex;align-items:center;gap:10px;padding:16px 16px 4px;max-width:560px;margin:0 auto}
+  .logo{font-size:26px;font-weight:900;letter-spacing:-1px;color:var(--accent)}
+  .sub{color:var(--text3);font-size:12px}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:14px}
+  .rotulo{color:var(--text3);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  .valor{font-size:17px;font-weight:700;margin-top:3px}
+  .linha-num{font-family:var(--mono);font-size:26px;font-weight:800;color:var(--accent);letter-spacing:1px}
+  input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;
+        color:var(--text);font-size:17px;outline:none}
+  input:focus{border-color:var(--accent)}
+  .btn{display:block;width:100%;border:0;border-radius:10px;padding:15px;font-size:16px;font-weight:700;
+       background:var(--accent);color:#04121f;cursor:pointer;margin-top:12px}
+  .btn:disabled{opacity:.6}
+  .btn2{background:var(--bg3);color:var(--text);border:1px solid var(--border)}
+  .btn-sm{padding:10px 12px;font-size:14px;width:auto;display:inline-block;margin-top:0}
+  .barra{background:var(--bg3);border-radius:5px;height:9px;overflow:hidden;margin:7px 0 4px}
+  .barra > div{height:9px;border-radius:5px}
+  .nav{position:fixed;bottom:0;left:0;right:0;background:var(--bg2);border-top:1px solid var(--border);
+       display:flex;padding-bottom:env(safe-area-inset-bottom);z-index:20}
+  .nav button{flex:1;background:none;border:0;color:var(--text3);padding:11px 4px;font-size:11px;cursor:pointer}
+  .nav button.on{color:var(--accent)}
+  .nav .ic{display:block;font-size:20px;margin-bottom:2px}
+  .badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700}
+  .b-verde{background:rgba(0,229,160,.15);color:var(--green)}
+  .b-vermelho{background:rgba(224,90,90,.15);color:var(--red)}
+  .b-amarelo{background:rgba(245,176,65,.15);color:var(--yellow)}
+  .vazio{color:var(--text3);text-align:center;padding:28px 12px;font-size:14px}
+  .erro{background:rgba(224,90,90,.12);border:1px solid var(--red);color:#ffb4b4;border-radius:10px;
+        padding:11px 13px;font-size:13px;margin-top:12px}
+  .ok{background:rgba(0,229,160,.1);border:1px solid var(--green);color:var(--green);border-radius:10px;
+      padding:11px 13px;font-size:13px;margin-top:12px}
+  .aviso{background:rgba(0,191,255,.1);border:1px solid var(--accent);border-radius:var(--r);padding:14px;margin-bottom:14px}
+  textarea{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;color:var(--text);
+           font-family:var(--mono);font-size:12px;padding:11px}
+  .carregando{color:var(--text3);text-align:center;padding:26px;font-size:14px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+
+<!-- ── ENTRAR ─────────────────────────────────────────────────────────────── -->
+<div id="tela-login" style="display:none">
+  <div class="wrap" style="padding-top:34px">
+    <div style="text-align:center;margin-bottom:26px">
+      <div class="logo" style="font-size:44px">move</div>
+      <div class="sub">Sua linha na palma da mão</div>
+    </div>
+
+    <div class="card">
+      <div id="passo-cpf">
+        <div class="rotulo">Seu CPF</div>
+        <input id="in-cpf" type="tel" inputmode="numeric" placeholder="000.000.000-00" autocomplete="off">
+        <button class="btn" id="btn-codigo" onclick="pedirCodigo()">Receber código no WhatsApp</button>
+        <div style="color:var(--text3);font-size:12px;margin-top:12px;line-height:1.5">
+          Enviamos um código para o WhatsApp do número da sua linha Move. Sem senha para decorar.
+        </div>
+      </div>
+
+      <div id="passo-codigo" style="display:none">
+        <div class="rotulo">Código enviado para <span id="destino-fone" style="color:var(--accent)"></span></div>
+        <input id="in-codigo" type="tel" inputmode="numeric" maxlength="6" placeholder="000000"
+               style="letter-spacing:9px;text-align:center;font-family:var(--mono);font-size:26px">
+        <button class="btn" id="btn-entrar" onclick="entrar()">Entrar</button>
+        <button class="btn btn2" onclick="voltarCpf()">Trocar CPF</button>
+      </div>
+      <div id="login-msg"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── APP ────────────────────────────────────────────────────────────────── -->
+<div id="tela-app" style="display:none">
+  <div class="topo">
+    <div class="logo">move</div>
+    <div style="margin-left:auto;text-align:right">
+      <div id="cli-nome" style="font-size:13px;font-weight:600"></div>
+      <div class="sub" id="cli-cpf"></div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div id="banner-instalar" style="display:none"></div>
+
+    <div id="pg-linha"></div>
+    <div id="pg-cobrancas" style="display:none"></div>
+    <div id="pg-recarga" style="display:none"></div>
+    <div id="pg-conta" style="display:none"></div>
+  </div>
+
+  <nav class="nav">
+    <button id="nav-linha" class="on" onclick="irPara('linha')"><span class="ic">📶</span>Minha linha</button>
+    <button id="nav-cobrancas" onclick="irPara('cobrancas')"><span class="ic">💳</span>Pagar</button>
+    <button id="nav-recarga" onclick="irPara('recarga')"><span class="ic">⚡</span>Recarregar</button>
+    <button id="nav-conta" onclick="irPara('conta')"><span class="ic">⚙</span>Conta</button>
+  </nav>
+</div>
+
+<script>
+// ── ESTADO E BASE ────────────────────────────────────────────────────────────
+const S = {
+  token: localStorage.getItem('move_cli_token') || null,
+  cliente: JSON.parse(localStorage.getItem('move_cli_dados') || 'null'),
+  cpf: null, linhas: [], linhaAtual: null, consumo: null, pagina: 'linha',
+  // Marca e suporte do VENDEDOR dono da linha (cada estado tem o seu). Sem vendedor com
+  // telefone, o servidor devolve o suporte geral; sem nenhum dos dois, o botão não aparece.
+  marca: null, suporte: null, suporteEhDoVendedor: false
+};
+
+async function api(metodo, rota, corpo) {
+  const o = { method: metodo, headers: { 'Content-Type': 'application/json' } };
+  if (S.token) o.headers['Authorization'] = 'Bearer ' + S.token;
+  if (corpo) o.body = JSON.stringify(corpo);
+  const r = await fetch(rota, o);
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 401 && S.token) { sair(); throw new Error('Sua sessão expirou. Entre de novo.'); }
+  if (!r.ok) throw new Error(d.erro || ('Erro ' + r.status));
+  return d;
+}
+
+const soDigitos = v => String(v || '').replace(/\D/g, '');
+const fmtBRL = centavos => 'R$ ' + (Number(centavos || 0) / 100).toFixed(2).replace('.', ',');
+const fmtData = d => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
+function fmtFone(ms) {
+  const d = soDigitos(ms).replace(/^55/, '');
+  return d.length >= 10 ? d.replace(/(\d{2})(\d{4,5})(\d{4})/, '($1) $2-$3') : (ms || '—');
+}
+function msg(alvo, texto, tipo) {
+  document.getElementById(alvo).innerHTML = texto ? `<div class="${tipo || 'erro'}">${texto}</div>` : '';
+}
+
+// ── LOGIN POR CÓDIGO NO WHATSAPP ─────────────────────────────────────────────
+async function pedirCodigo() {
+  const cpf = soDigitos(document.getElementById('in-cpf').value);
+  if (cpf.length !== 11 && cpf.length !== 14) return msg('login-msg', 'Digite seu CPF completo.');
+  const btn = document.getElementById('btn-codigo');
+  btn.disabled = true; btn.textContent = 'Enviando...';
+  try {
+    const r = await api('POST', '/api/cliente/otp/solicitar', { cpf });
+    S.cpf = cpf;
+    document.getElementById('destino-fone').textContent = r.destino;
+    document.getElementById('passo-cpf').style.display = 'none';
+    document.getElementById('passo-codigo').style.display = 'block';
+    msg('login-msg', '');
+    document.getElementById('in-codigo').focus();
+  } catch (e) { msg('login-msg', e.message); }
+  finally { btn.disabled = false; btn.textContent = 'Receber código no WhatsApp'; }
+}
+
+function voltarCpf() {
+  document.getElementById('passo-codigo').style.display = 'none';
+  document.getElementById('passo-cpf').style.display = 'block';
+  msg('login-msg', '');
+}
+
+async function entrar() {
+  const codigo = soDigitos(document.getElementById('in-codigo').value);
+  if (codigo.length !== 6) return msg('login-msg', 'O código tem 6 dígitos.');
+  const btn = document.getElementById('btn-entrar');
+  btn.disabled = true; btn.textContent = 'Entrando...';
+  try {
+    const r = await api('POST', '/api/cliente/otp/validar', { cpf: S.cpf, codigo });
+    S.token = r.token; S.cliente = r.cliente;
+    localStorage.setItem('move_cli_token', r.token);
+    localStorage.setItem('move_cli_dados', JSON.stringify(r.cliente));
+    abrirApp();
+  } catch (e) { msg('login-msg', e.message); }
+  finally { btn.disabled = false; btn.textContent = 'Entrar'; }
+}
+
+function sair() {
+  localStorage.removeItem('move_cli_token');
+  localStorage.removeItem('move_cli_dados');
+  S.token = null; S.cliente = null;
+  document.getElementById('tela-app').style.display = 'none';
+  document.getElementById('tela-login').style.display = 'block';
+}
+
+// ── NAVEGAÇÃO ────────────────────────────────────────────────────────────────
+function irPara(pg) {
+  S.pagina = pg;
+  ['linha', 'cobrancas', 'recarga', 'conta'].forEach(p => {
+    document.getElementById('pg-' + p).style.display = p === pg ? 'block' : 'none';
+    document.getElementById('nav-' + p).classList.toggle('on', p === pg);
+  });
+  if (pg === 'cobrancas') carregarCobrancas();
+  if (pg === 'recarga') carregarRecarga();
+  if (pg === 'conta') renderConta();
+  window.scrollTo(0, 0);
+}
+
+function abrirApp() {
+  document.getElementById('tela-login').style.display = 'none';
+  document.getElementById('tela-app').style.display = 'block';
+  document.getElementById('cli-nome').textContent = S.cliente?.nome || 'Cliente';
+  const c = soDigitos(S.cliente?.cpf);
+  document.getElementById('cli-cpf').textContent = c ? c.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : '';
+  carregarLinha();
+  prepararInstalacao();
+  carregarMarca();
+}
+
+// ── MARCA DO VENDEDOR (logo + suporte de quem vendeu a linha) ────────────────
+async function carregarMarca() {
+  try {
+    const m = await api('GET', '/api/cliente/marca');
+    S.marca = m;
+    S.suporte = m.suporteWhatsapp || null;
+    S.suporteEhDoVendedor = !!m.suporteEhDoVendedor;
+    if (m.temParceiro && m.parceiroLogoUrl) {
+      const topo = document.querySelector('.topo');
+      if (topo && !document.getElementById('logo-parceiro')) {
+        const img = document.createElement('img');
+        img.id = 'logo-parceiro'; img.src = m.parceiroLogoUrl; img.alt = m.parceiroNome || 'Parceiro';
+        img.style.cssText = 'height:26px;max-width:110px;object-fit:contain;margin-left:8px';
+        topo.insertBefore(img, topo.children[1]);
+      }
+    }
+    if (S.pagina === 'conta') renderConta();   // já estava na aba Conta: redesenha com o suporte certo
+  } catch { /* sem marca: o app segue com a identidade Move */ }
+}
+
+// ── MINHA LINHA ──────────────────────────────────────────────────────────────
+async function carregarLinha() {
+  const box = document.getElementById('pg-linha');
+  box.innerHTML = '<div class="carregando">Carregando sua linha...</div>';
+  try {
+    const r = await api('GET', '/api/cliente/linhas/' + soDigitos(S.cliente.cpf));
+    S.linhas = r.linhas || [];
+    if (!S.linhas.length) { box.innerHTML = '<div class="card vazio">Nenhuma linha encontrada no seu CPF.</div>'; return; }
+    S.linhaAtual = S.linhas[0];
+    const ms = soDigitos(S.linhaAtual.msisdn);
+    S.consumo = null;
+    if (ms) { try { S.consumo = await api('GET', '/api/cliente/consumo/' + ms); } catch {} }
+    renderLinha();
+  } catch (e) { box.innerHTML = `<div class="card erro">${e.message}</div>`; }
+}
+
+function renderLinha() {
+  const l = S.linhaAtual || {};
+  const plano = Array.isArray(l.plan) ? l.plan[l.plan.length - 1] : (l.plan || null);
+  const ativa = String(l.status || '').toLowerCase().includes('active');
+  const venc = plano?.expiration ? new Date(plano.expiration) : null;
+  const diasPraVencer = venc ? Math.ceil((venc - new Date()) / 86400000) : null;
+
+  const seletor = S.linhas.length > 1 ? `
+    <div class="card" style="padding:10px 12px">
+      <div class="rotulo" style="margin-bottom:6px">Suas linhas</div>
+      ${S.linhas.map((x, i) => `
+        <button class="btn btn2 btn-sm" style="margin:3px 4px 3px 0;${x === S.linhaAtual ? 'border-color:var(--accent);color:var(--accent)' : ''}"
+                onclick="trocarLinha(${i})">${fmtFone(x.msisdn)}</button>`).join('')}
+    </div>` : '';
+
+  const alertaVenc = (diasPraVencer !== null && diasPraVencer <= 5) ? `
+    <div class="aviso">
+      <b style="color:${diasPraVencer < 0 ? 'var(--red)' : 'var(--yellow)'}">
+        ${diasPraVencer < 0 ? 'Seu plano venceu' : `Seu plano vence em ${diasPraVencer} dia(s)`}
+      </b>
+      <div style="color:var(--text2);font-size:13px;margin-top:4px">
+        ${diasPraVencer < 0 ? 'Reative para voltar a usar sua linha.' : 'Garanta a renovação para não ficar sem internet.'}
+      </div>
+      <button class="btn btn-sm" style="margin-top:10px" onclick="irPara('${diasPraVencer < 0 ? 'conta' : 'cobrancas'}')">
+        ${diasPraVencer < 0 ? 'Reativar minha linha' : 'Ver cobranças'}
+      </button>
+    </div>` : '';
+
+  document.getElementById('pg-linha').innerHTML = `
+    ${seletor}${alertaVenc}
+    <div class="card">
+      <div class="rotulo">Seu número</div>
+      <div class="linha-num">${fmtFone(l.msisdn)}</div>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span class="badge ${ativa ? 'b-verde' : 'b-vermelho'}">${ativa ? 'Ativa' : (l.status || 'Inativa')}</span>
+        <span style="color:var(--text2);font-size:13px">${plano?.name || l.planName || 'Plano Move'}</span>
+        <span style="margin-left:auto;color:var(--text3);font-size:12px">Válido até ${fmtData(plano?.expiration)}</span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="rotulo" style="margin-bottom:10px">Consumo do plano</div>
+      ${renderConsumo(S.consumo)}
+    </div>
+    <div class="card">
+      <div class="rotulo" style="margin-bottom:8px">Dados da linha</div>
+      ${[['Chip', l.iccidType || 'SIM físico'], ['ICCID', l.iccid || '—'],
+         ['Ativação', fmtData(l.activationDate)], ['Renovação', fmtData(l.recurrence?.nextRenewalDate)],
+         ['Pagamento', l.recurrence?.paymentType || l.lastPaymentType || '—']]
+        .map(([k, v]) => `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+            <span style="color:var(--text3)">${k}</span><span style="font-family:var(--mono)">${v}</span></div>`).join('')}
+    </div>`;
+}
+
+function trocarLinha(i) {
+  S.linhaAtual = S.linhas[i];
+  S.consumo = null;
+  renderLinha();
+  const ms = soDigitos(S.linhaAtual.msisdn);
+  if (ms) api('GET', '/api/cliente/consumo/' + ms).then(c => { S.consumo = c; renderLinha(); }).catch(() => {});
+}
+
+function renderConsumo(c) {
+  if (!c) return '<div class="vazio" style="padding:14px">Consumo indisponível no momento.</div>';
+  const mb = v => !v ? '0 MB' : (v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : Number(v).toFixed(0) + ' MB');
+  const pct = (u, t) => t ? Math.min((u / t) * 100, 100) : 0;
+  const itens = [
+    { nome: 'Internet', cor: 'var(--accent)', usado: c.data?.used || 0, total: c.data?.total || 0, fmt: mb },
+    { nome: 'Ligações', cor: 'var(--green)', usado: c.voice?.used || 0, total: c.voice?.total || 0, fmt: v => (v || 0) + ' min' },
+    { nome: 'SMS', cor: 'var(--yellow)', usado: c.sms?.used || 0, total: c.sms?.total || 0, fmt: v => (v || 0) + ' SMS' },
+  ];
+  return itens.map(it => `
+    <div style="margin-bottom:13px">
+      <div style="display:flex;justify-content:space-between;font-size:13px">
+        <span>${it.nome}</span>
+        <span style="color:var(--text2)">${it.fmt(it.usado)} de ${it.fmt(it.total)}</span>
+      </div>
+      <div class="barra"><div style="width:${pct(it.usado, it.total)}%;background:${it.cor}"></div></div>
+    </div>`).join('');
+}
+
+// ── PAGAR (boletos e pix em aberto) ──────────────────────────────────────────
+async function carregarCobrancas() {
+  const box = document.getElementById('pg-cobrancas');
+  box.innerHTML = '<div class="carregando">Buscando suas cobranças...</div>';
+  try {
+    const r = await api('GET', '/api/cliente/cobrancas');
+    const abertas = (r.cobrancas || []).filter(c => !c.pago);
+    if (!abertas.length) {
+      box.innerHTML = '<div class="card vazio">🎉 Você não tem cobranças em aberto.</div>';
+      return;
+    }
+    box.innerHTML = abertas.map((c, i) => `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div class="rotulo">${fmtFone(c.msisdn)}</div>
+            <div class="valor">R$ ${Number(c.valor || 0).toFixed(2).replace('.', ',')}</div>
+          </div>
+          <span class="badge b-amarelo">Vence ${fmtData(c.vencimento)}</span>
+        </div>
+        <div style="color:var(--text3);font-size:12px;margin-top:6px">${c.plano || ''}</div>
+        ${c.pixCode ? `
+          <textarea readonly rows="3" style="margin-top:11px">${c.pixCode}</textarea>
+          <button class="btn" onclick="copiar(${JSON.stringify(c.pixCode).replace(/"/g, '&quot;')}, this)">Copiar código pix</button>` : ''}
+        ${c.url ? `<a class="btn btn2" style="text-align:center;text-decoration:none" href="${c.url}" target="_blank" rel="noopener">Abrir boleto</a>` : ''}
+        ${c.barcode && !c.pixCode ? `
+          <textarea readonly rows="2" style="margin-top:11px">${c.barcode}</textarea>
+          <button class="btn btn2" onclick="copiar(${JSON.stringify(c.barcode).replace(/"/g, '&quot;')}, this)">Copiar linha digitável</button>` : ''}
+      </div>`).join('');
+  } catch (e) { box.innerHTML = `<div class="card erro">${e.message}</div>`; }
+}
+
+function copiar(texto, btn) {
+  navigator.clipboard.writeText(texto).then(() => {
+    const antes = btn.textContent;
+    btn.textContent = '✔ Copiado!';
+    setTimeout(() => btn.textContent = antes, 2000);
+  }).catch(() => alert('Copie manualmente: ' + texto));
+}
+
+// ── RECARREGAR ───────────────────────────────────────────────────────────────
+// O servidor só devolve pacotes de valor igual ou maior que o plano atual — e trava
+// de novo na hora de cobrar. Aqui a tela só explica a regra.
+async function carregarRecarga() {
+  const box = document.getElementById('pg-recarga');
+  const ms = soDigitos(S.linhaAtual?.msisdn);
+  if (!ms) { box.innerHTML = '<div class="card vazio">Selecione uma linha primeiro.</div>'; return; }
+  box.innerHTML = '<div class="carregando">Carregando pacotes...</div>';
+  try {
+    const planos = await api('GET', '/api/cliente/planos-recarga/' + ms);
+    if (!planos.length) { box.innerHTML = '<div class="card vazio">Nenhum pacote disponível para a sua linha agora.</div>'; return; }
+    box.innerHTML = `
+      <div class="card" style="background:rgba(0,191,255,.08);border-color:var(--accent)">
+        <div style="font-size:13px;color:var(--text2)">
+          Pacotes disponíveis para <b style="color:var(--accent)">${fmtFone(ms)}</b>.
+          Mostramos apenas os de valor igual ou maior que o seu plano atual — assim você nunca perde benefício.
+        </div>
+      </div>
+      ${planos.map(p => `
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+            <div>
+              <div class="valor">${p.name || p.nome}</div>
+              <div style="color:var(--text3);font-size:12px">${p.durationTime ? p.durationTime + ' dias' : ''}</div>
+            </div>
+            <div style="text-align:right">
+              <div style="color:var(--accent);font-weight:800;font-size:17px">${fmtBRL(p.value)}</div>
+              <button class="btn btn-sm" style="margin-top:6px"
+                onclick="escolherPagamento('${p.idPlanExternal || p.id}', ${JSON.stringify(p.name || p.nome).replace(/"/g, '&quot;')}, ${p.value || 0})">
+                Recarregar</button>
+            </div>
+          </div>
+        </div>`).join('')}
+      <div id="recarga-resultado"></div>`;
+  } catch (e) { box.innerHTML = `<div class="card erro">${e.message}</div>`; }
+}
+
+function escolherPagamento(planoId, planoNome, valor) {
+  document.getElementById('recarga-resultado').innerHTML = `
+    <div class="card">
+      <div class="rotulo">Como você quer pagar</div>
+      <div class="valor" style="margin-bottom:10px">${planoNome} — ${fmtBRL(valor)}</div>
+      <button class="btn" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'pix', this)">Pix</button>
+      <button class="btn btn2" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'billet', this)">Boleto</button>
+      <button class="btn btn2" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'credit', this)">Cartão de crédito</button>
+      <div id="pagamento-saida"></div>
+    </div>`;
+  document.getElementById('recarga-resultado').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function recarregar(planoId, planoNome, pagamento, btn) {
+  const ms = soDigitos(S.linhaAtual?.msisdn);
+  btn.disabled = true; const antes = btn.textContent; btn.textContent = 'Gerando...';
+  try {
+    const r = await api('POST', '/api/cliente/recarregar', { msisdn: ms, plano_id: planoId, plano_nome: planoNome, pagamento });
+    let html = '<div class="ok">Pedido gerado! Conclua o pagamento abaixo.</div>';
+    if (r.pix?.code) {
+      html += `<textarea readonly rows="4" style="margin-top:11px">${r.pix.code}</textarea>
+               <button class="btn" onclick="copiar(${JSON.stringify(r.pix.code).replace(/"/g, '&quot;')}, this)">Copiar código pix</button>`;
+    }
+    if (r.billet?.url || r.billet?.barcode) {
+      html += r.billet.barcode ? `<textarea readonly rows="2" style="margin-top:11px">${r.billet.barcode}</textarea>` : '';
+      if (r.billet.url) html += `<a class="btn btn2" style="text-align:center;text-decoration:none" href="${r.billet.url}" target="_blank" rel="noopener">Abrir boleto</a>`;
+    }
+    if (r.paymentLink) {
+      html += `<a class="btn" style="text-align:center;text-decoration:none" href="${r.paymentLink}" target="_blank" rel="noopener">Pagar com cartão</a>
+               <div style="color:var(--text3);font-size:12px;margin-top:8px">A página do cartão é da operadora Bora. A Move não guarda o número do seu cartão.</div>`;
+    }
+    document.getElementById('pagamento-saida').innerHTML = html;
+  } catch (e) {
+    document.getElementById('pagamento-saida').innerHTML = `<div class="erro">${e.message}</div>`;
+  } finally { btn.disabled = false; btn.textContent = antes; }
+}
+
+// ── CONTA (reativar, instalar, sair) ─────────────────────────────────────────
+function renderConta() {
+  const l = S.linhaAtual || {};
+  const ativa = String(l.status || '').toLowerCase().includes('active');
+  document.getElementById('pg-conta').innerHTML = `
+    ${!ativa && l.msisdn ? `
+      <div class="card">
+        <div class="rotulo">Linha inativa</div>
+        <div style="font-size:13px;color:var(--text2);margin-top:6px">
+          Reative ${fmtFone(l.msisdn)} com o mesmo plano que você já usava.
+        </div>
+        <button class="btn" onclick="reativar(this)">Reativar minha linha</button>
+        <div id="reativar-saida"></div>
+      </div>` : ''}
+    <div class="card">
+      <div class="rotulo">App na tela do celular</div>
+      <div style="font-size:13px;color:var(--text2);margin-top:6px">
+        Deixe a Move a um toque de distância, sem precisar de loja de aplicativos.
+      </div>
+      <div id="conta-instalar"></div>
+    </div>
+    ${S.suporte ? `
+    <div class="card">
+      <div class="rotulo">Precisa de ajuda?</div>
+      <div style="font-size:13px;color:var(--text2);margin-top:6px">
+        ${S.suporteEhDoVendedor
+          ? `Fale direto com ${S.marca?.parceiroNome || 'o seu vendedor'}, quem cuida da sua linha.`
+          : 'Fale com o atendimento Move.'}
+      </div>
+      <a class="btn btn2" style="text-align:center;text-decoration:none;margin-top:10px"
+         href="https://wa.me/${S.suporte}?text=Ol%C3%A1%2C%20preciso%20de%20ajuda%20com%20minha%20linha%20Move"
+         target="_blank" rel="noopener">Falar no WhatsApp</a>
+    </div>` : ''}
+    <div class="card">
+      <button class="btn btn2" onclick="sair()">Sair da conta</button>
+    </div>`;
+  renderBotaoInstalar('conta-instalar');
+}
+
+async function reativar(btn) {
+  const ms = soDigitos(S.linhaAtual?.msisdn);
+  btn.disabled = true; btn.textContent = 'Reativando...';
+  try {
+    const r = await api('POST', `/api/cliente/linha/${ms}/reativar`, {});
+    let html = '<div class="ok">Reativação iniciada! Conclua o pagamento se for pedido.</div>';
+    if (r.pix?.code) html += `<textarea readonly rows="4" style="margin-top:11px">${r.pix.code}</textarea>
+      <button class="btn" onclick="copiar(${JSON.stringify(r.pix.code).replace(/"/g, '&quot;')}, this)">Copiar código pix</button>`;
+    if (r.paymentLink) html += `<a class="btn" style="text-align:center;text-decoration:none" href="${r.paymentLink}" target="_blank" rel="noopener">Pagar com cartão</a>`;
+    document.getElementById('reativar-saida').innerHTML = html;
+  } catch (e) {
+    document.getElementById('reativar-saida').innerHTML = `<div class="erro">${e.message}</div>`;
+  } finally { btn.disabled = false; btn.textContent = 'Reativar minha linha'; }
+}
+
+// ── INSTALAÇÃO NA TELA DE INÍCIO ─────────────────────────────────────────────
+// Android/Chrome deixa abrir o diálogo de instalação; a Apple não expõe API nenhuma,
+// então no iPhone o app ENSINA o caminho em vez de fingir um botão que não existe.
+let promptInstalar = null;
+const ehAndroid = /android/i.test(navigator.userAgent);
+const ehIOS = !ehAndroid && /iphone|ipad|ipod/i.test(navigator.userAgent);
+const ehSafari = ehIOS && /safari/i.test(navigator.userAgent) && !/crios|fxios|edgios/i.test(navigator.userAgent);
+const jaInstalado = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault(); promptInstalar = e;
+  if (S.token) prepararInstalacao();
+});
+window.addEventListener('appinstalled', () => {
+  promptInstalar = null;
+  localStorage.setItem('move_cli_instalado', '1');
+  document.getElementById('banner-instalar').style.display = 'none';
+});
+
+function prepararInstalacao() {
+  const banner = document.getElementById('banner-instalar');
+  if (jaInstalado || localStorage.getItem('move_cli_dispensou') === '1') { banner.style.display = 'none'; return; }
+  if (!promptInstalar && !ehIOS) { banner.style.display = 'none'; return; }
+  banner.style.display = 'block';
+  banner.innerHTML = `<div class="aviso">
+      <b style="color:var(--accent)">📲 Instale o app da Move</b>
+      <div id="banner-instalar-corpo"></div>
+      <button class="btn btn2 btn-sm" style="margin-top:8px" onclick="dispensarInstalacao()">Agora não</button>
+    </div>`;
+  renderBotaoInstalar('banner-instalar-corpo');
+}
+
+function renderBotaoInstalar(alvoId) {
+  const alvo = document.getElementById(alvoId);
+  if (!alvo) return;
+  if (jaInstalado) { alvo.innerHTML = '<div class="ok" style="margin-top:8px">App já instalado neste aparelho ✔</div>'; return; }
+  if (promptInstalar) {
+    alvo.innerHTML = '<button class="btn" onclick="instalarAgora(this)">Instalar agora</button>';
+  } else if (ehIOS && ehSafari) {
+    alvo.innerHTML = `<div style="color:var(--text2);font-size:13px;margin-top:8px;line-height:1.6">
+      1. Toque em <b>Compartilhar</b> ⬆ na barra do Safari<br>
+      2. Escolha <b>Adicionar à Tela de Início</b><br>
+      3. Confirme em <b>Adicionar</b></div>`;
+  } else if (ehIOS) {
+    alvo.innerHTML = '<div style="color:var(--text2);font-size:13px;margin-top:8px">No iPhone, abra este link no <b>Safari</b> para instalar o app.</div>';
+  } else {
+    alvo.innerHTML = `<div style="color:var(--text2);font-size:13px;margin-top:8px">
+      Use o menu do navegador (⋮) e toque em <b>Instalar aplicativo</b> ou <b>Adicionar à tela inicial</b>.</div>`;
+  }
+}
+
+async function instalarAgora(btn) {
+  if (!promptInstalar) return;
+  btn.disabled = true;
+  promptInstalar.prompt();
+  const escolha = await promptInstalar.userChoice.catch(() => null);
+  promptInstalar = null;
+  if (escolha?.outcome === 'accepted') {
+    btn.textContent = '✔ Instalado!';
+    document.getElementById('banner-instalar').style.display = 'none';
+  } else { btn.disabled = false; renderBotaoInstalar(btn.parentElement.id); }
+}
+
+function dispensarInstalacao() {
+  localStorage.setItem('move_cli_dispensou', '1');
+  document.getElementById('banner-instalar').style.display = 'none';
+}
+
+// ── BOOT ─────────────────────────────────────────────────────────────────────
+document.getElementById('in-cpf')?.addEventListener('input', e => {
+  const d = soDigitos(e.target.value).slice(0, 11);
+  e.target.value = d.replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
+                    .replace(/(\d{3})\.(\d{3})\.(\d{3})(\d)/, '$1.$2.$3-$4');
+});
+document.getElementById('in-codigo')?.addEventListener('input', e => {
+  e.target.value = soDigitos(e.target.value).slice(0, 6);
+  if (e.target.value.length === 6) entrar();
+});
+
+if (S.token && S.cliente) abrirApp();
+else document.getElementById('tela-login').style.display = 'block';
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/app/sw.js', { scope: '/app' }).catch(() => {}));
+}
+</script>
+</body>
+</html>

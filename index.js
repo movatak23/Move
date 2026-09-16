@@ -10,6 +10,7 @@ const cors = require('cors');
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 const path = require('path');
+const QRCode = require('qrcode');
 
 const app = express();
 app.use(cors());
@@ -2781,13 +2782,23 @@ app.get('/api/app/iccid/verificar/:iccid', authApp, async (req, res) => {
 // Cobranças mensais do cliente (por CPF)
 app.get('/api/app/cobrancas/:cpf', authApp, async (req, res) => {
   try {
-    const cpf = req.params.cpf.replace(/\D/g, '');
+    res.json({ cobrancas: await cobrancasDoCpf(req.params.cpf) });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// Cobranças (boletos/pix) de todas as linhas de um CPF. Usada pelo app Expo (authApp)
+// e pelo app web do cliente (authCliente) — mesma fonte, uma implementação só.
+async function cobrancasDoCpf(cpfBruto) {
+  {
+    const cpf = String(cpfBruto || '').replace(/\D/g, '');
     // Busca linhas ativas do cliente no banco
     const { rows: linhas } = await pool.query(
       `SELECT msisdn, plano_nome, documento_cliente FROM linhas WHERE documento_cliente = $1 AND msisdn IS NOT NULL`,
       [cpf]
     );
-    if (!linhas.length) return res.json({ cobrancas: [] });
+    if (!linhas.length) return [];
 
     // Agrupa por documento — evita repetir a mesma consulta de boletos (e duplicar
     // o resultado) quando o CPF tem mais de uma linha vinculada ao mesmo documento_cliente.
@@ -2828,11 +2839,9 @@ app.get('/api/app/cobrancas/:cpf', authApp, async (req, res) => {
       return new Date(a.vencimento || 0) - new Date(b.vencimento || 0);
     });
 
-    res.json({ cobrancas: todas });
-  } catch (e) {
-    res.status(500).json({ erro: e.message });
+    return todas;
   }
-});
+}
 
 // Envia cobrança por email
 app.post('/api/app/cobrancas/enviar-email', authApp, async (req, res) => {
@@ -3175,11 +3184,26 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
       msisdn: msisdnFinal
     });
 
+    // Convite do app do cliente no WhatsApp, na hora da ativação (pedido do dono:
+    // o app tem que chegar junto com o chip). Fire-and-forget: falha aqui NUNCA
+    // pode derrubar uma ativação que já deu certo.
+    let appEnviadoPara = null;
+    try {
+      appEnviadoPara = mascararFone(await enviarAppParaCliente({
+        telefone: subscriber.phone,
+        nome: subscriber.name,
+        msisdn: msisdnFinal
+      }));
+    } catch (e) {
+      console.warn('[app-cliente] convite não enviado na ativação:', e.message);
+    }
+
     res.json({
       ok: true,
       cartId,
       comissao,
       msisdn: msisdnFinal,
+      appCliente: { url: APP_CLIENTE_URL, enviadoPara: appEnviadoPara },
       esim,
       isPortability: pagamento?.isPortability || false,
       paymentLink,
@@ -3755,7 +3779,7 @@ app.post('/api/retroativo/materializar', authMiddleware, adminOnly, uploadMem.si
 app.get('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT id, nome, nome_exibicao, logo_url, logo_public_id
+      `SELECT id, nome, nome_exibicao, logo_url, logo_public_id, telefone
        FROM vendedores
        WHERE id=$1 AND role='vendedor' AND parent_id IS NULL`,
       [req.user.id]
@@ -3765,6 +3789,7 @@ app.get('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, async (req, r
       nome: rows[0].nome,
       nome_exibicao: rows[0].nome_exibicao || rows[0].nome,
       logo_url: rows[0].logo_url || null,
+      telefone: rows[0].telefone || null,
       supabaseStorageConfigurado: supabaseStorageConfigurado()
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -3773,6 +3798,11 @@ app.get('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, async (req, r
 app.post('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, uploadMem.single('logo'), async (req, res) => {
   try {
     const nomeExibicao = String(req.body.nome_exibicao || '').trim().slice(0, 150) || null;
+    // Telefone = WhatsApp de suporte que o app do cliente mostra para quem comprou
+    // com este vendedor. Vazio limpa (o app cai no suporte geral da Move).
+    const telefoneSuporte = 'telefone' in req.body
+      ? (telefoneParaBora(req.body.telefone) || null)
+      : undefined;
     let novoLogo = null;
 
     const { rows: atualRows } = await pool.query(
@@ -3797,11 +3827,18 @@ app.post('/api/minha-marca', authMiddleware, vendedorPrincipalOnly, uploadMem.si
       );
     }
 
+    if (telefoneSuporte !== undefined) {
+      await pool.query(
+        `UPDATE vendedores SET telefone=$1 WHERE id=$2 AND role='vendedor' AND parent_id IS NULL`,
+        [telefoneSuporte, req.user.id]
+      );
+    }
+
     const { rows } = await pool.query(
-      `SELECT nome, nome_exibicao, logo_url FROM vendedores WHERE id=$1`,
+      `SELECT nome, nome_exibicao, logo_url, telefone FROM vendedores WHERE id=$1`,
       [req.user.id]
     );
-    res.json({ ok: true, nome_exibicao: rows[0].nome_exibicao || rows[0].nome, logo_url: rows[0].logo_url || null });
+    res.json({ ok: true, nome_exibicao: rows[0].nome_exibicao || rows[0].nome, logo_url: rows[0].logo_url || null, telefone: rows[0].telefone || null });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -3823,7 +3860,7 @@ app.delete('/api/minha-marca/logo', authMiddleware, vendedorPrincipalOnly, async
 
 async function buscarBrandingPorFiltro(filtroSql, valor) {
   const { rows } = await pool.query(
-    `SELECT v.nome, v.nome_exibicao, v.logo_url
+    `SELECT v.nome, v.nome_exibicao, v.logo_url, v.telefone
      FROM linhas l
      JOIN vendedores v ON v.id = l.vendedor_id
      WHERE ${filtroSql}
@@ -3834,10 +3871,16 @@ async function buscarBrandingPorFiltro(filtroSql, valor) {
     [valor]
   );
   const parceiro = rows[0] || null;
+  // parceiroWhatsapp: suporte do VENDEDOR daquela linha (cada estado tem os seus).
+  // Sem telefone no cadastro do vendedor, cai no suporte geral da Move (env).
+  const doVendedor = telefoneParaBora(parceiro?.telefone);
   return {
     moveLogoUrl: obterMoveLogoUrl(),
     parceiroNome: parceiro ? (parceiro.nome_exibicao || parceiro.nome) : null,
     parceiroLogoUrl: parceiro?.logo_url || null,
+    parceiroWhatsapp: doVendedor || null,
+    suporteWhatsapp: doVendedor || telefoneParaBora(process.env.SUPORTE_WHATSAPP) || null,
+    suporteEhDoVendedor: Boolean(doVendedor),
     temParceiro: Boolean(parceiro && parceiro.logo_url)
   };
 }
@@ -4066,6 +4109,112 @@ app.post('/api/cliente/login', async (req, res) => {
   }
 });
 
+// ─── LOGIN DO APP DO CLIENTE POR CÓDIGO NO WHATSAPP ──────────────────────────
+// Sem senha: o cliente informa o CPF e recebe um código de 6 dígitos no WhatsApp
+// (na própria linha Move dele, ou no telefone do cadastro na Bora).
+async function garantirTabelaClienteOtp() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cliente_otp (
+      id SERIAL PRIMARY KEY,
+      cpf VARCHAR(20) NOT NULL,
+      codigo_hash TEXT NOT NULL,
+      destino VARCHAR(25),
+      expira_em TIMESTAMPTZ NOT NULL,
+      tentativas INTEGER DEFAULT 0,
+      usado_em TIMESTAMPTZ,
+      criado_em TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_cliente_otp_cpf ON cliente_otp(cpf, criado_em DESC)`);
+}
+
+// Para onde mandar o código: 1º a própria linha Move do CPF (é um chip nosso, sempre
+// funciona), 2º o telefone do cadastro na Bora.
+async function destinoOtpCliente(cpf) {
+  const { rows } = await pool.query(
+    `SELECT msisdn FROM linhas WHERE documento_cliente=$1 AND msisdn IS NOT NULL ORDER BY data_ativacao DESC LIMIT 1`,
+    [cpf]
+  );
+  const daLinha = telefoneParaBora(rows[0]?.msisdn);
+  if (daLinha) return { fone: daLinha, origem: 'linha' };
+  try {
+    const sub = await boraGet(`/api/Subscriber/${cpf}/document`);
+    const doCadastro = telefoneParaBora(sub?.phone || sub?.telefone);
+    if (doCadastro) return { fone: doCadastro, origem: 'cadastro' };
+  } catch { /* sem cadastro na Bora: cai no erro tratado abaixo */ }
+  return null;
+}
+
+// (11) 9****-1234 — mostra para onde foi sem expor o número inteiro
+function mascararFone(fone) {
+  const d = String(fone || '').replace(/\D/g, '').replace(/^55/, '');
+  if (d.length < 8) return '••••';
+  return `(${d.slice(0, 2)}) ${d.slice(2, 3)}****-${d.slice(-4)}`;
+}
+
+app.post('/api/cliente/otp/solicitar', async (req, res) => {
+  try {
+    const cpf = String(req.body?.cpf || '').replace(/\D/g, '');
+    if (!(cpf.length === 11 || cpf.length === 14)) return res.status(400).json({ erro: 'Informe um CPF válido' });
+
+    // Trava anti-abuso: no máximo 3 códigos por CPF a cada 10 minutos
+    const recentes = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM cliente_otp WHERE cpf=$1 AND criado_em > NOW() - INTERVAL '10 minutes'`, [cpf]
+    );
+    if (recentes.rows[0].n >= 3) {
+      return res.status(429).json({ erro: 'Muitos códigos pedidos. Aguarde 10 minutos e tente de novo.' });
+    }
+
+    const destino = await destinoOtpCliente(cpf);
+    if (!destino) return res.status(404).json({ erro: 'Não encontramos uma linha Move para este CPF.' });
+
+    const codigo = String(Math.floor(100000 + Math.random() * 900000));
+    const hash = await bcryptCliente.hash(codigo, 10);
+    await pool.query(
+      `INSERT INTO cliente_otp (cpf, codigo_hash, destino, expira_em) VALUES ($1,$2,$3, NOW() + INTERVAL '10 minutes')`,
+      [cpf, hash, destino.fone]
+    );
+    await enviarWhatsAppMove(destino.fone,
+      `*Move* — seu código de acesso é *${codigo}*\n\nEle vale por 10 minutos. Se não foi você que pediu, ignore esta mensagem.`);
+
+    res.json({ ok: true, destino: mascararFone(destino.fone), origem: destino.origem });
+  } catch (e) {
+    console.error('[cliente-otp] falha ao enviar:', e.message);
+    res.status(500).json({ erro: 'Não conseguimos enviar o código agora. Tente novamente em instantes.' });
+  }
+});
+
+app.post('/api/cliente/otp/validar', async (req, res) => {
+  try {
+    const cpf = String(req.body?.cpf || '').replace(/\D/g, '');
+    const codigo = String(req.body?.codigo || '').replace(/\D/g, '');
+    if (!cpf || codigo.length !== 6) return res.status(400).json({ erro: 'Informe o código de 6 dígitos' });
+
+    const { rows } = await pool.query(
+      `SELECT * FROM cliente_otp WHERE cpf=$1 AND usado_em IS NULL AND expira_em > NOW() ORDER BY id DESC LIMIT 1`, [cpf]
+    );
+    const otp = rows[0];
+    if (!otp) return res.status(401).json({ erro: 'Código expirado. Peça um novo.' });
+    if (otp.tentativas >= 5) return res.status(429).json({ erro: 'Muitas tentativas. Peça um novo código.' });
+
+    const confere = await bcryptCliente.compare(codigo, otp.codigo_hash);
+    if (!confere) {
+      await pool.query('UPDATE cliente_otp SET tentativas=tentativas+1 WHERE id=$1', [otp.id]);
+      return res.status(401).json({ erro: 'Código incorreto.' });
+    }
+    await pool.query('UPDATE cliente_otp SET usado_em=NOW() WHERE id=$1', [otp.id]);
+
+    const { rows: linhaRows } = await pool.query(
+      `SELECT nome_cliente FROM linhas WHERE documento_cliente=$1 AND nome_cliente IS NOT NULL ORDER BY data_ativacao DESC LIMIT 1`, [cpf]
+    );
+    const nome = linhaRows[0]?.nome_cliente || 'Cliente Move';
+    const token = jwtCliente.sign({ cpf, nome, via: 'otp' }, JWT_SECRET, { expiresIn: '30d' });
+    res.json({ token, cliente: { cpf, nome } });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 function authCliente(req, res, next) {
   const header = req.headers.authorization;
   if (!header) return res.status(401).json({ erro: 'Token não fornecido' });
@@ -4077,7 +4226,7 @@ function authCliente(req, res, next) {
   }
 }
 
-app.get('/api/cliente/linhas/:cpf', authCliente, async (req, res) => {
+app.get('/api/cliente/linhas/:cpf', authCliente, soDoCliente, async (req, res) => {
   try {
     const cpf = req.params.cpf;
     const subs = await boraGet(`/api/Subscription/${cpf}`);
@@ -4098,7 +4247,7 @@ app.get('/api/cliente/linhas/:cpf', authCliente, async (req, res) => {
   }
 });
 
-app.get('/api/cliente/linha/:cpf', authCliente, async (req, res) => {
+app.get('/api/cliente/linha/:cpf', authCliente, soDoCliente, async (req, res) => {
   try {
     const cpf = req.params.cpf.replace(/\D/g, '');
     const subscriber = await boraGet(`/api/Subscriber/${cpf}/document`);
@@ -4116,7 +4265,66 @@ app.get('/api/cliente/linha/:cpf', authCliente, async (req, res) => {
   }
 });
 
-app.get('/api/cliente/consumo/:msisdn', authCliente, async (req, res) => {
+// ── ISOLAMENTO DO CLIENTE ────────────────────────────────────────────────────
+// O token do cliente diz de quem ele é: sem esta checagem, um cliente logado veria a
+// linha de qualquer outro só trocando o CPF/número na URL.
+function cpfDoTokenConfere(req, cpfAlvo) {
+  const a = String(cpfAlvo || '').replace(/\D/g, '');
+  const b = String(req.cliente?.cpf || '').replace(/\D/g, '');
+  return !!a && a === b;
+}
+
+async function msisdnEhDoCliente(req, msisdn) {
+  const numero = String(msisdn || '').replace(/\D/g, '');
+  if (!numero) return false;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM linhas
+      WHERE documento_cliente = $1
+        AND regexp_replace(COALESCE(msisdn::text,''),'[^0-9]','','g') = ANY($2::text[])
+      LIMIT 1`,
+    [String(req.cliente?.cpf || '').replace(/\D/g, ''), variantesMsisdn(numero)]
+  );
+  return rows.length > 0;
+}
+
+// Middleware: valida o :cpf e/ou o :msisdn da rota (ou o msisdn do corpo) contra o token
+function soDoCliente(req, res, next) {
+  (async () => {
+    const cpfParam = req.params?.cpf;
+    if (cpfParam && !cpfDoTokenConfere(req, cpfParam)) {
+      return res.status(403).json({ erro: 'Esta consulta não é da sua conta.' });
+    }
+    const msisdn = req.params?.msisdn || req.body?.msisdn;
+    if (msisdn && !(await msisdnEhDoCliente(req, msisdn))) {
+      return res.status(403).json({ erro: 'Esta linha não está no seu CPF.' });
+    }
+    next();
+  })().catch(e => res.status(500).json({ erro: e.message }));
+}
+
+// Marca e suporte do vendedor dono da linha do cliente logado. É assim que o cliente
+// do Ceará fala com o vendedor do Ceará, e não com o de Pernambuco — mesma regra que o
+// app nativo já usa. Sem vendedor com telefone, cai no suporte geral (env SUPORTE_WHATSAPP).
+app.get('/api/cliente/marca', authCliente, async (req, res) => {
+  try {
+    const doc = String(req.cliente.cpf || '').replace(/\D/g, '');
+    const data = await buscarBrandingPorFiltro(
+      `regexp_replace(COALESCE(l.documento_cliente,''), '\\D', '', 'g') = $1`, doc
+    );
+    res.json(data);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Cobranças em aberto (boleto + pix) de todas as linhas do CPF logado
+app.get('/api/cliente/cobrancas', authCliente, async (req, res) => {
+  try {
+    res.json({ cobrancas: await cobrancasDoCpf(req.cliente.cpf) });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+app.get('/api/cliente/consumo/:msisdn', authCliente, soDoCliente, async (req, res) => {
   try {
     const data = await boraGet(`/api/Subscription/${req.params.msisdn}/consumption`);
     res.json(data);
@@ -4135,19 +4343,70 @@ app.get('/api/bora/consumo/:msisdn', authMiddleware, async (req, res) => {
   }
 });
 
-app.get('/api/cliente/planos-recarga/:msisdn', authCliente, async (req, res) => {
+// Valor de um plano da Bora, em centavos (a Bora devolve centavos — ver formato de moeda)
+function valorPlanoBora(p) {
+  const v = Number(p?.value ?? p?.price ?? p?.amount ?? 0);
+  return Number.isFinite(v) ? v : 0;
+}
+
+// Valor do plano vigente da linha, em centavos. Tenta pelos detalhes da linha e, se a
+// Bora não trouxer o valor ali, procura o mesmo plano na lista de recarga (por id ou nome).
+// Devolve null quando não dá pra saber — nesse caso a trava não bloqueia (ver recarregar).
+async function valorPlanoAtualLinha(msisdn, planosRecarga = []) {
+  let details = null;
+  try { details = await boraGet(`/api/Subscription/${msisdn}/details`); } catch { return null; }
+  const direto = valorPlanoBora(details?.planData) || valorPlanoBora(details?.plan) || Number(details?.planValue || 0);
+  if (direto > 0) return direto;
+
+  const idAtual = details?.planData?.id || details?.plan?.id || details?.planId || null;
+  const nomeAtual = String(details?.planData?.name || details?.plan?.name || details?.planName || '').trim().toUpperCase();
+  const igual = planosRecarga.find(p =>
+    (idAtual && String(p.idPlanExternal || p.id) === String(idAtual)) ||
+    (nomeAtual && String(p.name || p.nome || '').trim().toUpperCase() === nomeAtual)
+  );
+  const doCatalogo = valorPlanoBora(igual);
+  return doCatalogo > 0 ? doCatalogo : null;
+}
+
+// Regra do dono: no app, o cliente só recarrega com plano de valor IGUAL OU MAIOR que o
+// atual — nunca menor (recarga menor derruba o plano dele e a comissão da linha).
+app.get('/api/cliente/planos-recarga/:msisdn', authCliente, soDoCliente, async (req, res) => {
   try {
     const data = await boraGet('/api/Plan/Recharge', { msisdn: req.params.msisdn });
     const lista = Array.isArray(data) ? data : (data?.plans || data?.items || []);
-    res.json(lista.filter(p => /gb/i.test(p.name || p.nome || '')));
+    const comGb = lista.filter(p => /gb/i.test(p.name || p.nome || ''));
+    const valorAtual = await valorPlanoAtualLinha(req.params.msisdn, comGb);
+    const visiveis = valorAtual ? comGb.filter(p => valorPlanoBora(p) >= valorAtual) : comGb;
+    res.json(visiveis);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
   }
 });
 
-app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
+app.post('/api/cliente/recarregar', authCliente, soDoCliente, async (req, res) => {
   try {
     const { msisdn, plano_id, plano_nome, pagamento } = req.body;
+
+    // Trava de valor: bloqueia recarga com plano MENOR que o atual (a listagem já filtra,
+    // mas a API precisa travar também — a tela é burlável). Se não der pra descobrir o
+    // valor atual, libera e registra no log: travar tudo por dúvida pararia a venda.
+    try {
+      const catalogo = await boraGet('/api/Plan/Recharge', { msisdn });
+      const planos = Array.isArray(catalogo) ? catalogo : (catalogo?.plans || catalogo?.items || []);
+      const valorAtual = await valorPlanoAtualLinha(msisdn, planos);
+      const escolhido = planos.find(p => String(p.idPlanExternal || p.id) === String(plano_id));
+      const valorEscolhido = valorPlanoBora(escolhido);
+      if (valorAtual && valorEscolhido && valorEscolhido < valorAtual) {
+        return res.status(403).json({
+          erro: `Este pacote é menor que o seu plano atual (R$ ${(valorAtual/100).toFixed(2).replace('.', ',')}). `
+              + `Escolha um de valor igual ou maior. Para reduzir o plano, fale com seu vendedor.`
+        });
+      }
+      if (!valorAtual) console.warn(`[cliente-recarga] valor do plano atual indefinido p/ ${msisdn} — trava não aplicada`);
+    } catch (e) {
+      console.warn('[cliente-recarga] não deu pra validar o valor do plano:', e.message);
+    }
+
     const subDetails = await boraGet(`/api/Subscription/${msisdn}/details`);
     const clientId = subDetails?.boraIntegration?.customerId || subDetails?.boraData?.customerId || null;
     const cart = await boraPost('/api/Cart/recharge', { msisdn, planId: plano_id, clientId });
@@ -4179,7 +4438,7 @@ app.post('/api/cliente/recarregar', authCliente, async (req, res) => {
 // ─── REATIVAÇÃO DE LINHA (app cliente) ───────────────────────────────────────
 // Mesmo fluxo validado no admin (POST /api/bora/reativar), mas com authCliente
 // e checagem de que o msisdn pertence ao CPF logado.
-app.post('/api/cliente/linha/:msisdn/reativar', authCliente, async (req, res) => {
+app.post('/api/cliente/linha/:msisdn/reativar', authCliente, soDoCliente, async (req, res) => {
   try {
     const msisdn = req.params.msisdn;
     const cpf = req.cliente.cpf;
@@ -4236,7 +4495,7 @@ app.post('/api/cliente/linha/:msisdn/reativar', authCliente, async (req, res) =>
 
 // Envio do código (PIX ou boleto) já gerado para o email cadastrado na Bora.
 // Ação separada e explícita — só dispara quando o cliente toca em "Enviar por email".
-app.post('/api/cliente/linha/:msisdn/reativar/email', authCliente, async (req, res) => {
+app.post('/api/cliente/linha/:msisdn/reativar/email', authCliente, soDoCliente, async (req, res) => {
   try {
     const msisdn = req.params.msisdn;
     const { pixCode, barcode, billetUrl } = req.body;
@@ -6482,6 +6741,75 @@ app.get('/sw.js', (req, res) => {
   res.set('Service-Worker-Allowed', '/');
   res.sendFile(path.join(__dirname, 'sw.js'));
 });
+// ─── APP DO CLIENTE (PWA em /app) ────────────────────────────────────────────
+// Mesmo modelo do QRvida/BarberMoney: instalável na tela do celular, sem loja e sem APK.
+// Escopo /app pra não brigar com o PWA do painel do vendedor, que ocupa a raiz.
+const APP_CLIENTE_URL = (process.env.APP_BASE_URL || 'https://app.movechip5g.com.br') + '/app';
+
+app.get('/app', (req, res) => res.sendFile(path.join(__dirname, 'cliente.html')));
+app.get('/app/manifest.webmanifest', (req, res) => {
+  res.set('Content-Type', 'application/manifest+json');
+  res.json({
+    name: 'Move — Minha Linha',
+    short_name: 'Move',
+    description: 'Consulte sua linha, pague, recarregue e reative — Move 5G',
+    start_url: '/app',
+    scope: '/app',
+    display: 'standalone',
+    orientation: 'portrait-primary',
+    background_color: '#070c1a',
+    theme_color: '#00bfff',
+    lang: 'pt-BR',
+    icons: [
+      { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
+    ]
+  });
+});
+app.get('/app/sw.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript');
+  res.set('Service-Worker-Allowed', '/app');
+  res.sendFile(path.join(__dirname, 'sw-cliente.js'));
+});
+
+// Configuração pública do app do cliente. O WhatsApp de suporte vem da env
+// SUPORTE_WHATSAPP (só dígitos, com DDI): sem ela, o app não mostra botão de ajuda —
+// melhor não ter botão do que mandar o cliente para um número errado.
+app.get('/api/app-cliente/config', (req, res) => {
+  res.json({ suporte: telefoneParaBora(process.env.SUPORTE_WHATSAPP) || null });
+});
+
+// Link + QR do app pra distribuir (painel do admin e do vendedor).
+// QR em PNG base64: o vendedor mostra na tela e o cliente escaneia na hora da ativação.
+app.get('/api/app-cliente/link', authMiddleware, async (req, res) => {
+  try {
+    const url = APP_CLIENTE_URL;
+    const qr = await QRCode.toDataURL(url, { width: 320, margin: 1, errorCorrectionLevel: 'M' });
+    res.json({ ok: true, url, qr });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Envia o link do app pro cliente no WhatsApp (botão no painel e envio automático na ativação)
+async function enviarAppParaCliente({ telefone, nome, msisdn }) {
+  const fone = telefoneParaBora(telefone) || telefoneParaBora(msisdn);
+  if (!fone) throw new Error('Sem telefone para enviar o app');
+  const primeiroNome = String(nome || '').trim().split(/\s+/)[0] || 'Olá';
+  const msg = `*${primeiroNome}*, sua linha Move está ativa! 🎉\n\n`
+            + `Instale o app da Move no seu celular para ver seu plano, seu consumo, pagar e recarregar:\n${APP_CLIENTE_URL}\n\n`
+            + `É só abrir o link, digitar seu CPF e entrar com o código que chega aqui no WhatsApp. `
+            + `Depois toque em "Instalar" para deixar o app na tela inicial.`;
+  await enviarWhatsAppMove(fone, msg);
+  return fone;
+}
+
+app.post('/api/app-cliente/enviar', authMiddleware, async (req, res) => {
+  try {
+    const { telefone, msisdn, nome } = req.body || {};
+    const fone = await enviarAppParaCliente({ telefone, nome, msisdn });
+    res.json({ ok: true, enviadoPara: mascararFone(fone) });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 app.get('/icon-192.png', (req, res) => res.sendFile(path.join(__dirname, 'icon-192.png')));
 app.get('/icon-512.png', (req, res) => res.sendFile(path.join(__dirname, 'icon-512.png')));
 app.get('/apple-touch-icon.png', (req, res) => res.sendFile(path.join(__dirname, 'apple-touch-icon.png')));
@@ -6588,6 +6916,7 @@ async function rodarMigrations(tentativa = 1) {
     ['tabela permissoes', garantirTabelaPermissoes],
     ['tabela sim-swap', garantirTabelaSimSwap],
     ['tabela doc API Bora', garantirTabelaBoraApiDoc],
+    ['tabela OTP do cliente', garantirTabelaClienteOtp],
     ['permissoes padrao', garantirPermissoesPadrao],
   ];
   let falhas = [];

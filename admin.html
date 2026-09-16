@@ -1201,6 +1201,16 @@ select option { background: var(--bg3); }
             <input type="file" id="marca-logo" accept="image/png,image/jpeg,image/webp" onchange="previewLogoParceiro()">
           </div>
         </div>
+        <div class="form-row">
+          <div class="field">
+            <label>WhatsApp de suporte</label>
+            <input type="text" id="marca-telefone" placeholder="(81) 98765-4321" onblur="mascararTelefone(this)">
+            <div style="font-size:11px;color:var(--text3);margin-top:4px">
+              É o número que aparece no app dos <b>seus</b> clientes quando eles pedem ajuda.
+              Deixe vazio para usar o atendimento geral da Move.
+            </div>
+          </div>
+        </div>
 
         <div class="info-card" style="margin-top:12px">
           <div class="info-row"><span class="k">Prévia no app</span><span class="v">Move + Parceiro</span></div>
@@ -1850,6 +1860,21 @@ select option { background: var(--bg3); }
   </div>
 </div>
 
+<!-- App do Cliente: link, QR para o cliente escanear e envio por WhatsApp -->
+<div class="modal-overlay" id="modal-app-cliente">
+  <div class="modal" style="width:480px">
+    <div class="modal-title">📱 App do Cliente</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:14px">
+      Mostre o QR na tela para o cliente escanear, ou mande o link no WhatsApp dele.
+      Na ativação o convite já vai automático — isto aqui é para reenviar ou instalar na hora.
+    </div>
+    <div id="app-cliente-corpo" class="loading">Carregando...</div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="fecharModal('modal-app-cliente')">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-criar-cliente">
   <div class="modal" style="width:580px">
     <div class="modal-title">🧾 Criar Cadastro do Cliente</div>
@@ -2408,6 +2433,7 @@ function construirNav() {
     { page: 'calculadora', icon: '◎', label: 'Calculadora' },
     { page: 'esim', icon: '◈', label: 'E-SIM' },
     { page: 'publicidade', icon: '📣', label: 'Publicidade' },
+    { icon: '📱', label: 'App do Cliente', action: 'abrirAppCliente()' },
     { section: 'Ferramentas' },
     { page: 'ranking', icon: '🏆', label: 'Ranking' },
     { page: 'inadimplencia', icon: '⚠', label: 'Inadimplência' },
@@ -2432,6 +2458,7 @@ function construirNav() {
     { page: 'calculadora', icon: '◎', label: 'Calculadora', perm: 'calculadora' },
     { page: 'esim', icon: '◈', label: 'E-SIM', perm: 'esim' },
     { page: 'publicidade', icon: '📣', label: 'Publicidade', perm: 'publicidade' },
+    { icon: '📱', label: 'App do Cliente', action: 'abrirAppCliente()' },
     { section: 'Ferramentas' },
     { page: 'inadimplencia', icon: '⚠', label: 'Inadimplência', perm: 'inadimplencia' },
     { page: 'churn', icon: '📉', label: 'Churn', perm: 'churn' },
@@ -2970,6 +2997,9 @@ async function loadMinhaMarca() {
   try {
     const dados = await api('GET', '/api/minha-marca');
     document.getElementById('marca-nome').value = dados.nome_exibicao || dados.nome || '';
+    const tel = document.getElementById('marca-telefone');
+    tel.value = dados.telefone || '';
+    if (tel.value) mascararTelefone(tel);
     document.getElementById('marca-logo').value = '';
     setPreviewLogo(dados.logo_url || null);
     if (!dados.supabaseStorageConfigurado) {
@@ -3000,6 +3030,7 @@ async function salvarMinhaMarca() {
   if (state.user?.role !== 'vendedor') return;
   const fd = new FormData();
   fd.append('nome_exibicao', document.getElementById('marca-nome').value.trim());
+  fd.append('telefone', document.getElementById('marca-telefone').value.replace(/\D/g, ''));
   const file = document.getElementById('marca-logo').files[0];
   if (file) fd.append('logo', file);
   try {
@@ -3698,7 +3729,26 @@ async function confirmarAtivacao() {
       html += bilHtml;
     }
 
+    // App do cliente: QR na tela para instalar na hora + aviso de que o convite já foi
+    // no WhatsApp. O app tem que chegar junto com o chip, não depois.
+    if (data.appCliente && data.appCliente.url) {
+      html += '<div class="info-card" style="margin-top:16px;border-color:var(--accent)">'
+            + '<div class="section-title" style="color:var(--accent);margin-bottom:10px">&#128241; App do Cliente</div>'
+            + (data.appCliente.enviadoPara
+                ? '<div style="color:var(--green,#0c8);font-size:13px;margin-bottom:10px">✔ Convite enviado no WhatsApp ' + data.appCliente.enviadoPara + '</div>'
+                : '<div style="color:var(--yellow);font-size:13px;margin-bottom:10px">Não consegui enviar no WhatsApp. Mostre o QR abaixo para o cliente.</div>')
+            + '<div id="qr-app-ativacao" style="text-align:center"></div>'
+            + '<div style="color:var(--text3);font-size:12px;text-align:center">O cliente escaneia, entra com o CPF e instala o app na tela do celular.</div>'
+            + '</div>';
+    }
+
     res.innerHTML = html;
+    if (data.appCliente && data.appCliente.url) {
+      api('GET', '/api/app-cliente/link').then(r => {
+        const alvo = document.getElementById('qr-app-ativacao');
+        if (alvo) alvo.innerHTML = '<img src="' + r.qr + '" alt="QR do app" style="width:180px;height:180px;background:#fff;padding:8px;border-radius:10px;margin-bottom:8px">';
+      }).catch(() => {});
+    }
     toast('Chip ativado com sucesso!');
   } catch(e) {
     res.innerHTML = `<div class="info-card" style="border-color:var(--red)"><div class="info-row"><span class="k">Erro</span><span class="v" style="color:var(--red)">${e.message}</span></div></div>`;
@@ -5243,6 +5293,58 @@ async function realizarPortabilidade() {
 }
 
 
+
+// ── APP DO CLIENTE (link + QR + envio por WhatsApp) ──────────────────────────
+// Disponível para admin e vendedor: é assim que o app chega na mão do cliente.
+let _appClienteUrl = null;
+
+async function abrirAppCliente() {
+  document.getElementById('modal-app-cliente').classList.add('open');
+  const box = document.getElementById('app-cliente-corpo');
+  box.innerHTML = '<div class="loading">Carregando...</div>';
+  try {
+    const r = await api('GET', '/api/app-cliente/link');
+    _appClienteUrl = r.url;
+    box.innerHTML = `
+      <div style="text-align:center">
+        <img src="${r.qr}" alt="QR do app" style="width:220px;height:220px;background:#fff;padding:10px;border-radius:12px">
+        <div style="color:var(--text3);font-size:12px;margin-top:8px">O cliente aponta a câmera e o app abre</div>
+      </div>
+      <div class="field" style="margin-top:16px">
+        <label>Link do app</label>
+        <input type="text" id="app-cliente-link" readonly value="${r.url}">
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+        <button class="btn btn-secondary btn-sm" onclick="copiarLinkApp(this)">📋 Copiar link</button>
+        <a class="btn btn-secondary btn-sm" href="${r.url}" target="_blank" rel="noopener">Abrir</a>
+      </div>
+      <div class="field" style="margin-top:18px">
+        <label>Enviar para o WhatsApp do cliente</label>
+        <input type="text" id="app-cliente-fone" placeholder="(11) 97189-2324" onblur="mascararTelefone(this)">
+      </div>
+      <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="enviarAppCliente(this)">📲 Enviar no WhatsApp</button>
+      <div id="app-cliente-msg" style="margin-top:10px;font-size:13px"></div>`;
+  } catch (e) { box.innerHTML = `<div style="color:var(--red)">${e.message}</div>`; }
+}
+
+function copiarLinkApp(btn) {
+  navigator.clipboard.writeText(_appClienteUrl || '').then(() => {
+    btn.textContent = '✔ Copiado!';
+    setTimeout(() => btn.textContent = '📋 Copiar link', 2000);
+  }).catch(() => toast('Copie manualmente: ' + _appClienteUrl, 'info'));
+}
+
+async function enviarAppCliente(btn) {
+  const fone = document.getElementById('app-cliente-fone').value.replace(/\D/g, '');
+  const msgEl = document.getElementById('app-cliente-msg');
+  if (fone.length < 10) { msgEl.innerHTML = '<span style="color:var(--red)">Informe o telefone com DDD.</span>'; return; }
+  btn.disabled = true; btn.textContent = 'Enviando...';
+  try {
+    const r = await api('POST', '/api/app-cliente/enviar', { telefone: fone });
+    msgEl.innerHTML = `<span style="color:var(--green,#0c8)">✔ Enviado para ${r.enviadoPara}</span>`;
+  } catch (e) { msgEl.innerHTML = `<span style="color:var(--red)">${e.message}</span>`; }
+  finally { btn.disabled = false; btn.textContent = '📲 Enviar no WhatsApp'; }
+}
 
 // ── MONITOR DA DOCUMENTAÇÃO DA API DA BORA (banner do topo, só admin) ─────────
 // O backend baixa o Swagger da Bora todo dia e compara com a fotografia anterior.
