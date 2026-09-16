@@ -805,6 +805,7 @@ select option { background: var(--bg3); }
       </div>
       <!-- Situação da documentação da API da Bora (sempre visível p/ admin) -->
       <div id="status-api-bora" style="display:none;color:var(--text3);font-size:12px;margin:-4px 0 16px 0;gap:10px;align-items:center;flex-wrap:wrap"></div>
+      <div id="port-andamento-admin" style="display:none;margin-bottom:16px"></div>
       <!-- Planos em uso sem comissão cadastrada (venda registra, mas paga R$ 0) -->
       <div id="alerta-planos-sem-comissao" style="display:none;margin-bottom:16px"></div>
       <!-- Link do app do cliente, sempre à mão (venda online) -->
@@ -1137,6 +1138,7 @@ select option { background: var(--bg3); }
       </div>
       <!-- Link do app do cliente, sempre à mão (venda online) -->
       <div id="card-app-vendedor" style="display:none;margin-bottom:16px"></div>
+      <div id="port-andamento-vendedor" style="display:none;margin-bottom:16px"></div>
       <div class="stats-grid">
         <div class="stat-card"><div class="stat-label">Ativações</div><div class="stat-value" id="mp-ativ">—</div></div>
         <div class="stat-card blue"><div class="stat-label">Recargas Detectadas</div><div class="stat-value" id="mp-rec">—</div></div>
@@ -2431,10 +2433,12 @@ async function iniciarApp() {
     setTimeout(carregarStatusApiBora, 1500);
     setTimeout(carregarCardAppCliente, 1800);
     setTimeout(carregarPlanosSemComissao, 2100);
+    setTimeout(carregarPortabilidadesAndamento, 2400);
   } else {
     navegarPara('meu-painel');
     loadMeuPainel();
     setTimeout(carregarCardAppCliente, 1200);
+    setTimeout(carregarPortabilidadesAndamento, 1500);
   }
   // Datas padrão (mês atual)
   const hoje = new Date().toISOString().split('T')[0];
@@ -5205,6 +5209,53 @@ async function reenviarEsim(iccid, emailConhecido, nome, msisdn, btn) {
 }
 
 // ── PORTABILIDADE ─────────────────────────────────────────────────────────────
+// A Bora devolve `forecast` = previsão de conclusão. Aqui isso vira prazo em palavras,
+// que é o que o vendedor precisa responder quando o cliente pergunta "quando cai?".
+function textoPrazoPortabilidade(p) {
+  if (!p.emAndamento) return '<span style="color:var(--text3)">encerrada</span>';
+  if (p.prazoDias === null || p.prazoDias === undefined) return '<span style="color:var(--text3)">sem previsão</span>';
+  if (p.prazoDias < 0) return `<span style="color:var(--red)">⚠ ${Math.abs(p.prazoDias)} dia(s) em atraso</span>`;
+  if (p.prazoDias === 0) return '<span style="color:var(--yellow)">termina hoje</span>';
+  if (p.prazoDias === 1) return '<span style="color:var(--yellow)">falta 1 dia</span>';
+  return `<span style="color:var(--accent)">faltam ${p.prazoDias} dias</span>`;
+}
+
+// Card de acompanhamento (Dashboard do admin e Meu Painel do vendedor): só o que está
+// em andamento, ordenado pelo que vence primeiro.
+async function carregarPortabilidadesAndamento() {
+  const alvo = document.getElementById(state.user?.role === 'admin' ? 'port-andamento-admin' : 'port-andamento-vendedor');
+  if (!alvo) return;
+  try {
+    const lista = await api('GET', '/api/portabilidade/lista?andamento=true');
+    if (!Array.isArray(lista) || !lista.length) { alvo.style.display = 'none'; return; }
+    const ordenada = lista.slice().sort((a, b) => (a.prazoDias ?? 999) - (b.prazoDias ?? 999));
+    const atrasadas = ordenada.filter(p => (p.prazoDias ?? 99) < 0).length;
+    const fmtNum = n => n ? String(n).replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})/, '($1) $2-$3') : '—';
+    alvo.style.display = 'block';
+    alvo.innerHTML = `
+      <div class="section-card">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+          <div style="font-weight:700;color:var(--accent)">↔ Portabilidades em andamento</div>
+          <span class="badge badge-blue">${ordenada.length}</span>
+          ${atrasadas ? `<span class="badge badge-red">${atrasadas} em atraso</span>` : ''}
+          <button class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="navegarPara('portabilidade');loadPortabilidade()">Ver todas</button>
+        </div>
+        ${ordenada.slice(0, 5).map(p => `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border)">
+            <div>
+              <div style="font-weight:600">${p.name || 'Cliente'}</div>
+              <div style="color:var(--text3);font-size:12px;font-family:var(--mono)">${fmtNum(p.pmsisdn)} · ${p.status || '—'}</div>
+            </div>
+            <div style="text-align:right;font-size:13px">
+              <div>${p.forecast ? new Date(p.forecast).toLocaleDateString('pt-BR') : '—'}</div>
+              <div style="font-size:12px">${textoPrazoPortabilidade(p)}</div>
+            </div>
+          </div>`).join('')}
+        ${ordenada.length > 5 ? `<div style="color:var(--text3);font-size:12px;margin-top:8px">+ ${ordenada.length - 5} outra(s)</div>` : ''}
+      </div>`;
+  } catch { alvo.style.display = 'none'; }
+}
+
 async function loadPortabilidade() {
   try {
     const data = await api('GET', '/api/portabilidade/lista');
@@ -5224,7 +5275,9 @@ async function loadPortabilidade() {
     };
     tbody.innerHTML = lista.map(p => {
       const reqData = p.requestDate ? new Date(p.requestDate).toLocaleDateString('pt-BR') : '—';
-      const prevData = p.forecast ? new Date(p.forecast).toLocaleDateString('pt-BR') : '—';
+      const prevData = p.forecast
+        ? `${new Date(p.forecast).toLocaleDateString('pt-BR')}<div style="font-size:11px">${textoPrazoPortabilidade(p)}</div>`
+        : '—';
       const status = p.status || '—';
       const descricao = p.description || '';
       const fmtNum = (n) => n ? String(n).replace(/^55/, '').replace(/(\d{2})(\d{4,5})(\d{4})/, '($1) $2-$3') : '—';

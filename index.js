@@ -4830,6 +4830,21 @@ app.get('/api/consulta/linha', authMiddleware, async (req, res) => {
 });
 
 // ─── PORTABILIDADE ────────────────────────────────────────────────────────────
+// Status que indicam portabilidade ENCERRADA (concluída ou não) — o resto está em andamento
+function portabilidadeEncerrada(status) {
+  const s = String(status || '').toUpperCase();
+  return /SUCESSO|CONCLU|PORTAD|REALIZAD|CANCEL|NEGAD|REJEIT|ERRO|FALHA/.test(s);
+}
+
+// Prazo em dias a partir da previsão da Bora (campo `forecast`).
+// Negativo = passou do prazo; 0 = termina hoje.
+function prazoPortabilidade(forecast) {
+  if (!forecast) return null;
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const alvo = new Date(forecast); alvo.setHours(0, 0, 0, 0);
+  return Math.round((alvo - hoje) / 86400000);
+}
+
 app.get('/api/portabilidade/lista', authMiddleware, async (req, res) => {
   try {
     // A Bora pagina o resultado (results/page/pages/totalRecords) — busca todas as
@@ -4857,6 +4872,15 @@ app.get('/api/portabilidade/lista', authMiddleware, async (req, res) => {
       lista = lista.filter(p => permitidos.has(normMsisdn(p.msisdn)) || permitidos.has(normMsisdn(p.pmsisdn)));
     }
 
+    // Prazo já calculado aqui: a tela mostra "faltam 3 dias" / "termina hoje" /
+    // "5 dias em atraso" em vez de só uma data solta.
+    lista = lista.map(p => ({
+      ...p,
+      emAndamento: !portabilidadeEncerrada(p.status),
+      prazoDias: prazoPortabilidade(p.forecast)
+    }));
+
+    if (String(req.query.andamento) === 'true') lista = lista.filter(p => p.emAndamento);
     res.json(lista);
   } catch (e) {
     res.status(e.response?.status || 500).json({ erro: e.response?.data?.detail || e.message });
