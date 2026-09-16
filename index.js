@@ -460,15 +460,38 @@ async function capturarSalvarEnviarQrCodeEsim({ iccid, email, nome, msisdn }) {
 }
 
 // ─── Middleware Auth próprio ──────────────────────────────────────────────────
+const SESSAO_PAINEL = '12h';   // duração de cada token do painel
+
+// Sessão deslizante: quem está usando o painel não pode ser desconectado no meio do
+// trabalho. Passada METADE da validade, devolvemos um token novo no cabeçalho
+// `x-token-novo` e o painel troca sozinho. Só desconecta de fato quem ficou parado
+// além da validade inteira.
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization;
-  if (!header) return res.status(401).json({ erro: 'Token não fornecido' });
+  if (!header) return res.status(401).json({ erro: 'Token não fornecido', sessao: 'ausente' });
   const token = header.replace('Bearer ', '');
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    const dados = jwt.verify(token, JWT_SECRET);
+    req.user = dados;
+
+    const agora = Math.floor(Date.now() / 1000);
+    const emitido = dados.iat || agora;
+    const expira = dados.exp || agora;
+    if (expira - agora < (expira - emitido) / 2) {
+      const { iat, exp, ...carga } = dados;
+      const renovado = jwt.sign(carga, JWT_SECRET, { expiresIn: SESSAO_PAINEL });
+      res.set('x-token-novo', renovado);
+      res.set('Access-Control-Expose-Headers', 'x-token-novo');
+    }
     next();
-  } catch {
-    res.status(401).json({ erro: 'Token inválido' });
+  } catch (e) {
+    // `expirada` diz ao painel que é só sessão vencida — ele avisa uma vez e volta
+    // pro login, em vez de encher a tela de "Token inválido".
+    const expirada = e?.name === 'TokenExpiredError';
+    res.status(401).json({
+      erro: expirada ? 'Sua sessão expirou. Entre novamente.' : 'Token inválido',
+      sessao: expirada ? 'expirada' : 'invalida'
+    });
   }
 }
 
@@ -1714,7 +1737,7 @@ app.post('/api/login', async (req, res) => {
     const v = rows[0];
     const ok = await bcrypt.compare(senha, v.senha_hash);
     if (!ok) return res.status(401).json({ erro: 'Credenciais inválidas' });
-    const token = jwt.sign({ id: v.id, nome: v.nome, email: v.email, role: v.role, parent_id: v.parent_id || null }, JWT_SECRET, { expiresIn: '8h' });
+    const token = jwt.sign({ id: v.id, nome: v.nome, email: v.email, role: v.role, parent_id: v.parent_id || null }, JWT_SECRET, { expiresIn: SESSAO_PAINEL });
     res.json({ token, id: v.id, nome: v.nome, role: v.role, parent_id: v.parent_id || null });
   } catch (e) {
     res.status(500).json({ erro: e.message });

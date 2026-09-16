@@ -2355,17 +2355,41 @@ async function api(method, endpoint, body, opts = {}) {
   if (state.token) o.headers['Authorization'] = `Bearer ${state.token}`;
   if (body) o.body = JSON.stringify(body);
   const r = await fetch(endpoint, o);
+  guardarTokenRenovado(r);
   const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && state.token) { sessaoExpirou(data); throw new Error(data.erro || 'Sessão expirada'); }
   if (!r.ok) { const msg = typeof data.erro === 'string' ? data.erro : (data.erro?.detail || data.erro?.title || JSON.stringify(data.erro) || `Erro ${r.status}`); throw new Error(msg); }
   if (cKey) { AppCache.set(cKey, data); localStorage.setItem('mc__last', String(Date.now())); updateCacheTimestamp(); }
   return data;
+}
+
+// O backend devolve um token novo no cabeçalho quando a sessão passa da metade da
+// validade — trocamos na hora, então quem está usando o painel nunca é desconectado.
+function guardarTokenRenovado(resposta) {
+  const novo = resposta.headers.get('x-token-novo');
+  if (novo && novo !== state.token) {
+    state.token = novo;
+    localStorage.setItem('bv_token', novo);
+  }
+}
+
+// Sessão vencida de verdade: avisa UMA vez e volta pro login. Antes, cada chamada em
+// segundo plano jogava um "Token inválido" na tela e o usuário ficava numa tela morta.
+let _sessaoJaAvisada = false;
+function sessaoExpirou(data) {
+  if (_sessaoJaAvisada) return;
+  _sessaoJaAvisada = true;
+  toast(data?.erro || 'Sua sessão expirou. Entre novamente.', 'info');
+  setTimeout(() => doLogout(), 1200);
 }
 
 async function apiForm(method, endpoint, formData) {
   const o = { method, body: formData };
   if (state.token) o.headers = { 'Authorization': `Bearer ${state.token}` };
   const r = await fetch(endpoint, o);
+  guardarTokenRenovado(r);
   const data = await r.json().catch(() => ({}));
+  if (r.status === 401 && state.token) { sessaoExpirou(data); throw new Error(data.erro || 'Sessão expirada'); }
   if (!r.ok) {
     const msg = typeof data.erro === 'string' ? data.erro : (data.erro?.detail || data.erro?.title || JSON.stringify(data.erro) || `Erro ${r.status}`);
     throw new Error(msg);
@@ -2402,6 +2426,7 @@ async function doLogin() {
 }
 
 function doLogout() {
+  _sessaoJaAvisada = false;
   localStorage.removeItem('bv_token');
   localStorage.removeItem('bv_user');
   state.token = null; state.user = null;
