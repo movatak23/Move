@@ -5,160 +5,221 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Move — Minha Linha</title>
 <link rel="manifest" href="/app/manifest.webmanifest">
-<meta name="theme-color" content="#070c1a">
+<meta name="theme-color" content="#000000">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Move">
 <style>
+  /* Paleta e medidas copiadas do app nativo (src/theme.js + telas), pro PWA ficar
+     igual ao que o cliente já conhece: fundo preto, azul Move, cards de borda fina. */
   :root{
-    --bg:#070c1a; --bg2:#0d1426; --bg3:#131c33; --border:#1e2942;
-    --text:#eaf1ff; --text2:#9fb0cc; --text3:#67789a;
-    --accent:#00bfff; --green:#00e5a0; --yellow:#f5b041; --red:#e05a5a;
-    --r:14px; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+    --bg:#000; --bg2:#0a0a0a; --bg3:#111; --bg4:#1a1a1a;
+    --border:#222; --border2:#2a2a2a;
+    --text:#f0f0f0; --text2:#888; --text3:#444;
+    --accent:#00bfff; --accent-dim:rgba(0,191,255,.12);
+    --green:#00e5a0; --yellow:#f5b041; --red:#e05a5a;
+    --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
   }
-  /* CAUSA DO LAYOUT QUEBRADO NO CELULAR REAL: o Android infla o texto por conta
-     própria (ajuste de fonte do sistema/navegador). Com texto inflado e largura fixa,
-     o conteúdo passa da tela e a página ganha rolagem lateral — foi o que apareceu no
-     print. text-size-adjust desliga a inflação automática; o resto é rede de proteção. */
+  /* O Android infla texto sozinho; sem isto o conteúdo estoura a largura da tela. */
   html{-webkit-text-size-adjust:100%;text-size-adjust:100%;color-scheme:dark;overflow-x:clip}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;min-width:0}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-       font-size:16px;overflow-x:clip;overflow-wrap:anywhere;
-       padding-top:env(safe-area-inset-top);
-       padding-bottom:calc(84px + env(safe-area-inset-bottom))}
-  button,a{touch-action:manipulation}
-  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
-  img{max-width:100%;height:auto}
+  body{margin:0;background:var(--bg);color:var(--text);overflow-x:clip;overflow-wrap:anywhere;
+       font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding-bottom:calc(120px + env(safe-area-inset-bottom))}
+  button,a{touch-action:manipulation;font-family:inherit}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+  img{max-width:100%}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-  .wrap{width:100%;max-width:600px;margin:0 auto;padding:18px}
-  .topo{display:flex;align-items:center;gap:10px;padding:18px 18px 4px;max-width:600px;margin:0 auto}
-  /* nome comprido não pode empurrar o cabeçalho: corta em 2 linhas */
-  .topo .quem{margin-left:auto;text-align:right;min-width:0}
-  .topo .quem .nome{font-size:15px;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-  .logo{font-size:30px;font-weight:900;letter-spacing:-1px;color:var(--accent);flex:0 0 auto}
-  .sub{color:var(--text3);font-size:14px}
-  .card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:20px;margin-bottom:16px}
-  .rotulo{display:block;color:var(--text3);font-size:13px;text-transform:uppercase;letter-spacing:.5px}
-  .valor{font-size:20px;font-weight:700;margin-top:4px}
-  /* Número: escala pela LARGURA da tela (vw), então cabe mesmo com fonte ampliada.
-     Sem nowrap — texto que não pode quebrar é o que empurra a página pro lado. */
-  .linha-num{font-family:var(--mono);font-size:clamp(22px,6.5vw,32px);font-weight:800;color:var(--accent);
-             letter-spacing:.5px;font-variant-numeric:tabular-nums}
-  input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px;
-        color:var(--text);font-size:18px;outline:none}
+
+  /* ── Cabeçalho de parceria (igual ao BrandingHeader do nativo) ── */
+  .branding{display:flex;align-items:center;justify-content:center;background:var(--bg2);
+            border-bottom:1px solid var(--border);padding:calc(14px + env(safe-area-inset-top)) 16px 12px;gap:14px}
+  .branding .move{font-size:32px;font-weight:900;color:var(--accent);letter-spacing:-2px;line-height:1}
+  .branding img.move-logo{width:108px;height:42px;object-fit:contain}
+  .branding .divisor{width:1px;height:38px;background:var(--border2)}
+  .branding .parceiro{max-width:150px;text-align:center}
+  .branding .parceria-txt{color:var(--text3);font-size:9px;text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px}
+  .branding .parceiro-nome{color:var(--text);font-size:14px;font-weight:700}
+  .branding img.parceiro-logo{width:118px;height:46px;object-fit:contain}
+
+  .conteudo{max-width:640px;margin:0 auto}
+  .cabecalho{display:flex;justify-content:space-between;align-items:center;padding:20px;gap:12px}
+  .cabecalho .logo{font-size:28px;font-weight:900;color:var(--accent);letter-spacing:-1px}
+  .cabecalho .ola{color:var(--text2);font-size:14px;text-align:right}
+  .secao{color:var(--text3);font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;
+         margin:4px 16px 8px}
+
+  /* ── Chips das linhas: rolam na horizontal, com bolinha de status ── */
+  .linhas-scroll{display:flex;gap:10px;overflow-x:auto;padding:0 16px 12px;scrollbar-width:none}
+  .linhas-scroll::-webkit-scrollbar{display:none}
+  .chip{display:flex;align-items:center;gap:8px;flex:0 0 auto;background:var(--bg2);border:1.5px solid var(--border);
+        border-radius:20px;padding:8px 14px;color:var(--text2);font-size:13px;font-weight:600;cursor:pointer}
+  .chip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+  .chip .ponto{width:8px;height:8px;border-radius:4px;flex:0 0 auto}
+
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px;margin:0 16px 12px}
+  .card-topo{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
+  .rotulo{color:var(--text3);font-size:10px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:3px}
+  .msisdn{color:var(--text);font-size:clamp(20px,6vw,24px);font-weight:700;font-variant-numeric:tabular-nums}
+  .selo{border:1px solid;border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;white-space:nowrap}
+  .grade{display:grid;grid-template-columns:1fr 1fr;gap:12px 12px;margin-bottom:10px}
+  .val{color:var(--text);font-size:14px;font-weight:500}
+
+  .consumo{margin-bottom:14px}
+  .consumo:last-child{margin-bottom:0}
+  .consumo-topo{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px}
+  .consumo-nome{color:var(--text);font-size:13px;font-weight:600}
+  .consumo-val{color:var(--text2);font-size:12px;font-variant-numeric:tabular-nums;text-align:right}
+  .barra{height:6px;background:var(--bg4);border-radius:3px;overflow:hidden}
+  .barra>div{height:6px;border-radius:3px}
+
+  /* ── Faixa "Faturas mensais", fixa acima das abas (igual ao nativo) ── */
+  .faturas{position:fixed;left:0;right:0;bottom:calc(64px + env(safe-area-inset-bottom));z-index:19;
+           display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
+           background:var(--bg2);border:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border);
+           padding:16px 20px;color:var(--text);font-size:15px;font-weight:600;cursor:pointer}
+  .faturas .seta{color:var(--accent);font-size:20px}
+
+  /* ── Abas ── */
+  .abas{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;background:var(--bg2);
+        border-top:1px solid var(--border);padding-bottom:env(safe-area-inset-bottom)}
+  .abas button{flex:1;min-height:64px;background:none;border:0;color:var(--text3);cursor:pointer;
+               font-size:11px;font-weight:600;padding:8px 2px;display:flex;flex-direction:column;
+               align-items:center;justify-content:center;gap:4px}
+  .abas button.on{color:var(--accent)}
+  .abas svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+  /* ── Formulários e botões ── */
+  label.campo{display:block;color:var(--text3);font-size:11px;font-weight:700;letter-spacing:1px;
+              text-transform:uppercase;margin-bottom:6px}
+  input{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;
+        color:var(--text);font-size:16px;outline:none}
   input:focus{border-color:var(--accent)}
-  .btn{display:block;width:100%;border:0;border-radius:10px;padding:16px;font-size:17px;font-weight:700;
-       background:var(--accent);color:#04121f;cursor:pointer;margin-top:12px}
+  .btn{display:block;width:100%;background:var(--accent);color:#000;border:0;border-radius:10px;padding:16px;
+       font-size:16px;font-weight:700;cursor:pointer;margin-top:12px}
   .btn:disabled{opacity:.6}
-  .btn2{background:var(--bg3);color:var(--text);border:1px solid var(--border)}
-  .btn-sm{padding:11px 14px;font-size:15px;width:auto;display:inline-block;margin-top:0}
-  .barra{background:var(--bg3);border-radius:6px;height:11px;overflow:hidden;margin:8px 0 4px}
-  .barra > div{height:11px;border-radius:6px}
-  .nav{position:fixed;bottom:0;left:0;right:0;background:var(--bg2);border-top:1px solid var(--border);
-       display:flex;justify-content:center;padding-bottom:env(safe-area-inset-bottom);z-index:20}
-  .nav button{flex:1;max-width:170px;min-height:56px;background:none;border:0;color:var(--text3);padding:10px 4px;font-size:13px;cursor:pointer}
-  .nav button.on{color:var(--accent)}
-  .nav .ic{display:block;font-size:23px;margin-bottom:3px}
-  .badge{display:inline-block;padding:4px 11px;border-radius:20px;font-size:13px;font-weight:700}
-  .b-verde{background:rgba(0,229,160,.15);color:var(--green)}
-  .b-vermelho{background:rgba(224,90,90,.15);color:var(--red)}
-  .b-amarelo{background:rgba(245,176,65,.15);color:var(--yellow)}
-  .vazio{color:var(--text3);text-align:center;padding:30px 14px;font-size:16px}
-  .erro{background:rgba(224,90,90,.12);border:1px solid var(--red);color:#ffb4b4;border-radius:10px;
-        padding:13px 15px;font-size:15px;margin-top:12px}
-  .ok{background:rgba(0,229,160,.1);border:1px solid var(--green);color:var(--green);border-radius:10px;
-      padding:13px 15px;font-size:15px;margin-top:12px}
-  .aviso{background:rgba(0,191,255,.1);border:1px solid var(--accent);border-radius:var(--r);padding:16px;margin-bottom:16px}
+  .btn2{background:var(--bg2);color:var(--accent);border:2px solid var(--accent)}
+  .btn3{background:var(--bg3);color:var(--text);border:1px solid var(--border)}
+  .btn-sm{width:auto;display:inline-block;padding:11px 14px;font-size:14px;margin-top:0}
   textarea{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:10px;color:var(--text);
-           font-family:var(--mono);font-size:14px;padding:13px;line-height:1.5;word-break:break-all}
-  .carregando{color:var(--text3);text-align:center;padding:28px;font-size:16px}
+           font-family:var(--mono);font-size:13px;padding:12px;word-break:break-all;line-height:1.5}
+  .aviso{background:var(--accent-dim);border:1px solid var(--accent);border-radius:12px;padding:14px;margin:0 16px 12px;font-size:13px}
+  .erro{background:rgba(224,90,90,.12);border:1px solid var(--red);color:#ffb4b4;border-radius:10px;padding:12px 14px;font-size:14px;margin-top:12px}
+  .ok{background:rgba(0,229,160,.12);border:1px solid var(--green);color:var(--green);border-radius:10px;padding:12px 14px;font-size:14px;margin-top:12px}
+  .vazio{padding:48px 24px;text-align:center;color:var(--text2);font-size:14px}
+  .vazio .ic{font-size:40px;display:block;margin-bottom:12px}
+  .carregando{color:var(--text2);text-align:center;padding:28px;font-size:14px}
   a{color:var(--accent)}
 
-  /* Tela grande: o app não pode virar um filete no meio do monitor */
   @media (min-width:700px){
     body{font-size:17px}
-    .wrap, .topo{max-width:760px}
-    .wrap{padding:24px}
-    .card{padding:26px;border-radius:18px}
-    .logo{font-size:34px}
-    .valor{font-size:22px}
-    .linha-num{font-size:38px}
-    .rotulo{font-size:14px}
-    .nav button{font-size:14px;padding:14px 4px}
-    .nav .ic{font-size:25px}
+    .conteudo{max-width:760px}
+    .card,.aviso{margin-left:auto;margin-right:auto;max-width:728px}
+    .msisdn{font-size:28px}
   }
+
+  /* ── Tela de abertura (propaganda), igual ao nativo: 4s e "Continuar" ── */
+  #tela-propaganda{position:fixed;inset:0;background:#000;z-index:50;display:none}
+  #tela-propaganda img{width:100%;height:100%;object-fit:cover;display:block}
+  #tela-propaganda .contador{position:absolute;top:calc(20px + env(safe-area-inset-top));right:20px;
+        background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.15);border-radius:20px;
+        padding:6px 14px;color:#fff;font-size:13px;font-weight:700}
+  #tela-propaganda .continuar{position:absolute;bottom:calc(28px + env(safe-area-inset-bottom));right:20px;
+        background:var(--accent);color:#000;border:0;border-radius:24px;padding:12px 22px;font-size:15px;font-weight:700;cursor:pointer}
 </style>
 </head>
 <body>
 
-<!-- ── ENTRAR ─────────────────────────────────────────────────────────────── -->
+<!-- ── TELA DE ABERTURA ────────────────────────────────────────────────────── -->
+<div id="tela-propaganda" role="dialog" aria-label="Abertura do app Move">
+  <img src="/propaganda.png" alt="Move 5G — seu app está carregando" width="1080" height="1920">
+  <div class="contador" id="propaganda-contador" aria-live="off">4s</div>
+  <button class="continuar" onclick="fecharPropaganda()">Continuar →</button>
+</div>
+
+<!-- ── ENTRAR ──────────────────────────────────────────────────────────────── -->
 <div id="tela-login" style="display:none">
-  <div class="wrap" style="padding-top:34px">
-    <div style="text-align:center;margin-bottom:26px">
-      <div class="logo" style="font-size:44px">move</div>
-      <div class="sub">Sua linha na palma da mão</div>
+  <div class="conteudo" style="padding:32px 24px">
+    <div style="text-align:center;margin:36px 0 34px">
+      <div style="font-size:clamp(52px,16vw,72px);font-weight:900;color:var(--accent);letter-spacing:-4px;line-height:1">move</div>
+      <div style="color:var(--text2);font-size:14px;margin-top:16px">Sua linha na palma da mão</div>
     </div>
 
-    <div class="card">
-      <div id="passo-cpf">
-        <label class="rotulo" for="in-cpf">Seu CPF</label>
-        <input id="in-cpf" name="cpf" type="tel" inputmode="numeric" placeholder="000.000.000-00"
-               autocomplete="username" spellcheck="false" enterkeyhint="send">
-        <button class="btn" id="btn-codigo" onclick="pedirCodigo()">Receber código no WhatsApp</button>
-        <div style="color:var(--text3);font-size:16px;margin-top:12px;line-height:1.5">
-          Enviamos um código para o WhatsApp do número da sua linha Move. Sem senha para decorar.
-        </div>
+    <div id="passo-cpf">
+      <label class="campo" for="in-cpf">Seu CPF</label>
+      <input id="in-cpf" name="cpf" type="tel" inputmode="numeric" placeholder="000.000.000-00"
+             autocomplete="username" spellcheck="false" enterkeyhint="send">
+      <button class="btn" id="btn-codigo" onclick="pedirCodigo()">Receber código no WhatsApp</button>
+      <div style="color:var(--text3);font-size:13px;margin-top:14px;line-height:1.6">
+        O código chega no WhatsApp do número da sua linha Move. Sem senha para decorar.
       </div>
-
-      <div id="passo-codigo" style="display:none">
-        <label class="rotulo" for="in-codigo">Código enviado para <span id="destino-fone" style="color:var(--accent)"></span></label>
-        <input id="in-codigo" name="codigo" type="tel" inputmode="numeric" maxlength="6" placeholder="000000"
-               autocomplete="one-time-code" spellcheck="false" enterkeyhint="go"
-               style="letter-spacing:9px;text-align:center;font-family:var(--mono);font-size:clamp(24px,8vw,30px)">
-        <button class="btn" id="btn-entrar" onclick="entrar()">Entrar</button>
-        <button class="btn btn2" onclick="voltarCpf()">Trocar CPF</button>
-      </div>
-      <div id="login-msg" role="status" aria-live="polite"></div>
     </div>
+
+    <div id="passo-codigo" style="display:none">
+      <label class="campo" for="in-codigo">Código enviado para <span id="destino-fone" style="color:var(--accent)"></span></label>
+      <input id="in-codigo" name="codigo" type="tel" inputmode="numeric" maxlength="6" placeholder="000000"
+             autocomplete="one-time-code" spellcheck="false" enterkeyhint="go"
+             style="letter-spacing:9px;text-align:center;font-family:var(--mono);font-size:clamp(22px,8vw,28px)">
+      <button class="btn" id="btn-entrar" onclick="entrar()">Entrar</button>
+      <button class="btn btn3" onclick="voltarCpf()">Trocar CPF</button>
+    </div>
+    <div id="login-msg" role="status" aria-live="polite"></div>
   </div>
 </div>
 
-<!-- ── APP ────────────────────────────────────────────────────────────────── -->
+<!-- ── APP ─────────────────────────────────────────────────────────────────── -->
 <div id="tela-app" style="display:none">
-  <header class="topo">
-    <div class="logo" translate="no">move</div>
-    <div class="quem">
-      <div id="cli-nome" class="nome"></div>
-      <div class="sub" id="cli-cpf"></div>
-    </div>
+  <header class="branding" id="branding">
+    <div class="move" translate="no">move</div>
   </header>
 
-  <div class="wrap">
+  <div class="conteudo">
+    <div class="cabecalho">
+      <div class="logo" translate="no">move</div>
+      <div class="ola" id="ola"></div>
+    </div>
+
     <div id="banner-instalar" style="display:none"></div>
 
     <div id="pg-linha" role="region" aria-label="Minha linha" aria-live="polite"></div>
-    <div id="pg-cobrancas" role="region" aria-label="Cobranças" aria-live="polite" style="display:none"></div>
-    <div id="pg-recarga" role="region" aria-label="Recarregar" aria-live="polite" style="display:none"></div>
-    <div id="pg-conta" role="region" aria-label="Conta" style="display:none"></div>
+    <div id="pg-recarga" role="region" aria-label="Pacotes adicionais" aria-live="polite" style="display:none"></div>
+    <div id="pg-reativar" role="region" aria-label="Reativar" aria-live="polite" style="display:none"></div>
+    <div id="pg-historico" role="region" aria-label="Histórico" aria-live="polite" style="display:none"></div>
+    <div id="pg-perfil" role="region" aria-label="Perfil" style="display:none"></div>
+    <div id="pg-faturas" role="region" aria-label="Faturas mensais" aria-live="polite" style="display:none"></div>
   </div>
 
-  <nav class="nav" aria-label="Seções do app">
-    <button id="nav-linha" class="on" onclick="irPara('linha')"><span class="ic" aria-hidden="true">📶</span>Minha linha</button>
-    <button id="nav-cobrancas" onclick="irPara('cobrancas')"><span class="ic" aria-hidden="true">💳</span>Pagar</button>
-    <button id="nav-recarga" onclick="irPara('recarga')"><span class="ic" aria-hidden="true">⚡</span>Recarregar</button>
-    <button id="nav-conta" onclick="irPara('conta')"><span class="ic" aria-hidden="true">⚙</span>Conta</button>
+  <button class="faturas" id="faixa-faturas" onclick="irPara('faturas')">
+    <span>📄 Faturas mensais</span><span class="seta" aria-hidden="true">›</span>
+  </button>
+
+  <nav class="abas" aria-label="Seções do app">
+    <button id="aba-linha" class="on" onclick="irPara('linha')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><path d="M2 9a15 15 0 0 1 20 0"/><circle cx="12" cy="19.5" r="1"/></svg>
+      Minha Linha</button>
+    <button id="aba-recarga" onclick="irPara('recarga')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>
+      Pac. Adicionais</button>
+    <button id="aba-reativar" onclick="irPara('reativar')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg>
+      Reativar</button>
+    <button id="aba-historico" onclick="irPara('historico')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      Histórico</button>
+    <button id="aba-perfil" onclick="irPara('perfil')">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 20a8 8 0 0 1 16 0"/></svg>
+      Perfil</button>
   </nav>
 </div>
 
 <script>
-// ── ESTADO E BASE ────────────────────────────────────────────────────────────
+// ── ESTADO ───────────────────────────────────────────────────────────────────
 const S = {
   token: localStorage.getItem('move_cli_token') || null,
   cliente: JSON.parse(localStorage.getItem('move_cli_dados') || 'null'),
-  cpf: null, linhas: [], linhaAtual: null, consumo: null, pagina: 'linha',
-  // Marca e suporte do VENDEDOR dono da linha (cada estado tem o seu). Sem vendedor com
-  // telefone, o servidor devolve o suporte geral; sem nenhum dos dois, o botão não aparece.
+  cpf: null, linhas: [], linhaSel: null, consumo: null, pagina: 'linha',
+  // Marca e suporte do VENDEDOR dono da linha (cada estado tem o seu)
   marca: null, suporte: null, suporteEhDoVendedor: false
 };
 
@@ -174,14 +235,50 @@ async function api(metodo, rota, corpo) {
 }
 
 const soDigitos = v => String(v || '').replace(/\D/g, '');
-const fmtBRL = centavos => 'R$ ' + (Number(centavos || 0) / 100).toFixed(2).replace('.', ',');
+const fmtBRL = c => 'R$ ' + (Number(c || 0) / 100).toFixed(2).replace('.', ',');
 const fmtData = d => d ? new Date(d).toLocaleDateString('pt-BR') : '—';
-function fmtFone(ms) {
+const primeiroNome = n => String(n || '').trim().split(/\s+/)[0] || '';
+function fmtNum(ms) {
   const d = soDigitos(ms).replace(/^55/, '');
   return d.length >= 10 ? d.replace(/(\d{2})(\d{4,5})(\d{4})/, '($1) $2-$3') : (ms || '—');
 }
+function fmtMB(v) {
+  const n = Number(v || 0);
+  return n >= 1024 ? (n / 1024).toFixed(2) + ' GB' : n.toFixed(0) + ' MB';
+}
+const pct = (u, t) => t ? Math.min((Number(u) / Number(t)) * 100, 100) : 0;
+function corStatus(status) {
+  const s = String(status || '').toLowerCase();
+  if (s.includes('active') || s.includes('ativ')) return 'var(--green)';
+  if (s.includes('suspend') || s.includes('block') || s.includes('bloque')) return 'var(--yellow)';
+  if (s.includes('cancel') || s.includes('inativ')) return 'var(--red)';
+  return 'var(--text2)';
+}
 function msg(alvo, texto, tipo) {
   document.getElementById(alvo).innerHTML = texto ? `<div class="${tipo || 'erro'}">${texto}</div>` : '';
+}
+
+// ── TELA DE ABERTURA (4s, igual ao nativo) ───────────────────────────────────
+let _propagandaTimer = null;
+function abrirPropaganda(depois) {
+  const tela = document.getElementById('tela-propaganda');
+  const contador = document.getElementById('propaganda-contador');
+  let segundos = 4;
+  tela.style.display = 'block';
+  contador.textContent = segundos + 's';
+  _propagandaTimer = setInterval(() => {
+    segundos--;
+    contador.textContent = Math.max(segundos, 0) + 's';
+    if (segundos <= 0) fecharPropaganda();
+  }, 1000);
+  tela._depois = depois;
+}
+function fecharPropaganda() {
+  clearInterval(_propagandaTimer);
+  const tela = document.getElementById('tela-propaganda');
+  tela.style.display = 'none';
+  const depois = tela._depois; tela._depois = null;
+  if (depois) depois();
 }
 
 // ── LOGIN POR CÓDIGO NO WHATSAPP ─────────────────────────────────────────────
@@ -218,7 +315,8 @@ async function entrar() {
     S.token = r.token; S.cliente = r.cliente;
     localStorage.setItem('move_cli_token', r.token);
     localStorage.setItem('move_cli_dados', JSON.stringify(r.cliente));
-    abrirApp();
+    document.getElementById('tela-login').style.display = 'none';
+    abrirPropaganda(abrirApp);
   } catch (e) { msg('login-msg', e.message); }
   finally { btn.disabled = false; btn.textContent = 'Entrar'; }
 }
@@ -232,49 +330,56 @@ function sair() {
 }
 
 // ── NAVEGAÇÃO ────────────────────────────────────────────────────────────────
+const PAGINAS = ['linha', 'recarga', 'reativar', 'historico', 'perfil', 'faturas'];
 function irPara(pg) {
   S.pagina = pg;
-  ['linha', 'cobrancas', 'recarga', 'conta'].forEach(p => {
-    document.getElementById('pg-' + p).style.display = p === pg ? 'block' : 'none';
-    const botao = document.getElementById('nav-' + p);
-    botao.classList.toggle('on', p === pg);
-    if (p === pg) botao.setAttribute('aria-current', 'page'); else botao.removeAttribute('aria-current');
+  PAGINAS.forEach(p => { document.getElementById('pg-' + p).style.display = p === pg ? 'block' : 'none'; });
+  ['linha', 'recarga', 'reativar', 'historico', 'perfil'].forEach(p => {
+    const b = document.getElementById('aba-' + p);
+    const ativo = p === pg;
+    b.classList.toggle('on', ativo);
+    if (ativo) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
-  if (pg === 'cobrancas') carregarCobrancas();
+  // A faixa de faturas é atalho da tela principal (como no app nativo)
+  document.getElementById('faixa-faturas').style.display = pg === 'linha' ? 'flex' : 'none';
+  if (pg === 'faturas') carregarFaturas();
   if (pg === 'recarga') carregarRecarga();
-  if (pg === 'conta') renderConta();
+  if (pg === 'reativar') renderReativar();
+  if (pg === 'historico') carregarHistorico();
+  if (pg === 'perfil') renderPerfil();
   window.scrollTo(0, 0);
 }
 
 function abrirApp() {
   document.getElementById('tela-login').style.display = 'none';
   document.getElementById('tela-app').style.display = 'block';
-  document.getElementById('cli-nome').textContent = S.cliente?.nome || 'Cliente';
-  const c = soDigitos(S.cliente?.cpf);
-  document.getElementById('cli-cpf').textContent = c ? c.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : '';
+  document.getElementById('ola').textContent = 'Olá, ' + primeiroNome(S.cliente?.nome);
   carregarLinha();
-  prepararInstalacao();
   carregarMarca();
+  prepararInstalacao();
 }
 
-// ── MARCA DO VENDEDOR (logo + suporte de quem vendeu a linha) ────────────────
+// ── MARCA DO VENDEDOR (cabeçalho "em parceria com") ──────────────────────────
 async function carregarMarca() {
   try {
     const m = await api('GET', '/api/cliente/marca');
     S.marca = m;
     S.suporte = m.suporteWhatsapp || null;
     S.suporteEhDoVendedor = !!m.suporteEhDoVendedor;
-    if (m.temParceiro && m.parceiroLogoUrl) {
-      const topo = document.querySelector('.topo');
-      if (topo && !document.getElementById('logo-parceiro')) {
-        const img = document.createElement('img');
-        img.id = 'logo-parceiro'; img.src = m.parceiroLogoUrl; img.alt = m.parceiroNome || 'Parceiro';
-        img.style.cssText = 'height:26px;max-width:110px;object-fit:contain;margin-left:8px';
-        topo.insertBefore(img, topo.children[1]);
-      }
-    }
-    if (S.pagina === 'conta') renderConta();   // já estava na aba Conta: redesenha com o suporte certo
-  } catch { /* sem marca: o app segue com a identidade Move */ }
+    const box = document.getElementById('branding');
+    const logoMove = m.moveLogoUrl
+      ? `<img class="move-logo" src="${m.moveLogoUrl}" alt="Move 5G" width="108" height="42">`
+      : '<div class="move" translate="no">move</div>';
+    const parceiro = m.parceiroLogoUrl
+      ? `<div class="divisor"></div><div class="parceiro"><div class="parceria-txt">em parceria com</div>
+         <img class="parceiro-logo" src="${m.parceiroLogoUrl}" alt="${m.parceiroNome || 'Parceiro'}" width="118" height="46"></div>`
+      : (m.parceiroNome
+        ? `<div class="divisor"></div><div class="parceiro"><div class="parceria-txt">em parceria com</div>
+           <div class="parceiro-nome">${m.parceiroNome}</div></div>`
+        : '');
+    box.innerHTML = logoMove + parceiro;
+    if (S.pagina === 'perfil') renderPerfil();
+  } catch { /* sem marca: segue a identidade Move */ }
 }
 
 // ── MINHA LINHA ──────────────────────────────────────────────────────────────
@@ -284,125 +389,111 @@ async function carregarLinha() {
   try {
     const r = await api('GET', '/api/cliente/linhas/' + soDigitos(S.cliente.cpf));
     S.linhas = r.linhas || [];
-    if (!S.linhas.length) { box.innerHTML = '<div class="card vazio">Nenhuma linha encontrada no seu CPF.</div>'; return; }
-    S.linhaAtual = S.linhas[0];
-    const ms = soDigitos(S.linhaAtual.msisdn);
-    S.consumo = null;
-    if (ms) { try { S.consumo = await api('GET', '/api/cliente/consumo/' + ms); } catch {} }
-    renderLinha();
-  } catch (e) { box.innerHTML = `<div class="card erro">${e.message}</div>`; }
+    if (!S.linhas.length) {
+      box.innerHTML = '<div class="vazio"><span class="ic">📱</span>Nenhuma linha encontrada.<br>Entre em contato com a Move.</div>';
+      return;
+    }
+    await selecionarLinha(S.linhas[0]);
+  } catch (e) { box.innerHTML = `<div class="card" style="border-color:var(--red);color:var(--red)">${e.message}</div>`; }
+}
+
+async function selecionarLinha(l) {
+  S.linhaSel = l; S.consumo = null;
+  renderLinha();
+  const ms = soDigitos(l.msisdn);
+  if (ms) {
+    try { S.consumo = await api('GET', '/api/cliente/consumo/' + ms); } catch {}
+    if (S.linhaSel === l) renderLinha();
+  }
 }
 
 function renderLinha() {
-  const l = S.linhaAtual || {};
+  const l = S.linhaSel || {};
   const plano = Array.isArray(l.plan) ? l.plan[l.plan.length - 1] : (l.plan || null);
-  const ativa = String(l.status || '').toLowerCase().includes('active');
-  const venc = plano?.expiration ? new Date(plano.expiration) : null;
-  const diasPraVencer = venc ? Math.ceil((venc - new Date()) / 86400000) : null;
+  const cor = corStatus(l.status);
 
-  const seletor = S.linhas.length > 1 ? `
-    <div class="card" style="padding:10px 12px">
-      <div class="rotulo" style="margin-bottom:6px">Suas linhas</div>
+  const chips = S.linhas.length > 1 ? `
+    <div class="secao">Minhas linhas</div>
+    <div class="linhas-scroll">
       ${S.linhas.map((x, i) => `
-        <button class="btn btn2 btn-sm" style="margin:3px 4px 3px 0;${x === S.linhaAtual ? 'border-color:var(--accent);color:var(--accent)' : ''}"
-                onclick="trocarLinha(${i})">${fmtFone(x.msisdn)}</button>`).join('')}
-    </div>` : '';
-
-  const alertaVenc = (diasPraVencer !== null && diasPraVencer <= 5) ? `
-    <div class="aviso">
-      <b style="color:${diasPraVencer < 0 ? 'var(--red)' : 'var(--yellow)'}">
-        ${diasPraVencer < 0 ? 'Seu plano venceu' : `Seu plano vence em ${diasPraVencer} dia(s)`}
-      </b>
-      <div style="color:var(--text2);font-size:15px;margin-top:4px">
-        ${diasPraVencer < 0 ? 'Reative para voltar a usar sua linha.' : 'Garanta a renovação para não ficar sem internet.'}
-      </div>
-      <button class="btn btn-sm" style="margin-top:10px" onclick="irPara('${diasPraVencer < 0 ? 'conta' : 'cobrancas'}')">
-        ${diasPraVencer < 0 ? 'Reativar minha linha' : 'Ver cobranças'}
-      </button>
+        <button class="chip" aria-pressed="${x === l}" onclick="selecionarLinha(S.linhas[${i}])">
+          <span class="ponto" style="background:${corStatus(x.status)}"></span>${fmtNum(x.msisdn)}
+        </button>`).join('')}
     </div>` : '';
 
   document.getElementById('pg-linha').innerHTML = `
-    ${seletor}${alertaVenc}
+    ${chips}
     <div class="card">
-      <div class="rotulo">Seu número</div>
-      <div class="linha-num">${fmtFone(l.msisdn)}</div>
-      <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <span class="badge ${ativa ? 'b-verde' : 'b-vermelho'}">${ativa ? 'Ativa' : (l.status || 'Inativa')}</span>
-        <span style="color:var(--text2);font-size:15px">${plano?.name || l.planName || 'Plano Move'}</span>
-        <span style="margin-left:auto;color:var(--text3);font-size:16px">Válido até ${fmtData(plano?.expiration)}</span>
+      <div class="card-topo">
+        <div>
+          <div class="rotulo">Número</div>
+          <div class="msisdn">${fmtNum(l.msisdn)}</div>
+        </div>
+        <span class="selo" style="color:${cor};border-color:${cor};background:${cor.replace('var(--', 'var(--')}1f">
+          ${(l.status || '—').toUpperCase()}</span>
+      </div>
+      <div class="grade">
+        <div><div class="rotulo">Plano</div><div class="val">${plano?.name || '—'}</div></div>
+        <div><div class="rotulo">Vencimento</div><div class="val">${fmtData(plano?.expiration)}</div></div>
+      </div>
+      <div class="grade" style="margin-bottom:0">
+        <div><div class="rotulo">Tipo</div><div class="val">${l.iccidType || 'SIM'}</div></div>
+        <div><div class="rotulo">Ativação</div><div class="val">${fmtData(l.activationDate)}</div></div>
       </div>
     </div>
+
+    <div class="secao">Consumo do mês</div>
+    <div class="card">${renderConsumo(S.consumo)}</div>
+
     <div class="card">
-      <div class="rotulo" style="margin-bottom:10px">Consumo do plano</div>
-      ${renderConsumo(S.consumo)}
-    </div>
-    <div class="card">
-      <div class="rotulo" style="margin-bottom:8px">Dados da linha</div>
-      ${[['Chip', l.iccidType || 'SIM físico'], ['ICCID', l.iccid || '—'],
-         ['Ativação', fmtData(l.activationDate)], ['Renovação', fmtData(l.recurrence?.nextRenewalDate)],
-         ['Pagamento', l.recurrence?.paymentType || l.lastPaymentType || '—']]
-        .map(([k, v]) => `<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:15px">
-            <span style="color:var(--text3)">${k}</span><span style="font-family:var(--mono)">${v}</span></div>`).join('')}
+      <div class="rotulo">ICCID</div>
+      <div class="val" style="font-family:var(--mono);font-size:12px">${l.iccid || '—'}</div>
     </div>`;
 }
 
-function trocarLinha(i) {
-  S.linhaAtual = S.linhas[i];
-  S.consumo = null;
-  renderLinha();
-  const ms = soDigitos(S.linhaAtual.msisdn);
-  if (ms) api('GET', '/api/cliente/consumo/' + ms).then(c => { S.consumo = c; renderLinha(); }).catch(() => {});
-}
-
 function renderConsumo(c) {
-  if (!c) return '<div class="vazio" style="padding:14px">Consumo indisponível no momento.</div>';
-  const mb = v => !v ? '0 MB' : (v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : Number(v).toFixed(0) + ' MB');
-  const pct = (u, t) => t ? Math.min((u / t) * 100, 100) : 0;
+  if (!c) return '<div class="carregando" style="padding:12px">Consumo não disponível</div>';
   const itens = [
-    { nome: 'Internet', cor: 'var(--accent)', usado: c.data?.used || 0, total: c.data?.total || 0, fmt: mb },
-    { nome: 'Ligações', cor: 'var(--green)', usado: c.voice?.used || 0, total: c.voice?.total || 0, fmt: v => (v || 0) + ' min' },
-    { nome: 'SMS', cor: 'var(--yellow)', usado: c.sms?.used || 0, total: c.sms?.total || 0, fmt: v => (v || 0) + ' SMS' },
+    { nome: '📶 Dados', cor: 'var(--accent)', usado: c.data?.used, total: c.data?.total, fmt: fmtMB },
+    { nome: '📞 Minutos', cor: 'var(--green)', usado: c.voice?.used, total: c.voice?.total, fmt: v => `${Number(v || 0)}`, sufixo: ' min' },
+    { nome: '💬 SMS', cor: 'var(--yellow)', usado: c.sms?.used, total: c.sms?.total, fmt: v => `${Number(v || 0)}` },
   ];
   return itens.map(it => `
-    <div style="margin-bottom:13px">
-      <div style="display:flex;justify-content:space-between;font-size:15px">
-        <span>${it.nome}</span>
-        <span style="color:var(--text2)">${it.fmt(it.usado)} de ${it.fmt(it.total)}</span>
+    <div class="consumo">
+      <div class="consumo-topo">
+        <span class="consumo-nome">${it.nome}</span>
+        <span class="consumo-val">${it.fmt(it.usado)} / ${it.fmt(it.total)}${it.sufixo || ''}</span>
       </div>
       <div class="barra"><div style="width:${pct(it.usado, it.total)}%;background:${it.cor}"></div></div>
     </div>`).join('');
 }
 
-// ── PAGAR (boletos e pix em aberto) ──────────────────────────────────────────
-async function carregarCobrancas() {
-  const box = document.getElementById('pg-cobrancas');
-  box.innerHTML = '<div class="carregando">Buscando suas cobranças...</div>';
+// ── FATURAS MENSAIS ──────────────────────────────────────────────────────────
+async function carregarFaturas() {
+  const box = document.getElementById('pg-faturas');
+  box.innerHTML = '<div class="carregando">Buscando suas faturas...</div>';
   try {
     const r = await api('GET', '/api/cliente/cobrancas');
     const abertas = (r.cobrancas || []).filter(c => !c.pago);
-    if (!abertas.length) {
-      box.innerHTML = '<div class="card vazio">🎉 Você não tem cobranças em aberto.</div>';
-      return;
-    }
-    box.innerHTML = abertas.map((c, i) => `
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div>
-            <div class="rotulo">${fmtFone(c.msisdn)}</div>
-            <div class="valor">R$ ${Number(c.valor || 0).toFixed(2).replace('.', ',')}</div>
+    box.innerHTML = `<div class="secao">Faturas em aberto</div>` + (abertas.length
+      ? abertas.map(c => `
+        <div class="card">
+          <div class="card-topo" style="margin-bottom:10px">
+            <div>
+              <div class="rotulo">${fmtNum(c.msisdn)}</div>
+              <div class="msisdn" style="font-size:20px">R$ ${Number(c.valor || 0).toFixed(2).replace('.', ',')}</div>
+            </div>
+            <span class="selo" style="color:var(--yellow);border-color:var(--yellow)">VENCE ${fmtData(c.vencimento)}</span>
           </div>
-          <span class="badge b-amarelo">Vence ${fmtData(c.vencimento)}</span>
-        </div>
-        <div style="color:var(--text3);font-size:16px;margin-top:6px">${c.plano || ''}</div>
-        ${c.pixCode ? `
-          <textarea readonly rows="3" style="margin-top:11px">${c.pixCode}</textarea>
-          <button class="btn" onclick="copiar(${JSON.stringify(c.pixCode).replace(/"/g, '&quot;')}, this)">Copiar código pix</button>` : ''}
-        ${c.url ? `<a class="btn btn2" style="text-align:center;text-decoration:none" href="${c.url}" target="_blank" rel="noopener">Abrir boleto</a>` : ''}
-        ${c.barcode && !c.pixCode ? `
-          <textarea readonly rows="2" style="margin-top:11px">${c.barcode}</textarea>
-          <button class="btn btn2" onclick="copiar(${JSON.stringify(c.barcode).replace(/"/g, '&quot;')}, this)">Copiar linha digitável</button>` : ''}
-      </div>`).join('');
-  } catch (e) { box.innerHTML = `<div class="card erro">${e.message}</div>`; }
+          <div style="color:var(--text2);font-size:13px">${c.plano || ''}</div>
+          ${c.pixCode ? `<textarea readonly rows="3" style="margin-top:12px">${c.pixCode}</textarea>
+            <button class="btn" onclick="copiar(${JSON.stringify(c.pixCode).replace(/"/g, '&quot;')}, this)">Copiar código pix</button>` : ''}
+          ${c.url ? `<a class="btn btn3" style="text-align:center;text-decoration:none" href="${c.url}" target="_blank" rel="noopener">Abrir boleto</a>` : ''}
+          ${c.barcode && !c.pixCode ? `<textarea readonly rows="2" style="margin-top:12px">${c.barcode}</textarea>
+            <button class="btn btn3" onclick="copiar(${JSON.stringify(c.barcode).replace(/"/g, '&quot;')}, this)">Copiar linha digitável</button>` : ''}
+        </div>`).join('')
+      : '<div class="vazio"><span class="ic">🎉</span>Você não tem faturas em aberto.</div>');
+  } catch (e) { box.innerHTML = `<div class="card" style="border-color:var(--red);color:var(--red)">${e.message}</div>`; }
 }
 
 function copiar(texto, btn) {
@@ -413,126 +504,95 @@ function copiar(texto, btn) {
   }).catch(() => alert('Copie manualmente: ' + texto));
 }
 
-// ── RECARREGAR ───────────────────────────────────────────────────────────────
-// O servidor só devolve pacotes de valor igual ou maior que o plano atual — e trava
-// de novo na hora de cobrar. Aqui a tela só explica a regra.
+// ── PAC. ADICIONAIS ──────────────────────────────────────────────────────────
+// O servidor só oferece pacote de valor igual ou maior que o plano atual, e recusa
+// de novo na hora de cobrar — a tela aqui só explica a regra.
 async function carregarRecarga() {
   const box = document.getElementById('pg-recarga');
-  const ms = soDigitos(S.linhaAtual?.msisdn);
-  if (!ms) { box.innerHTML = '<div class="card vazio">Selecione uma linha primeiro.</div>'; return; }
+  const ms = soDigitos(S.linhaSel?.msisdn);
+  if (!ms) { box.innerHTML = '<div class="vazio">Selecione uma linha em Minha Linha.</div>'; return; }
   box.innerHTML = '<div class="carregando">Carregando pacotes...</div>';
   try {
     const planos = await api('GET', '/api/cliente/planos-recarga/' + ms);
-    if (!planos.length) { box.innerHTML = '<div class="card vazio">Nenhum pacote disponível para a sua linha agora.</div>'; return; }
+    if (!planos.length) { box.innerHTML = '<div class="vazio"><span class="ic">📦</span>Nenhum pacote disponível para a sua linha agora.</div>'; return; }
     box.innerHTML = `
-      <div class="card" style="background:rgba(0,191,255,.08);border-color:var(--accent)">
-        <div style="font-size:15px;color:var(--text2)">
-          Pacotes disponíveis para <b style="color:var(--accent)">${fmtFone(ms)}</b>.
-          Mostramos apenas os de valor igual ou maior que o seu plano atual — assim você nunca perde benefício.
-        </div>
-      </div>
+      <div class="aviso">Pacotes para <b style="color:var(--accent)">${fmtNum(ms)}</b>. Mostramos só os de valor
+        igual ou maior que o seu plano atual — assim você nunca perde benefício.</div>
       ${planos.map(p => `
         <div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <div class="card-topo" style="margin-bottom:0">
             <div>
-              <div class="valor">${p.name || p.nome}</div>
-              <div style="color:var(--text3);font-size:16px">${p.durationTime ? p.durationTime + ' dias' : ''}</div>
+              <div class="val" style="font-size:16px;font-weight:700">${p.name || p.nome}</div>
+              <div style="color:var(--text3);font-size:12px">${p.durationTime ? p.durationTime + ' dias' : ''}</div>
             </div>
             <div style="text-align:right">
-              <div style="color:var(--accent);font-weight:800;font-size:18px">${fmtBRL(p.value)}</div>
+              <div style="color:var(--accent);font-weight:800;font-size:17px">${fmtBRL(p.value)}</div>
               <button class="btn btn-sm" style="margin-top:6px"
                 onclick="escolherPagamento('${p.idPlanExternal || p.id}', ${JSON.stringify(p.name || p.nome).replace(/"/g, '&quot;')}, ${p.value || 0})">
-                Recarregar</button>
+                Contratar</button>
             </div>
           </div>
         </div>`).join('')}
       <div id="recarga-resultado"></div>`;
-  } catch (e) { box.innerHTML = `<div class="card erro">${e.message}</div>`; }
+  } catch (e) { box.innerHTML = `<div class="card" style="border-color:var(--red);color:var(--red)">${e.message}</div>`; }
 }
 
 function escolherPagamento(planoId, planoNome, valor) {
   document.getElementById('recarga-resultado').innerHTML = `
     <div class="card">
       <div class="rotulo">Como você quer pagar</div>
-      <div class="valor" style="margin-bottom:10px">${planoNome} — ${fmtBRL(valor)}</div>
+      <div class="val" style="font-size:16px;font-weight:700;margin-bottom:10px">${planoNome} — ${fmtBRL(valor)}</div>
       <button class="btn" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'pix', this)">Pix</button>
-      <button class="btn btn2" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'billet', this)">Boleto</button>
-      <button class="btn btn2" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'credit', this)">Cartão de crédito</button>
+      <button class="btn btn3" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'billet', this)">Boleto</button>
+      <button class="btn btn3" onclick="recarregar('${planoId}', ${JSON.stringify(planoNome).replace(/"/g, '&quot;')}, 'credit', this)">Cartão de crédito</button>
       <div id="pagamento-saida"></div>
     </div>`;
   document.getElementById('recarga-resultado').scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 async function recarregar(planoId, planoNome, pagamento, btn) {
-  const ms = soDigitos(S.linhaAtual?.msisdn);
+  const ms = soDigitos(S.linhaSel?.msisdn);
   btn.disabled = true; const antes = btn.textContent; btn.textContent = 'Gerando...';
   try {
     const r = await api('POST', '/api/cliente/recarregar', { msisdn: ms, plano_id: planoId, plano_nome: planoNome, pagamento });
     let html = '<div class="ok">Pedido gerado! Conclua o pagamento abaixo.</div>';
-    if (r.pix?.code) {
-      html += `<textarea readonly rows="4" style="margin-top:11px">${r.pix.code}</textarea>
-               <button class="btn" onclick="copiar(${JSON.stringify(r.pix.code).replace(/"/g, '&quot;')}, this)">Copiar código pix</button>`;
-    }
-    if (r.billet?.url || r.billet?.barcode) {
-      html += r.billet.barcode ? `<textarea readonly rows="2" style="margin-top:11px">${r.billet.barcode}</textarea>` : '';
-      if (r.billet.url) html += `<a class="btn btn2" style="text-align:center;text-decoration:none" href="${r.billet.url}" target="_blank" rel="noopener">Abrir boleto</a>`;
-    }
-    if (r.paymentLink) {
-      html += `<a class="btn" style="text-align:center;text-decoration:none" href="${r.paymentLink}" target="_blank" rel="noopener">Pagar com cartão</a>
-               <div style="color:var(--text3);font-size:16px;margin-top:8px">A página do cartão é da operadora Bora. A Move não guarda o número do seu cartão.</div>`;
-    }
+    if (r.pix?.code) html += `<textarea readonly rows="4" style="margin-top:12px">${r.pix.code}</textarea>
+      <button class="btn" onclick="copiar(${JSON.stringify(r.pix.code).replace(/"/g, '&quot;')}, this)">Copiar código pix</button>`;
+    if (r.billet?.barcode) html += `<textarea readonly rows="2" style="margin-top:12px">${r.billet.barcode}</textarea>`;
+    if (r.billet?.url) html += `<a class="btn btn3" style="text-align:center;text-decoration:none" href="${r.billet.url}" target="_blank" rel="noopener">Abrir boleto</a>`;
+    if (r.paymentLink) html += `<a class="btn" style="text-align:center;text-decoration:none" href="${r.paymentLink}" target="_blank" rel="noopener">Pagar com cartão</a>
+      <div style="color:var(--text3);font-size:12px;margin-top:8px">A página do cartão é da operadora Bora. A Move não guarda o número do seu cartão.</div>`;
     document.getElementById('pagamento-saida').innerHTML = html;
   } catch (e) {
     document.getElementById('pagamento-saida').innerHTML = `<div class="erro">${e.message}</div>`;
   } finally { btn.disabled = false; btn.textContent = antes; }
 }
 
-// ── CONTA (reativar, instalar, sair) ─────────────────────────────────────────
-function renderConta() {
-  const l = S.linhaAtual || {};
+// ── REATIVAR ─────────────────────────────────────────────────────────────────
+function renderReativar() {
+  const l = S.linhaSel || {};
   const ativa = String(l.status || '').toLowerCase().includes('active');
-  document.getElementById('pg-conta').innerHTML = `
-    ${!ativa && l.msisdn ? `
-      <div class="card">
-        <div class="rotulo">Linha inativa</div>
-        <div style="font-size:15px;color:var(--text2);margin-top:6px">
-          Reative ${fmtFone(l.msisdn)} com o mesmo plano que você já usava.
-        </div>
-        <button class="btn" onclick="reativar(this)">Reativar minha linha</button>
-        <div id="reativar-saida"></div>
-      </div>` : ''}
-    <div class="card">
-      <div class="rotulo">App na tela do celular</div>
-      <div style="font-size:15px;color:var(--text2);margin-top:6px">
-        Deixe a Move a um toque de distância, sem precisar de loja de aplicativos.
-      </div>
-      <div id="conta-instalar"></div>
-    </div>
-    ${S.suporte ? `
-    <div class="card">
-      <div class="rotulo">Precisa de ajuda?</div>
-      <div style="font-size:15px;color:var(--text2);margin-top:6px">
-        ${S.suporteEhDoVendedor
-          ? `Fale direto com ${S.marca?.parceiroNome || 'o seu vendedor'}, quem cuida da sua linha.`
-          : 'Fale com o atendimento Move.'}
-      </div>
-      <a class="btn btn2" style="text-align:center;text-decoration:none;margin-top:10px"
-         href="https://wa.me/${S.suporte}?text=Ol%C3%A1%2C%20preciso%20de%20ajuda%20com%20minha%20linha%20Move"
-         target="_blank" rel="noopener">Falar no WhatsApp</a>
-    </div>` : ''}
-    <div class="card">
-      <button class="btn btn2" onclick="sair()">Sair da conta</button>
-    </div>`;
-  renderBotaoInstalar('conta-instalar');
+  document.getElementById('pg-reativar').innerHTML = !l.msisdn
+    ? '<div class="vazio">Selecione uma linha em Minha Linha.</div>'
+    : ativa
+      ? `<div class="vazio"><span class="ic">✅</span>Sua linha ${fmtNum(l.msisdn)} está ativa.<br>
+         Nada a reativar por aqui.</div>`
+      : `<div class="card">
+           <div class="rotulo">Linha inativa</div>
+           <div class="val" style="margin:6px 0 4px">${fmtNum(l.msisdn)}</div>
+           <div style="color:var(--text2);font-size:13px">Reative com o mesmo plano que você já usava.</div>
+           <button class="btn" onclick="reativar(this)">Reativar minha linha</button>
+           <div id="reativar-saida"></div>
+         </div>`;
 }
 
 async function reativar(btn) {
-  const ms = soDigitos(S.linhaAtual?.msisdn);
+  const ms = soDigitos(S.linhaSel?.msisdn);
   btn.disabled = true; btn.textContent = 'Reativando...';
   try {
     const r = await api('POST', `/api/cliente/linha/${ms}/reativar`, {});
     let html = '<div class="ok">Reativação iniciada! Conclua o pagamento se for pedido.</div>';
-    if (r.pix?.code) html += `<textarea readonly rows="4" style="margin-top:11px">${r.pix.code}</textarea>
+    if (r.pix?.code) html += `<textarea readonly rows="4" style="margin-top:12px">${r.pix.code}</textarea>
       <button class="btn" onclick="copiar(${JSON.stringify(r.pix.code).replace(/"/g, '&quot;')}, this)">Copiar código pix</button>`;
     if (r.paymentLink) html += `<a class="btn" style="text-align:center;text-decoration:none" href="${r.paymentLink}" target="_blank" rel="noopener">Pagar com cartão</a>`;
     document.getElementById('reativar-saida').innerHTML = html;
@@ -541,9 +601,63 @@ async function reativar(btn) {
   } finally { btn.disabled = false; btn.textContent = 'Reativar minha linha'; }
 }
 
+// ── HISTÓRICO (faturas já pagas) ─────────────────────────────────────────────
+async function carregarHistorico() {
+  const box = document.getElementById('pg-historico');
+  box.innerHTML = '<div class="carregando">Carregando histórico...</div>';
+  try {
+    const r = await api('GET', '/api/cliente/cobrancas');
+    const pagas = (r.cobrancas || []).filter(c => c.pago);
+    box.innerHTML = `<div class="secao">Pagamentos anteriores</div>` + (pagas.length
+      ? pagas.map(c => `
+        <div class="card">
+          <div class="card-topo" style="margin-bottom:0">
+            <div>
+              <div class="rotulo">${fmtNum(c.msisdn)}</div>
+              <div class="val" style="font-size:16px;font-weight:700">R$ ${Number(c.valor || 0).toFixed(2).replace('.', ',')}</div>
+              <div style="color:var(--text3);font-size:12px">${c.plano || ''}</div>
+            </div>
+            <span class="selo" style="color:var(--green);border-color:var(--green)">PAGO ${fmtData(c.vencimento)}</span>
+          </div>
+        </div>`).join('')
+      : '<div class="vazio"><span class="ic">🕓</span>Ainda não há pagamentos registrados.</div>');
+  } catch (e) { box.innerHTML = `<div class="card" style="border-color:var(--red);color:var(--red)">${e.message}</div>`; }
+}
+
+// ── PERFIL ───────────────────────────────────────────────────────────────────
+function renderPerfil() {
+  const cpf = soDigitos(S.cliente?.cpf);
+  document.getElementById('pg-perfil').innerHTML = `
+    <div class="card">
+      <div class="rotulo">Seus dados</div>
+      <div class="val" style="font-size:16px;font-weight:700;margin-top:4px">${S.cliente?.nome || 'Cliente Move'}</div>
+      <div style="color:var(--text2);font-size:13px;font-family:var(--mono)">
+        ${cpf ? cpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4') : ''}</div>
+    </div>
+    <div class="card">
+      <div class="rotulo">App na tela do celular</div>
+      <div style="color:var(--text2);font-size:13px;margin-top:6px">Deixe a Move a um toque, sem loja de aplicativos.</div>
+      <div id="perfil-instalar"></div>
+    </div>
+    ${S.suporte ? `
+    <div class="card">
+      <div class="rotulo">Precisa de ajuda?</div>
+      <div style="color:var(--text2);font-size:13px;margin-top:6px">
+        ${S.suporteEhDoVendedor
+          ? `Fale direto com ${S.marca?.parceiroNome || 'o seu vendedor'}, quem cuida da sua linha.`
+          : 'Fale com o atendimento Move.'}
+      </div>
+      <a class="btn btn2" style="text-align:center;text-decoration:none"
+         href="https://wa.me/${S.suporte}?text=Ol%C3%A1%2C%20preciso%20de%20ajuda%20com%20minha%20linha%20Move"
+         target="_blank" rel="noopener">Falar no WhatsApp</a>
+    </div>` : ''}
+    <div class="card"><button class="btn btn3" onclick="sair()">Sair da conta</button></div>`;
+  renderBotaoInstalar('perfil-instalar');
+}
+
 // ── INSTALAÇÃO NA TELA DE INÍCIO ─────────────────────────────────────────────
-// Android/Chrome deixa abrir o diálogo de instalação; a Apple não expõe API nenhuma,
-// então no iPhone o app ENSINA o caminho em vez de fingir um botão que não existe.
+// Android/Chrome deixa abrir o diálogo; a Apple não expõe API, então no iPhone o app
+// ENSINA o caminho em vez de fingir um botão que não existe.
 let promptInstalar = null;
 const ehAndroid = /android/i.test(navigator.userAgent);
 const ehIOS = !ehAndroid && /iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -556,7 +670,6 @@ window.addEventListener('beforeinstallprompt', (e) => {
 });
 window.addEventListener('appinstalled', () => {
   promptInstalar = null;
-  localStorage.setItem('move_cli_instalado', '1');
   document.getElementById('banner-instalar').style.display = 'none';
 });
 
@@ -568,7 +681,7 @@ function prepararInstalacao() {
   banner.innerHTML = `<div class="aviso">
       <b style="color:var(--accent)">📲 Instale o app da Move</b>
       <div id="banner-instalar-corpo"></div>
-      <button class="btn btn2 btn-sm" style="margin-top:8px" onclick="dispensarInstalacao()">Agora não</button>
+      <button class="btn btn3 btn-sm" style="margin-top:10px" onclick="dispensarInstalacao()">Agora não</button>
     </div>`;
   renderBotaoInstalar('banner-instalar-corpo');
 }
@@ -580,15 +693,15 @@ function renderBotaoInstalar(alvoId) {
   if (promptInstalar) {
     alvo.innerHTML = '<button class="btn" onclick="instalarAgora(this)">Instalar agora</button>';
   } else if (ehIOS && ehSafari) {
-    alvo.innerHTML = `<div style="color:var(--text2);font-size:15px;margin-top:8px;line-height:1.6">
+    alvo.innerHTML = `<div style="color:var(--text2);font-size:13px;margin-top:8px;line-height:1.6">
       1. Toque em <b>Compartilhar</b> ⬆ na barra do Safari<br>
       2. Escolha <b>Adicionar à Tela de Início</b><br>
       3. Confirme em <b>Adicionar</b></div>`;
   } else if (ehIOS) {
-    alvo.innerHTML = '<div style="color:var(--text2);font-size:15px;margin-top:8px">No iPhone, abra este link no <b>Safari</b> para instalar o app.</div>';
+    alvo.innerHTML = '<div style="color:var(--text2);font-size:13px;margin-top:8px">No iPhone, abra este link no <b>Safari</b> para instalar o app.</div>';
   } else {
-    alvo.innerHTML = `<div style="color:var(--text2);font-size:15px;margin-top:8px">
-      Use o menu do navegador (⋮) e toque em <b>Instalar aplicativo</b> ou <b>Adicionar à tela inicial</b>.</div>`;
+    alvo.innerHTML = `<div style="color:var(--text2);font-size:13px;margin-top:8px">
+      Use o menu do navegador (⋮) e toque em <b>Instalar aplicativo</b>.</div>`;
   }
 }
 
@@ -620,7 +733,7 @@ document.getElementById('in-codigo')?.addEventListener('input', e => {
   if (e.target.value.length === 6) entrar();
 });
 
-if (S.token && S.cliente) abrirApp();
+if (S.token && S.cliente) abrirPropaganda(abrirApp);   // abertura antes da tela principal
 else document.getElementById('tela-login').style.display = 'block';
 
 if ('serviceWorker' in navigator) {

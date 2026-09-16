@@ -4,7 +4,7 @@
 // Regra de ouro: /api/ NUNCA é cacheado — saldo, cobrança e status têm que vir da rede,
 // senão o cliente vê consumo velho e acha que foi roubado.
 const CACHE = 'move-cliente-v1';
-const CASCA = ['/app', '/app/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
+const CASCA = ['/app', '/app/manifest.webmanifest', '/icon-192.png', '/icon-512.png', '/propaganda.png'];
 
 self.addEventListener('install', (e) => {
   self.skipWaiting();
@@ -25,7 +25,7 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;     // não intercepta terceiros
   if (url.pathname.startsWith('/api/')) return;   // dados sempre da rede
-  if (!url.pathname.startsWith('/app') && !url.pathname.startsWith('/icon-')) return;
+  if (!url.pathname.startsWith('/app') && !url.pathname.startsWith('/icon-') && url.pathname !== '/propaganda.png') return;
 
   e.respondWith((async () => {
     try {
