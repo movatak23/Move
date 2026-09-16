@@ -634,6 +634,18 @@ async function garantirColunaInstanciaVendedor() {
   await pool.query(`ALTER TABLE vendedores ADD COLUMN IF NOT EXISTS evolution_instance VARCHAR(80)`);
 }
 
+// REGRA: mensagem para CLIENTE sai do WhatsApp do vendedor que atende aquela linha.
+// O cliente reconhece o número de quem vendeu; número central vira "quem é esse?".
+// Recebe qualquer identificador (msisdn, iccid ou CPF) e devolve a instância do dono,
+// ou null quando o vendedor não conectou o WhatsApp dele (aí sai pela linha da Move).
+async function instanciaDoClienteMsg(identificador) {
+  try {
+    if (!identificador || !EVOLUTION_CONFIGURADA) return null;
+    const dono = await donoDaLinha(identificador);
+    return dono ? await instanciaConectadaDoVendedor(dono.vendedor_id) : null;
+  } catch { return null; }
+}
+
 // Instância conectada do vendedor dono da linha — ou null (aí o envio sai pela Move).
 async function instanciaConectadaDoVendedor(vendedorId) {
   if (!vendedorId || !EVOLUTION_CONFIGURADA) return null;
@@ -2766,7 +2778,7 @@ app.post('/api/bora/whatsapp/enviar', authMiddleware, async (req, res) => {
     const { msisdn, mensagem } = req.body;
     if (!msisdn) return res.status(400).json({ erro: 'Número não informado' });
     if (!mensagem || !mensagem.trim()) return res.status(400).json({ erro: 'Mensagem vazia' });
-    await enviarWhatsAppMove(msisdn, mensagem.trim());
+    await enviarWhatsAppMove(msisdn, mensagem.trim(), { instancia: await instanciaDoClienteMsg(msisdn) });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.response?.data?.message || e.message });
@@ -3341,7 +3353,8 @@ app.post('/api/bora/ativar', authMiddleware, async (req, res) => {
       appEnviadoPara = mascararFone(await enviarAppParaCliente({
         telefone: subscriber.phone,
         nome: subscriber.name,
-        msisdn: msisdnFinal
+        msisdn: msisdnFinal,
+        documento: subscriber.document
       }));
     } catch (e) {
       console.warn('[app-cliente] convite não enviado na ativação:', e.message);
@@ -4326,8 +4339,10 @@ app.post('/api/cliente/otp/solicitar', async (req, res) => {
       `INSERT INTO cliente_otp (cpf, codigo_hash, destino, expira_em) VALUES ($1,$2,$3, NOW() + INTERVAL '10 minutes')`,
       [cpf, hash, destino.fone]
     );
+    const instancia = await instanciaDoClienteMsg(cpf);   // sai do WhatsApp do vendedor dele
     await enviarWhatsAppMove(destino.fone,
-      `*Move* — seu código de acesso é *${codigo}*\n\nEle vale por 10 minutos. Se não foi você que pediu, ignore esta mensagem.`);
+      `*Move* — seu código de acesso é *${codigo}*\n\nEle vale por 10 minutos. Se não foi você que pediu, ignore esta mensagem.`,
+      { instancia });
 
     res.json({ ok: true, destino: mascararFone(destino.fone), origem: destino.origem });
   } catch (e) {
@@ -5313,7 +5328,7 @@ async function executarNotifVencimento() {
       msg += `\nApós o pagamento sua linha continua ativa normalmente. ✅\n`;
       msg += `Dúvidas? Responda esta mensagem.`;
 
-      await enviarWhatsAppMove(linha.msisdn, msg);
+      await enviarWhatsAppMove(linha.msisdn, msg, { instancia: await instanciaDoClienteMsg(linha.msisdn) });
 
       await pool.query(
         `INSERT INTO move_notif_whatsapp (msisdn, tipo) VALUES ($1, 'vencimento_24h')
@@ -6479,7 +6494,7 @@ app.post('/api/bora/linha/:msisdn/pix/enviar-whatsapp', authMiddleware, async (r
     if (valorFmt) msg += `💰 Valor: *${valorFmt}*\n`;
     msg     += `\n*Código PIX — Copia e Cola:*\n${code}`;
 
-    await enviarWhatsAppMove(msisdn, msg);
+    await enviarWhatsAppMove(msisdn, msg, { instancia: await instanciaDoClienteMsg(msisdn) });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -7190,7 +7205,7 @@ app.get('/api/app-cliente/link', authMiddleware, async (req, res) => {
 });
 
 // Envia o link do app pro cliente no WhatsApp (botão no painel e envio automático na ativação)
-async function enviarAppParaCliente({ telefone, nome, msisdn }) {
+async function enviarAppParaCliente({ telefone, nome, msisdn, documento }) {
   const fone = telefoneParaBora(telefone) || telefoneParaBora(msisdn);
   if (!fone) throw new Error('Sem telefone para enviar o app');
   const primeiroNome = String(nome || '').trim().split(/\s+/)[0] || 'Olá';
@@ -7198,7 +7213,8 @@ async function enviarAppParaCliente({ telefone, nome, msisdn }) {
             + `Instale o app da Move no seu celular para ver seu plano, seu consumo, pagar e recarregar:\n${APP_CLIENTE_URL}\n\n`
             + `É só abrir o link, digitar seu CPF e entrar com o código que chega aqui no WhatsApp. `
             + `Depois toque em "Instalar" para deixar o app na tela inicial.`;
-  await enviarWhatsAppMove(fone, msg);
+  const instancia = await instanciaDoClienteMsg(msisdn || documento);
+  await enviarWhatsAppMove(fone, msg, { instancia });
   return fone;
 }
 
